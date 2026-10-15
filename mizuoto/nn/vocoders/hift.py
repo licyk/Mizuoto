@@ -208,7 +208,7 @@ class SourceModule(nn.Module):
             rand_ini[:, 0] = 0
             rad[:, 0, :] = rad[:, 0, :] + rand_ini
         scale = np.int64(self.upsample_scale)
-        rad = F.interpolate(rad.transpose(1, 2), scale_factor=1 / scale, mode="linear").transpose(1, 2)
+        rad = F.interpolate(rad.transpose(1, 2), scale_factor=float(1 / scale), mode="linear").transpose(1, 2)
         phase = torch.cumsum(rad, dim=1) * 2 * np.pi
         phase = F.interpolate(phase.transpose(1, 2) * self.upsample_scale, scale_factor=float(scale), mode="nearest" if self.causal else "linear").transpose(1, 2)
         sines = torch.sin(phase) * self.sine_amp
