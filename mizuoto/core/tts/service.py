@@ -784,11 +784,11 @@ class TtsService:
     def _run_transform(self, t: _Transform, ctx: JobContext) -> dict[str, Any]:
         import numpy as np
 
-        started = time.monotonic()
+        started = time.perf_counter()
         ctx.message(f"Starting {t.manifest.title}")
         ctx.message("Loading the model")
         eng = self._runtime.loaded(ModelRef(t.model, t.engine, t.variant, t.model_path), t.device, t.dtype, t.load_options, self._request(ctx, "load"))
-        load_seconds = time.monotonic() - started
+        load_seconds = time.perf_counter() - started
         pieces: list[np.ndarray] = []
         rates: set[int] = set()
 
@@ -811,7 +811,7 @@ class TtsService:
         path = self._outputs.new_path({"voice": t.op, "model": t.model.split("/", 1)[1], "engine": t.engine}, fmt)
         encode(audio, out_rate, path, fmt)
         duration = len(audio) / out_rate if out_rate else 0.0
-        total = time.monotonic() - started
+        total = time.perf_counter() - started
         warnings = t.warnings + [w for w in request.warnings if w not in t.warnings]
         output = Output(
             id=self._outputs.new_id(),
@@ -877,15 +877,15 @@ class TtsService:
     def _run(self, p: _Prepared, ctx: JobContext, sink: StreamSink | None) -> dict[str, Any]:
 
         plan = p.plan
-        started = time.monotonic()
+        started = time.perf_counter()
         ctx.message(f"Starting {p.manifest.title}")
         try:
             self._transcribe_references(p, ctx)
             ctx.check_cancel()
             ctx.message("Loading the model")
-            load_started = time.monotonic()
+            load_started = time.perf_counter()
             eng = self._load(p, ctx)
-            load_seconds = time.monotonic() - load_started
+            load_seconds = time.perf_counter() - load_started
             ctx.check_cancel()
             self._prepare_voice(p, eng, ctx)
             pieces: dict[int, list[np.ndarray]] = {}
@@ -901,7 +901,7 @@ class TtsService:
                 pieces.setdefault(chunk.segment, []).append(chunk.samples)
                 rates.add(chunk.sample_rate)
                 if not first_chunk:
-                    first_chunk.append(time.monotonic() - started)
+                    first_chunk.append(time.perf_counter() - started)
                 if sink is not None:
                     sink.chunk(chunk.samples, chunk.sample_rate, chunk.segment)
 
@@ -964,7 +964,7 @@ class TtsService:
             pieces.setdefault(chunk.segment, []).append(chunk.samples)
             rates.add(chunk.sample_rate)
             if not first_chunk:
-                first_chunk.append(time.monotonic() - started)
+                first_chunk.append(time.perf_counter() - started)
 
         texts = [m.plan.segments[0] for m, _ in members]
         ctx.message(f"Speaking (a batch of {len(texts)})")
@@ -1110,7 +1110,7 @@ class TtsService:
             path = self._outputs.new_path({"voice": name_voice, "model": plan.model.split("/", 1)[1], "engine": plan.engine}, plan.output_format)
             encode(audio, out_rate, path, plan.output_format)
             duration = len(audio) / out_rate if out_rate else 0.0
-            total = time.monotonic() - started
+            total = time.perf_counter() - started
             output = Output(
                 id=self._outputs.new_id(),
                 kind="line" if p.request.output.project else "speech",

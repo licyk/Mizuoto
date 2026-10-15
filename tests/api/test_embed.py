@@ -1,5 +1,6 @@
 """Embedding Mizuoto in another application: MizuotoServer, the configuration folder, the route prefix, mounting."""
 
+import json
 import socket
 import subprocess
 import sys
@@ -132,7 +133,7 @@ def test_config_dir_holds_the_settings_file(tmp_path):
         assert services.settings.path == (config / "settings.toml").resolve()
         assert services.settings.view().settings_file == str(services.settings.path)
         _, body = get(f"{server.url}/api/v1/settings")
-        assert str(config / "settings.toml") in body
+        assert json.loads(body)["settings_file"] == str(config / "settings.toml")  # parsed: JSON escapes Windows' backslashes
     assert (config / "settings.toml").is_file()
     assert not (tmp_path / "data" / "settings.toml").exists()
     assert (tmp_path / "data" / "mizuoto.db").is_file()

@@ -187,11 +187,7 @@ _lock = threading.Lock()
 @functools.cache
 def _entry_points() -> dict[str, metadata.EntryPoint]:
     """The engines other distributions register (read once: installing one means restarting Mizuoto)."""
-    try:
-        found = metadata.entry_points(group=ENTRY_POINT_GROUP)
-    except TypeError:  # Python 3.10: entry_points() takes no group
-        found = metadata.entry_points().get(ENTRY_POINT_GROUP, [])  # type: ignore[attr-defined]
-    return {ep.name: ep for ep in found}
+    return {ep.name: ep for ep in metadata.entry_points(group=ENTRY_POINT_GROUP)}
 
 
 def engine_ids() -> list[str]:

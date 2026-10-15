@@ -154,6 +154,11 @@ extra-paths = ["packages/native/fishspeech", "packages/native/indextts"]
 # Optional packages (the extras), and those the parity scripts import only inside the reference environments.
 allowed-unresolved-imports = ["torch", "torch.**", "transformers", "transformers.**", "soxr", "jieba", "jieba.**", "opencc", "wordsegment", "budoux", "fasttext", "ToJyutping", "pyopenjtalk", "jamo", "mecab", "voxcpm", "voxcpm.**"]
 
+[tool.ty.rules]
+# torch.nn.Module declares `forward: Callable[..., Any]`, a writable attribute, so every module's `def forward` is
+# reported as an override that does not accept writes (ty >= 0.0.88). Overriding forward is how torch is used.
+invalid-mutable-override = "ignore"
+
 [tool.ty.terminal]
 output-format = "concise"
 error-on-warning = true

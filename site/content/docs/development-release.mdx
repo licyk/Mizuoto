@@ -4,7 +4,7 @@ description: "Mizuoto 的依赖及其理由、支持的平台，以及发行包�
 icon: Package
 ---
 
-一次发布产出三个发行包：`mizuoto`（wheel 和 sdist，内含构建好的 Web UI，以及所有采用宽松许可证的引擎），以及两个需要接受许可的引擎的 wheel：`mizuoto-fishspeech` 和 `mizuoto-indextts`。三者都装进同一个环境，装在用户自选的 torch 之上。本页讲它们怎样构建和检查。Mizuoto 还没有发布到 PyPI：wheel 来自 `scripts/build_wheels.py`（`dist/`）或发布工作流的产物，发布是维护者的步骤。
+一次发布产出三个发行包：`mizuoto`（wheel 和 sdist，内含构建好的 Web UI，以及所有采用宽松许可证的引擎），以及两个需要接受许可的引擎的 wheel：`mizuoto-fishspeech` 和 `mizuoto-indextts`。三者都装进同一个环境，装在用户自选的 torch 之上。本页讲它们怎样构建、检查和发布。发布工作流用 twine 把三者发布到 PyPI；在它第一次发布之前，wheel 来自 `scripts/build_wheels.py`（`dist/`）或该工作流的产物。
 
 ## 依赖
 
@@ -118,12 +118,15 @@ python scripts/smoke_wheels.py --dist dist --python 3.13 --torch torch==2.8.0
 
 `.github/workflows/ci.yml` 在每次推送时运行测试（见[测试](/docs/development-testing#ci)）：`host` 矩阵（Ubuntu、Windows、macOS × Python 3.10–3.13，CPU 版 torch，装上需要接受许可的包）、`torch` 作业（torch 2.8.0 和最新版）、`web` 和 `site`。
 
-`.github/workflows/release.yml` 在推送 `v*` 标签或手动触发时运行：
+`.github/workflows/release.yml` 在推送到 `main` 且改动了 `mizuoto/version.py` 时、推送 `v*` 标签时（GitHub 对标签不应用路径过滤）以及手动触发时运行。同一引用同时只运行一次发布，且不会被取消。依赖和 CI 一样用 uv 安装。
 
-1. `build`（Ubuntu、Python 3.11、bun）：`pip install uv`，`python scripts/build_wheels.py all`；`dist/` 作为 `dist` 产物上传。
-2. `smoke`（Ubuntu，Python 3.10 和 3.13）：下载产物，运行 `smoke_wheels.py --dist dist --python <版本>`。
+1. `checks`：把 `ci.yml` 本身作为可复用工作流调用。CI 自己对同一次推送到 `main` 的运行会跳过它的作业，所以不会重复运行（见[测试](/docs/development-testing#ci)）。
+2. `build`（Ubuntu、Python 3.11、uv、bun）：标签必须等于 `mizuoto/version.py` 里的 `VERSION`（0.2.0 对应 `v0.2.0`）；`python scripts/build_wheels.py all`；`twine check dist/*`；`dist/` 作为 `dist` 产物上传。
+3. `smoke`（Ubuntu，Python 3.10 和 3.13）：下载产物，运行 `smoke_wheels.py --dist dist --python <版本>`。
+4. `publish`：在 `pypi` 环境中（可以要求审批），用 `TWINE_PASSWORD` 密钥（PyPI API 令牌，用户名 `__token__`）运行 `twine upload dist/* --skip-existing`。它上传每个发行包：`mizuoto`（wheel 和 sdist）、`mizuoto-fishspeech` 和 `mizuoto-indextts`；PyPI 上已有的版本会被跳过。
+5. `github-release`（仅标签）：以标签命名的 GitHub 发布，附上这些文件和自动生成的说明。
 
-产物里有全部 wheel，包括需要接受许可的那些；发布到哪里由发布者决定。
+所以通常的发布流程是：在上面三个文件里改版本号，推送到 `main`（发布工作流把它发布出去），再推送标签 `v<版本>` 生成 GitHub 发布（它上传时会发现这些文件已在 PyPI 上）。
 
 ## Docker
 

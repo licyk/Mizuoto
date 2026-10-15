@@ -175,9 +175,9 @@ def format_code() -> int:
     return first_failure(python("-m", "ruff", "check", "--fix", "."), python("-m", "ruff", "format", "."))
 
 
-@task("typecheck-py", "ty over mizuoto, the gated engines, tests and scripts")
-def typecheck_py() -> int:
-    return python("-m", "ty", "check", "--python", sys.executable)
+@task("typecheck-py", "ty over mizuoto, the gated engines, tests and scripts (extra options are passed on)")
+def typecheck_py(options: list[str]) -> int:
+    return python("-m", "ty", "check", "--python", sys.executable, *options)
 
 
 @task("test-py", "pytest (extra options are passed on)")
@@ -323,7 +323,7 @@ def typegen_check() -> int:
 
 @task("check", "What CI runs: lint, typecheck-py, test-py, test-web, typegen-check")
 def check() -> int:
-    results = [lint(), typecheck_py(), test_py([]), test_web(), typegen_check()]
+    results = [lint(), typecheck_py([]), test_py([]), test_web(), typegen_check()]
     status = first_failure(*results)
     print("\033[32mAll checks passed\033[0m" if status == 0 else "\033[31mSome checks failed\033[0m", file=sys.stderr)
     return status

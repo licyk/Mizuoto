@@ -1,9 +1,37 @@
+<div align="center">
+
 # Mizuoto
+
+<p align="center">
+  <a href="https://github.com/licyk/Mizuoto/stargazers">
+    <img src="https://img.shields.io/github/stars/licyk/Mizuoto?style=flat&logo=github&logoColor=silver&color=bluegreen&labelColor=grey" alt="Stars">
+  </a>
+  <a href="https://github.com/licyk/Mizuoto/issues">
+    <img src="https://img.shields.io/github/issues/licyk/Mizuoto?style=flat&logo=github&logoColor=silver&color=bluegreen&labelColor=grey" alt="Issues">
+  </a>
+  <a href="https://github.com/licyk/Mizuoto/commits/main">
+    <img src="https://flat.badgen.net/github/last-commit/licyk/Mizuoto/main?icon=github&color=green&label=last%20main%20commit" alt="Last main commit">
+  </a>
+  <a href="https://github.com/licyk/Mizuoto/actions/workflows/ci.yml">
+    <img src="https://github.com/licyk/Mizuoto/actions/workflows/ci.yml/badge.svg" alt="CI">
+  </a>
+  <a href="https://github.com/licyk/Mizuoto/actions/workflows/release.yml">
+    <img src="https://github.com/licyk/Mizuoto/actions/workflows/release.yml/badge.svg" alt="Release">
+  </a>
+  <a href="https://pypi.org/project/mizuoto/">
+    <img src="https://img.shields.io/pypi/v/mizuoto?style=flat&logo=pypi&logoColor=silver&color=bluegreen&labelColor=grey" alt="PyPI version">
+  </a>
+  <a href="https://pypi.org/project/mizuoto/">
+    <img src="https://img.shields.io/pypi/pyversions/mizuoto?style=flat&logo=python&logoColor=silver&color=bluegreen&labelColor=grey" alt="Python versions">
+  </a>
+  <a href="https://github.com/licyk/Mizuoto/blob/main/LICENSE">
+    <img src="https://img.shields.io/badge/licence-GPL--3.0--only-bluegreen?style=flat&labelColor=grey" alt="Licence: GPL-3.0-only">
+  </a>
+</p>
 
 **English** · [简体中文](README.zh-CN.md)
 
-[![CI](https://github.com/licyk/Mizuoto/actions/workflows/ci.yml/badge.svg)](https://github.com/licyk/Mizuoto/actions/workflows/ci.yml)
-[![Licence: GPL-3.0-only](https://img.shields.io/badge/licence-GPL--3.0--only-blue.svg)](LICENSE)
+</div>
 
 Open text-to-speech engines on one platform: CosyVoice, F5-TTS, GPT-SoVITS, OmniVoice, Qwen3-TTS, VoxCPM,
 Fish Speech and IndexTTS. They share one web UI, one command line and one HTTP API. Speak, clone and design voices,

@@ -339,7 +339,8 @@ def test_policy():
     assert p.mode_for("cuda") == "normal" and p.mode_for("mps") == "shared" and p.mode_for("cuda", "low") == "low"
     assert p.streams_for("cuda") == 2 and p.streams_for("xpu") == 0
     assert p.ram_reserve(64 * 2**30) == int(6.4 * 2**30) and p.ram_reserve(8 * 2**30) == 2 * 2**30
-    assert 0.4 * 2**30 * 64 <= p.pinned_budget(64 * 2**30) <= 0.9 * 64 * 2**30
+    # int(): pinned_budget truncates, and Windows' budget is exactly 40 %.
+    assert int(0.4 * 64 * 2**30) <= p.pinned_budget(64 * 2**30) <= 0.9 * 64 * 2**30
 
 
 def test_the_streamer_learns_the_order_and_prefetches():

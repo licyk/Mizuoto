@@ -173,7 +173,7 @@ def test_when_torch_could_find_a_gpu(monkeypatch, tmp_path):
     assert torch_may_find_gpu(cuda, "win32") is False and torch_may_find_gpu(cuda, "darwin") is False  # nvidia-smi comes with the driver there
     assert torch_may_find_gpu(hip, "win32") is True
     present: set[str] = set()
-    monkeypatch.setattr(probe_module.Path, "exists", lambda self: str(self) in present)
+    monkeypatch.setattr(probe_module.Path, "exists", lambda self: self.as_posix() in present)  # Windows spells /dev/kfd \dev\kfd
     assert torch_may_find_gpu(cuda, "linux") is False and torch_may_find_gpu(hip, "linux") is False
     present.update({"/dev/nvidia0", "/dev/kfd"})
     assert torch_may_find_gpu(cuda, "linux") is True and torch_may_find_gpu(hip, "linux") is True

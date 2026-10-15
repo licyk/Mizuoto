@@ -1,50 +1,148 @@
-# The distributions: the mizuoto wheel and sdist, with the web UI built in, and the
-# licence-gated engines' wheels (mizuoto-fishspeech, mizuoto-indextts), tried in a new environment with a CPU torch and
-# attached to the run. Publishing them is the release owner's step.
-name: Release build
+# The distributions: the mizuoto wheel and sdist, with the web UI built in, and the licence-gated engines' wheels
+# (mizuoto-fishspeech, mizuoto-indextts), tried in a new environment with a CPU torch and published to PyPI with
+# twine once every check passes. A push to main that changes mizuoto/version.py, a version tag and a manual run each
+# release; a tag must match the version, and also gets a GitHub release with the files.
+name: Release
 
 on:
   push:
+    branches: [main]
+    # GitHub does not apply path filters to tag pushes: a v* tag always releases.
     tags: ["v*"]
+    paths: ["mizuoto/version.py"]
   workflow_dispatch:
 
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  # uv installs into the interpreter setup-python provides (no virtual environment); its cache stays off, as in
+  # ci.yml. smoke_wheels.py runs uv without UV_* variables, so its new environment is not affected.
+  UV_SYSTEM_PYTHON: 1
+
 jobs:
+  checks:
+    name: Checks
+    # CI's own run of this push skips itself (its gate job), so the checks run once, here.
+    uses: ./.github/workflows/ci.yml
+
   build:
+    name: Build the distributions
+    needs: [checks]
     runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7.0.1
+      - uses: actions/setup-python@v7.0.0
         with:
           python-version: "3.11"
-      - uses: oven-sh/setup-bun@v2
-      - name: Build
-        # build_wheels.py needs only the standard library, uv and bun.
+      - uses: astral-sh/setup-uv@v10.2.0
+        with:
+          enable-cache: false
+      - uses: oven-sh/setup-bun@v2.2.0
+      - run: uv pip install --upgrade twine
+
+      - name: The tag and mizuoto/version.py agree
+        id: version
+        # Read as text: importing mizuoto needs its dependencies. build_wheels.py checks the gated packages' versions.
         run: |
-          python -m pip install uv
-          python scripts/build_wheels.py all
-      - uses: actions/upload-artifact@v4
+          version=$(sed -nE 's/^VERSION = "([^"]+)"$/\1/p' mizuoto/version.py)
+          if [ -z "$version" ]; then echo "::error::No VERSION in mizuoto/version.py"; exit 1; fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "Package version: $version"
+          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+            tag="${GITHUB_REF_NAME#v}"
+            if [ "$tag" != "$version" ]; then
+              echo "::error::Tag $GITHUB_REF_NAME does not match VERSION $version in mizuoto/version.py"
+              exit 1
+            fi
+          fi
+
+      - name: Build
+        # build_wheels.py needs only the standard library, uv and bun; it builds the web UI first.
+        run: python scripts/build_wheels.py all
+
+      - name: Check the metadata
+        # Not --strict: the gated packages have no README, so twine warns that their long description is missing.
+        run: python -m twine check dist/*
+
+      - uses: actions/upload-artifact@v7.0.1
         with:
           name: dist
           path: dist/
+          if-no-files-found: error
 
   smoke:
-    needs: build
     name: smoke · Python ${{ matrix.python }}
+    needs: build
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
         python: ["3.10", "3.13"]
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7.0.1
+      - uses: actions/setup-python@v7.0.0
         with:
           python-version: "3.11"
-      - uses: actions/download-artifact@v4
+      - uses: astral-sh/setup-uv@v10.2.0
+        with:
+          enable-cache: false
+      - uses: actions/download-artifact@v8.0.1
         with:
           name: dist
           path: dist/
       - name: Install the wheels in a new environment (torch, then one install of the wheels) and try them
-        run: |
-          python -m pip install uv
-          python scripts/smoke_wheels.py --dist dist --python ${{ matrix.python }}
+        run: python scripts/smoke_wheels.py --dist dist --python ${{ matrix.python }}
+
+  publish:
+    name: Publish to PyPI
+    needs: [build, smoke]
+    runs-on: ubuntu-latest
+    # The environment can require an approval before a release.
+    environment:
+      name: pypi
+      url: https://pypi.org/p/mizuoto
+    steps:
+      - uses: actions/setup-python@v7.0.0
+        with:
+          python-version: "3.11"
+      - uses: astral-sh/setup-uv@v10.2.0
+        with:
+          enable-cache: false
+      - name: Install Twine
+        run: uv pip install --upgrade twine
+      - uses: actions/download-artifact@v8.0.1
+        with:
+          name: dist
+          path: dist/
+      - name: Publish
+        # Every distribution in dist/: mizuoto (wheel and sdist), mizuoto-fishspeech and mizuoto-indextts. A version
+        # already on PyPI is skipped, so a tag pushed after its version's main release only adds the GitHub release.
+        env:
+          TWINE_USERNAME: __token__
+          TWINE_PASSWORD: ${{ secrets.TWINE_PASSWORD }}
+        run: python -m twine upload dist/* --skip-existing --non-interactive
+
+  github-release:
+    name: GitHub release
+    needs: [build, publish]
+    if: github.ref_type == 'tag'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: actions/download-artifact@v8.0.1
+        with:
+          name: dist
+          path: dist/
+      - name: Create the release with the built files
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" dist/* --title "$GITHUB_REF_NAME" --generate-notes

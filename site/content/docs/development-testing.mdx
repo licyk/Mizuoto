@@ -173,6 +173,7 @@ $W/native-env/bin/python scripts/parity/compare.py qwen3tts --a reference --b na
 - **为什么 T3 只在 CPU 上以 fp32 判断。** 任何一点 logits 差异都会翻转一次多项式抽样（或一个束），之后的一切随之分叉。在 GPU 上降精度运行时，连上游自己都不能与自己逐比特一致（例如批量和单条的贪心解码），所以 GPU 上的一致性由 T1 的模块级误差加 T4 的统计指标判断。
 - **音频之外的行为**也是对照的一部分，在两种实现上都经过契约套件检查：实际生效的参数和警告、音色模式的判定（`fit`）、流式的粒度与块数、取消的行为、对无效输入的错误码（参考音频太长、不支持的语言、缺少转写）、输出采样率、分段的拼接。
 - 加速与提速遵守同样的层级：会改变比特的加速（例如编译）至少保持在该引擎的 T1/T3 容差之内，并记录实测误差；默认路径上的提速必须逐比特不变。
+- **T0 的 DSP 夹具只在生成它们的那类机器上完全相同**：带 AVX2、不带 AVX-512 的 x86-64 Linux，且 torch 版本相同。在别处，内核的舍入不同（numpy 的 AVX-512 `exp` 和 `log`、Windows CRT 的 libm、Arm 上 torch 的 FFT 和 soxr 的 SIMD、另一个 torch 版本），所以 `tests/runtime/test_dsp.py` 在那里检查输出在这种舍入之内一致：float32 最大绝对误差 ≤ 1e-4 × max(1, ‖ref‖∞)，float64 ≤ 1e-12 × max(1, ‖ref‖∞)。CI 的 macOS、Windows 和 AVX-512 机器上实测最大为 4e-5。
 
 ## Web UI 测试
 
@@ -184,14 +185,16 @@ $W/native-env/bin/python scripts/parity/compare.py qwen3tts --a reference --b na
 
 ## CI
 
-`.github/workflows/ci.yml` 在每次推送和拉取请求时运行四个作业，使用 torch 的 CPU 构建（`https://download.pytorch.org/whl/cpu`）：
+`.github/workflows/ci.yml` 在每次推送到分支和每个拉取请求时运行四个作业，使用 torch 的 CPU 构建（`https://download.pytorch.org/whl/cpu`）。依赖用 uv 安装（`astral-sh/setup-uv`，`UV_SYSTEM_PYTHON=1`：装进 `setup-python` 提供的 Python，不建虚拟环境；缓存关闭，因为解包后的 torch wheel 会挤占 10 GB 的缓存上限）：
 
 | 作业 | 环境 | 步骤 |
 | --- | --- | --- |
-| `host` | Ubuntu、Windows、macOS × Python 3.10、3.11、3.12、3.13 | 从 CPU 索引 `pip install torch`，再装 `-e . -e packages/native/fishspeech -e packages/native/indextts pytest pytest-cov ruff ty httpx tomli`；在 Ubuntu 的 3.11 上运行 `dev.py lint` 和 `dev.py typecheck-py`；所有组合都运行 `python -m pytest -q`（包括小模型测试） |
+| `host` | Ubuntu、Windows、macOS × Python 3.10、3.11、3.12、3.13 | 从 CPU 索引 `uv pip install torch`，再装 `-e . -e packages/native/fishspeech -e packages/native/indextts pytest pytest-cov ruff ty httpx tomli`；每个组合都运行 `dev.py lint`、`dev.py typecheck-py --python-version <该组合> --python-platform <该组合>`（标准库的类型存根随 Python 版本和平台而不同）和 `python -m pytest -q`（包括小模型测试）；三者中一个失败，其余照常运行 |
 | `torch` | Ubuntu、Python 3.12，torch 2.8.0 和最新版 | 用 Mizuoto 支持的最旧和最新的 torch 跑测试，发现 torch 的接口变化 |
 | `web` | Ubuntu、Python 3.11、bun | `dev.py web-install`、`dev.py test-web`、`dev.py typegen-check` |
 | `site` | Ubuntu、bun | 在 `site/` 里 `bun install --frozen-lockfile`、`bun run check`、`bun run test`、`bun run build` |
+
+同一分支较新的运行会取消较旧的运行。推送到 `main` 且改动了 `mizuoto/version.py` 时会启动发布工作流，它把 `ci.yml` 作为自己的检查来运行；CI 自己对这次推送的运行会跳过所有作业（它的 `gate` 作业通过 compare API 查询这次推送改了哪些文件），所以检查只跑一次。版本标签只启动发布工作流。
 
 `python scripts/dev.py check` 在本地运行同样的内容（只在你的平台和 Python 上）。契约套件和对照工具需要模型（对照还需要参照实现的环境），权重有几十 GB，所以不进 CI；发布工作流有自己的 wheel 冒烟测试（见[发布](/docs/development-release)）。
 

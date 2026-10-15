@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import gc
 import os
+import sys
 import types
 from typing import Any
 
@@ -356,6 +357,8 @@ def _system_memory() -> tuple[int | None, int | None]:
     limit when there is one (ComfyUI's ``system_memory``); elsewhere what ``sysconf`` knows."""
     available, total = _meminfo()
     if available is None:
+        if sys.platform == "win32":  # no sysconf
+            return None, None
         try:
             page = os.sysconf("SC_PAGE_SIZE")
             available, total = int(os.sysconf("SC_AVPHYS_PAGES") * page), int(os.sysconf("SC_PHYS_PAGES") * page)

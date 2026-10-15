@@ -760,7 +760,8 @@ class WarmupLR(torch.optim.lr_scheduler.LRScheduler):
         self.warmup_steps = warmup_steps
         super().__init__(optimizer)
 
-    def get_lr(self) -> list[float]:
+    # list[Any]: torch 2.8 declares get_lr() -> list[float], later versions list[float | Tensor] (a tensor rate stays one).
+    def get_lr(self) -> list[Any]:
         step = self.last_epoch + 1
         return [lr * self.warmup_steps**0.5 * min(step**-0.5, step * self.warmup_steps**-1.5) for lr in self.base_lrs]
 
@@ -768,7 +769,7 @@ class WarmupLR(torch.optim.lr_scheduler.LRScheduler):
 class ConstantLR(torch.optim.lr_scheduler.LRScheduler):
     """Upstream's ``ConstantLR`` (CosyVoice 2's and 3's recipes)."""
 
-    def get_lr(self) -> list[float]:
+    def get_lr(self) -> list[Any]:
         return list(self.base_lrs)
 
 

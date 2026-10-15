@@ -241,7 +241,7 @@ class LocalEngine:
             self._current_model = model_id
         self._set_state("busy")
         self.last_used = time.monotonic()
-        started = time.monotonic()
+        started = time.perf_counter()
         streamed = self._inference.runtime.manager.streamed_bytes(self.device) if self._inference.started else 0
         watcher.start()
         try:
@@ -280,7 +280,7 @@ class LocalEngine:
             if ctx.accel is not None:
                 request.applied["attention"] = ctx.accel.report()
                 request.warnings.extend(w for w in ctx.accel.warnings() if w not in request.warnings)
-            request.timings["total"] = time.monotonic() - started
+            request.timings["total"] = time.perf_counter() - started
             with self._lock:
                 self._current = None
                 self._current_model = None
@@ -306,7 +306,7 @@ class LocalEngine:
         engine = self._require(model_id, loaded)
         request = request or EngineRequest()
         with self._request(request, seed, model_id, loaded) as ctx, contextlib.ExitStack() as stack:
-            started = time.monotonic()
+            started = time.perf_counter()
             first: float | None = None
             with ctx.bind(), _inference_mode():
                 stack.enter_context(self._place(engine, task, ctx))
@@ -322,7 +322,7 @@ class LocalEngine:
                     if not isinstance(chunk, AudioChunk):
                         raise EngineError(f"The engine yielded {type(chunk).__name__}, not AudioChunk")
                     if first is None:
-                        first = time.monotonic() - started
+                        first = time.perf_counter() - started
                         request.timings["first_chunk"] = first
                     samples = np.asarray(chunk.samples).reshape(-1).astype(np.float32)
                     yield AudioChunk(samples=samples, sample_rate=chunk.sample_rate, segment=chunk.segment, final=chunk.final)

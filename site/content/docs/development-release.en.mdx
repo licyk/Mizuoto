@@ -4,7 +4,7 @@ description: "Mizuoto's dependencies and why, the platforms it supports, and how
 icon: Package
 ---
 
-A release produces three distributions: `mizuoto` (wheel and sdist, with the built web UI inside, every engine under a permissive licence included) and the wheels of the two licence-gated engines, `mizuoto-fishspeech` and `mizuoto-indextts`. All three install into one environment over a torch the user chose. This page covers how they are built and checked. Mizuoto is not published to PyPI yet: the wheels come from `scripts/build_wheels.py` (`dist/`) or the release workflow's artifacts, and publishing is the release owner's step.
+A release produces three distributions: `mizuoto` (wheel and sdist, with the built web UI inside, every engine under a permissive licence included) and the wheels of the two licence-gated engines, `mizuoto-fishspeech` and `mizuoto-indextts`. All three install into one environment over a torch the user chose. This page covers how they are built, checked and published. The release workflow publishes all three to PyPI with twine; until its first release, the wheels come from `scripts/build_wheels.py` (`dist/`) or the workflow's artifacts.
 
 ## Dependencies
 
@@ -118,12 +118,15 @@ It tries the built distributions as a user gets them. In a temporary folder outs
 
 `.github/workflows/ci.yml` runs the tests on every push (see [Testing](/docs/development-testing#ci)): the `host` matrix (Ubuntu, Windows, macOS × Python 3.10–3.13, CPU torch, the gated packages installed), the `torch` job (torch 2.8.0 and the latest release), `web` and `site`.
 
-`.github/workflows/release.yml` runs on a pushed `v*` tag or by hand:
+`.github/workflows/release.yml` runs on a push to `main` that changes `mizuoto/version.py`, on a pushed `v*` tag (GitHub applies no path filter to tags) and by hand. One release runs at a time per ref, and none is cancelled. Packages are installed with uv, as in CI.
 
-1. `build` (Ubuntu, Python 3.11, bun): `pip install uv`, `python scripts/build_wheels.py all`; `dist/` is uploaded as the `dist` artifact.
-2. `smoke` (Ubuntu, Python 3.10 and 3.13): downloads the artifact and runs `smoke_wheels.py --dist dist --python <version>`.
+1. `checks`: `ci.yml` itself, called as a reusable workflow. CI's own run of the same push to `main` skips its jobs, so nothing runs twice (see [Testing](/docs/development-testing#ci)).
+2. `build` (Ubuntu, Python 3.11, uv, bun): a tag must equal `VERSION` in `mizuoto/version.py` (`v0.2.0` for 0.2.0); `python scripts/build_wheels.py all`; `twine check dist/*`; `dist/` is uploaded as the `dist` artifact.
+3. `smoke` (Ubuntu, Python 3.10 and 3.13): downloads the artifact and runs `smoke_wheels.py --dist dist --python <version>`.
+4. `publish`: in the `pypi` environment (which can require an approval), `twine upload dist/* --skip-existing` with the `TWINE_PASSWORD` secret (a PyPI API token; user `__token__`). It uploads every distribution, `mizuoto` (wheel and sdist), `mizuoto-fishspeech` and `mizuoto-indextts`; a version already on PyPI is skipped.
+5. `github-release` (tags only): a GitHub release named after the tag, with the files and generated notes.
 
-The artifact holds every wheel, the gated ones included; whoever publishes them decides where.
+So the usual release is: bump the version in the three files above, push to `main` (the release publishes it), then push the tag `v<version>` for the GitHub release (its upload finds the files already on PyPI).
 
 ## Docker
 

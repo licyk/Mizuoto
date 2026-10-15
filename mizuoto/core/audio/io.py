@@ -108,6 +108,7 @@ def encode(samples: np.ndarray, sample_rate: int, path: Path, fmt: OutputFormat 
     tmp = path.with_name(path.name + ".part")
     with av.open(str(tmp), "w", format=container_fmt) as c:
         stream = c.add_stream(codec, rate=rate)
+        assert isinstance(stream, av.AudioStream)  # FORMATS names audio codecs only
         stream.layout = "mono"
         target_format = stream.codec_context.format.name if stream.codec_context.format else "s16"
         rs = av.AudioResampler(format=target_format, layout="mono", rate=rate)

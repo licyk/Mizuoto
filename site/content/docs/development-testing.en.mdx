@@ -174,6 +174,7 @@ The result: on the CPU in fp32, every engine is identical to its reference (VoxC
 - **Why T3 is judged on the CPU in fp32 only.** Any logit difference flips a multinomial draw (or a beam) and everything after it diverges. On GPUs in reduced precision even upstream does not match itself bit for bit (batched against single greedy decoding, for one), so GPU consistency is judged by T1's per-module error plus T4's statistics.
 - **Behaviour beyond the audio** is part of the comparison too, checked through the contract suite on both implementations: applied parameters and warnings, the voice-mode resolution (`fit`), streaming granularity and chunk counts, cancel behaviour, error codes for invalid inputs (a reference too long, an unsupported language, a missing transcript), output sample rates, segment joins.
 - Acceleration and speed work keep to the same tiers: an acceleration that changes bits (compilation, for one) stays at least within the engine's T1/T3 tolerance, with the measured error recorded; speed work on the default path must not change a bit.
+- **T0's DSP fixtures are identical on the machine class that made them**: x86-64 Linux with AVX2 and without AVX-512, under the same torch. Elsewhere the kernels round differently (numpy's AVX-512 `exp` and `log`, the Windows CRT's libm, torch's FFT and soxr's SIMD on Arm, another torch), so `tests/runtime/test_dsp.py` checks there that the outputs agree within that rounding: max abs error ≤ 1e-4 × max(1, ‖ref‖∞) in float32, 1e-12 × max(1, ‖ref‖∞) in float64. CI's macOS, Windows and AVX-512 runners measured up to 4e-5.
 
 ## Web UI tests
 
@@ -185,14 +186,16 @@ The docs site (`site/`) has its own vitest tests; `src/lib/i18n-content.test.ts`
 
 ## CI
 
-`.github/workflows/ci.yml` runs four jobs on every push and pull request, with torch's CPU build (`https://download.pytorch.org/whl/cpu`):
+`.github/workflows/ci.yml` runs four jobs on every push to a branch and every pull request, with torch's CPU build (`https://download.pytorch.org/whl/cpu`). Packages are installed with uv (`astral-sh/setup-uv`, `UV_SYSTEM_PYTHON=1`: into the Python that `setup-python` provides, no virtual environment; the cache stays off, since unpacked torch wheels would crowd the 10 GB cache limit):
 
 | Job | Environment | Steps |
 | --- | --- | --- |
-| `host` | Ubuntu, Windows, macOS × Python 3.10, 3.11, 3.12, 3.13 | `pip install torch` from the CPU index, then `-e . -e packages/native/fishspeech -e packages/native/indextts pytest pytest-cov ruff ty httpx tomli`; `dev.py lint` and `dev.py typecheck-py` on Ubuntu with 3.11; `python -m pytest -q` everywhere (the tiny-model tests included) |
+| `host` | Ubuntu, Windows, macOS × Python 3.10, 3.11, 3.12, 3.13 | `uv pip install torch` from the CPU index, then `-e . -e packages/native/fishspeech -e packages/native/indextts pytest pytest-cov ruff ty httpx tomli`; in every cell `dev.py lint`, `dev.py typecheck-py --python-version <cell> --python-platform <cell>` (the standard library's stubs differ between Pythons and platforms) and `python -m pytest -q` (the tiny-model tests included); each of the three runs even when another failed |
 | `torch` | Ubuntu, Python 3.12, torch 2.8.0 and the latest release | The tests against the oldest torch Mizuoto supports and the newest, to catch torch's API drift |
 | `web` | Ubuntu, Python 3.11, bun | `dev.py web-install`, `dev.py test-web`, `dev.py typegen-check` |
 | `site` | Ubuntu, bun | `bun install --frozen-lockfile`, `bun run check`, `bun run test`, `bun run build` in `site/` |
+
+A newer run of the same branch cancels the older one. A push to `main` that changes `mizuoto/version.py` starts the release workflow, which runs `ci.yml` as its checks; CI's own run of that push skips every job (its `gate` job asks the compare API which files the push changed), so the checks run once. Version tags start only the release workflow.
 
 `python scripts/dev.py check` runs the same locally (on your platform and Python only). The contract suite and the parity harness need models (and, for parity, the reference environments) weighing tens of gigabytes, so they stay out of CI; the release workflow has its own wheel smoke test (see [Release](/docs/development-release)).
 

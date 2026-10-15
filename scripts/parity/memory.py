@@ -27,7 +27,6 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import resource
 import shutil
 import subprocess
 import sys
@@ -42,6 +41,10 @@ HERE = Path(__file__).resolve().parent
 
 
 def _rss_mb() -> float:
+    if sys.platform == "win32":
+        raise SystemExit("memory.py measures the CPU's peak with resource.getrusage, which Windows does not have")
+    import resource
+
     return resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024  # Linux: KiB
 
 
