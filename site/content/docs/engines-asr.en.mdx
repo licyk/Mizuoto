@@ -1,0 +1,59 @@
+---
+title: "Speech recognition (Whisper)"
+description: "The internal speech recognition engine: Whisper large-v3-turbo implemented in Mizuoto, reproducing the transformers pipeline Mizuoto 0.1 used, with its 5-beam search, overlapping windows, seek loop and merge; its memory notes and parity results."
+icon: Captions
+---
+
+Mizuoto's own speech recognition: Whisper large-v3-turbo ([openai/whisper](https://github.com/openai/whisper); weights MIT), used for the transcripts of reference clips and voices, for dataset preparation and for the contract suite's word error rate. Code: `mizuoto/engines/asr`. It is not offered for synthesis. It reproduces exactly what Mizuoto 0.1 ran, transformers 4.57.3's `pipeline("automatic-speech-recognition")`, and gives 0.1's transcripts token for token, in about half the time on a CPU. User-facing details: [Engines in depth](/docs/advanced-engines#speech-recognition-asr).
+
+## Variant and files
+
+One variant, `whisper` (catalogue model `asr/whisper-large-v3-turbo`); the model is built from `config.json`, so other Whisper sizes in the same format load too. The folder holds `config.json`, `generation_config.json`, `model.safetensors` (or `pytorch_model.bin`), `preprocessor_config.json`, `tokenizer.json` and `tokenizer_config.json`.
+
+The engine answers one operation, `call("transcribe", {"path", "language", "options"})`, which returns `{text, language, segments, duration}`. `AsrService` holds one lock for it and caches transcripts by the audio's SHA-256 and the model.
+
+Precision: bf16 on a CUDA GPU that has it (else fp16), fp32 elsewhere; `engines.asr.dtype` overrides.
+
+## How it works
+
+0.1 called the pipeline with `chunk_length_s=30, batch_size=4, return_timestamps=True` and the task and language as generation arguments. The engine does the same:
+
+1. The WAV is read as soundfile reads it (channels averaged) and resampled to 16 kHz by soxr (its HQ default).
+2. Without a language, the language is detected on the first 30 s (one decoder step over the language tokens).
+3. The audio is cut into 30 s windows overlapping by 5 s on each side, each window's features computed as `WhisperFeatureExtractor` computes them, four windows per `generate` call.
+4. `generate` decodes each window with timestamps, by beam search with 5 beams, running Whisper's seek loop inside the window.
+5. The windows' tokens are merged into text and timestamped segments by the pipeline's `_decode_asr`.
+
+| Module | What it is |
+| --- | --- |
+| `engine.py` | 0.1's pipeline: reading, resampling, language detection, windows, `generate`, merging |
+| `model.py` | `WhisperForConditionalGeneration` as transformers 4.57.3 computes it (the SDPA path, the encoder's clamping, the cross-attention cache) |
+| `decoding.py` | Generation settings, the logits processors in transformers' order, the vectorised beam search, greedy decoding, the seek loop |
+| `text.py` | Decoding as `WhisperTokenizerFast`, language ids, window bounds, `decode_asr` |
+
+Shared: `nn/dsp/mel.py` (`hf_whisper_filters`, `hf_whisper_log_mel`), `nn/dsp/wav.py`.
+
+## What reproduces upstream
+
+- **Five beams.** The pipeline's default generation config (`num_beams=5`) wins over the model's greedy default, so 0.1 always decoded with 5 beams, whatever `beam_size` said; the option `beam_size` 1 keeps those 5 beams, and a larger value sets the number. The beam search is transformers 4.57's vectorised `_beam_search` (log-softmax, then the processors, `2 × beams` candidates).
+- **The seek loop inside each window.** Every window is padded to 30 s; a decoding that ends on a timestamp pair is decoded again from that timestamp (the features shifted, zeros after), and the tokens after the pair are dropped. `_decode_asr` re-bases the restarted timestamps and merges the overlapping windows.
+- **Features** are transformers' `WhisperFeatureExtractor`, with its own float64 slaney filterbank and a transposed product, not openai-whisper's log-mel. Turbo's `tokenizer_config.json` sets `clean_up_tokenization_spaces` (" ." becomes "."), applied per segment.
+- **Attention**: the query projected then scaled by `head_dim ** -0.5`, SDPA with `scale=1` on contiguous q, k and v; the decoder causal without a mask for a multi-token prompt and unmasked per new token, its cache grown by concatenation.
+
+## Deviations
+
+- **The model is its own.** CosyVoice's speech tokenizers also contain a Whisper encoder, but openai's attention there (q and k each scaled by d^-¼, masked) is another computation, so the two are not shared.
+- **Exact shortcuts**: language detection's encoder output is reused when there is a single window, and the cross-attention cache is not reordered when every beam's rows are bit-identical. Neither changes a token.
+
+## Memory
+
+One phase per transcription: the whole model, the decoder marked `hot` (it runs per token and beam), `kind="sequence"`. With `compute.oom_fallback`, a transcription that runs out of memory decodes one 30 s window at a time instead of four; that is another batch shape, so in rare ties a transcript may differ.
+
+## Parity
+
+0.1's transcripts exactly on the CPU in fp32: text, segments, language and every window's tokens on 57 corpus clips (language detected or given) and 6 clips of 50–124 s; at module level also the features and `_decode_asr` (3000 fuzzed windows). The stack's parity cases that transcribe their reference (a Qwen3-TTS clone and a CosyVoice 2 clone) are identical as well, so the contract suite's word error rates are unchanged.
+
+## Limitations
+
+- One model in the catalogue; speech recognition is used inside Mizuoto, not offered as a synthesis model or through `GET /v1/models`.
+- The out-of-memory fallback can change a transcript in rare ties.

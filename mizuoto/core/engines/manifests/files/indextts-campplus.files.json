@@ -1,0 +1,11 @@
+{
+ "repo": "funasr/campplus",
+ "revision": "e4b6ede7ce16997aff4ae69fbca1f0175e2afede",
+ "files": [
+  {
+   "path": "campplus_cn_common.bin",
+   "size": 28036335,
+   "sha256": "3388cf5fd3493c9ac9c69851d8e7a8badcfb4f3dc631020c4961371646d5ada8"
+  }
+ ]
+}

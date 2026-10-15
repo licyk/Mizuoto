@@ -1,0 +1,258 @@
+/*
+ * Two-channel motion system.
+ *
+ * INVARIANT: no element carries both a reveal transition and a hover
+ * transition. Reveal lives on `.page-reveal` wrappers, interaction lives on
+ * `.page-interactive` elements, and the two never appear on the same node.
+ *
+ * This is what stops a stagger `transition-delay` from leaking into hover
+ * timing, which is how the previous homepage ended up with hover states that
+ * lagged on entry and cut on exit.
+ *
+ * `page-motion.test.ts` enforces the invariant against these stylesheets.
+ */
+
+/* ------------------------------------------------------------------ */
+/* Enter channel                                                       */
+/* ------------------------------------------------------------------ */
+
+/*
+ * Tier 1: scroll-driven animations. Progress is scrubbed against scroll
+ * position rather than fired on a threshold, which is what makes movement
+ * between sections read as continuous. Stagger is expressed by offsetting
+ * each item's animation range, because `animation-delay` is meaningless on a
+ * view timeline.
+ */
+@supports (animation-timeline: view()) {
+  @media not (prefers-reduced-motion: reduce) {
+    /*
+     * Enter-only reveal. The range ends inside the `entry` phase so a card is
+     * fully revealed by the time it is fully on screen; ending in `cover` would
+     * leave content the reader can already see still part-way through.
+     *
+     * This is the safe variant, and the one the first and last section keep:
+     * neither of those makes the full trip through the viewport, so a card in
+     * them could never complete the second half of a symmetric range.
+     */
+    .page-reveal {
+      animation: page-reveal-in linear both;
+      animation-timeline: view();
+      animation-range: entry calc(5% + var(--page-stagger, 0) * 4%) entry
+        calc(70% + var(--page-stagger, 0) * 4%);
+    }
+
+    /*
+     * Cards in a section that does make the full trip fade back out as they
+     * leave, so scrolling reads as one continuous movement rather than a stack
+     * of things that only ever arrive. The plateau is wide: a card is at full
+     * opacity for the whole time it is comfortably readable.
+     */
+    .page-section:not(:first-of-type, :last-of-type) .page-reveal {
+      animation-name: page-reveal-pass;
+      animation-range: entry calc(5% + var(--page-stagger, 0) * 4%) exit 88%;
+    }
+
+    /*
+     * The pass animation models a section travelling through the viewport, so
+     * it only applies to sections that actually make the whole trip. The first
+     * section is already in view at load and never enters; the last one closes
+     * the document, so scrolling can never carry it past the exit phase and it
+     * would sit permanently dimmed part-way through the range. Expressed
+     * structurally so any paged route gets it right without opting out.
+     */
+    .page-section:not(:first-of-type, :last-of-type) > .page-section-body {
+      animation: page-section-pass linear both;
+      animation-timeline: view();
+      animation-range: entry 0% exit 100%;
+    }
+  }
+}
+
+/*
+ * Tier 2: fallback for browsers without scroll-driven animations. The
+ * `transition-delay` here is safe precisely because `.page-reveal` is a
+ * wrapper that never carries hover styles.
+ */
+@supports not (animation-timeline: view()) {
+  .page-reveal {
+    opacity: 1;
+    transform: none;
+    transition:
+      opacity var(--page-enter) var(--page-ease-enter)
+        calc(var(--page-stagger, 0) * var(--page-stagger-step)),
+      transform var(--page-enter) var(--page-ease-enter)
+        calc(var(--page-stagger, 0) * var(--page-stagger-step));
+  }
+
+  .page-reveal.is-reveal-pending {
+    opacity: 0;
+    transform: translateY(18px);
+  }
+}
+
+@keyframes page-reveal-in {
+  from {
+    opacity: 0;
+    transform: translateY(22px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes page-reveal-pass {
+  0% {
+    opacity: 0;
+    transform: translateY(22px);
+  }
+
+  20%,
+  80% {
+    opacity: 1;
+    transform: translateY(0);
+  }
+
+  100% {
+    opacity: 0;
+    transform: translateY(-16px);
+  }
+}
+
+/*
+ * Section-to-section transition: a gentle parallax drift as a section arrives
+ * and leaves. No scale — scaling text blurs it and can force horizontal
+ * overflow — and no opacity: the cards inside now own the fade, and dimming
+ * the section on top of that compounds into mud.
+ *
+ * The plateau is deliberately wide. A snapped section's measured progress
+ * varies with its content height (0.68 for a short section, 0.89 for a tall
+ * one), so a narrow plateau leaves tall sections visibly displaced at rest.
+ */
+@keyframes page-section-pass {
+  0% {
+    transform: translateY(2.5vh);
+  }
+
+  12%,
+  92% {
+    transform: none;
+  }
+
+  100% {
+    transform: translateY(-2.5vh);
+  }
+}
+
+/* ------------------------------------------------------------------ */
+/* Interaction channel                                                 */
+/* ------------------------------------------------------------------ */
+
+/*
+ * The base rule is the leave state, so it owns the longer leave timing.
+ * `:hover`/`:focus-visible` only override duration and easing — appearance
+ * stays with each component.
+ */
+.page-interactive {
+  transition:
+    transform var(--page-out) var(--page-ease-out),
+    border-color var(--page-out) var(--page-ease-out),
+    background-color var(--page-out) var(--page-ease-out),
+    box-shadow var(--page-out) var(--page-ease-out),
+    color var(--page-out) var(--page-ease-out),
+    opacity var(--page-out) var(--page-ease-out);
+}
+
+/*
+ * Descendants that react to their ancestor's hover.
+ *
+ * Property list kept identical to `.page-interactive` above — omitting one
+ * (`box-shadow` used to be missing here) makes that property snap while its
+ * neighbours ease, which reads as the whole effect appearing abruptly.
+ */
+.page-interactive-part {
+  transition:
+    transform var(--page-out) var(--page-ease-out),
+    border-color var(--page-out) var(--page-ease-out),
+    background-color var(--page-out) var(--page-ease-out),
+    box-shadow var(--page-out) var(--page-ease-out),
+    color var(--page-out) var(--page-ease-out),
+    opacity var(--page-out) var(--page-ease-out);
+}
+
+/*
+ * `any-hover`, not `hover`: a Windows touch laptop with a mouse attached
+ * reports `hover: none` for its primary pointer, which would drop every hover
+ * state for a user who does in fact have a pointer. `any-hover` keeps hover on
+ * hybrid machines while still excluding pure-touch devices.
+ */
+@media (any-hover: hover) {
+  .page-interactive:hover,
+  .page-interactive:hover .page-interactive-part {
+    transition-duration: var(--page-in);
+    transition-timing-function: var(--page-ease-in);
+  }
+}
+
+.page-interactive:focus-visible,
+.page-interactive:focus-visible .page-interactive-part,
+.page-interactive:focus-within .page-interactive-part {
+  transition-duration: var(--page-in);
+  transition-timing-function: var(--page-ease-in);
+}
+
+/* ------------------------------------------------------------------ */
+/* Reduced motion                                                      */
+/* ------------------------------------------------------------------ */
+
+/*
+ * Durations collapse to 1ms rather than `none` so `transitionend` and
+ * `animationend` still fire for anything listening.
+ */
+@media (prefers-reduced-motion: reduce) {
+  html:has(.paged) {
+    scroll-behavior: auto;
+    scroll-snap-type: none;
+  }
+
+  .paged,
+  .paged::before,
+  .paged::after,
+  .paged *,
+  .paged *::before,
+  .paged *::after {
+    animation-duration: 1ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 1ms !important;
+  }
+
+  .page-reveal,
+  .page-section-body {
+    opacity: 1 !important;
+    transform: none !important;
+  }
+}
+
+/* ------------------------------------------------------------------ */
+/* Between-card interaction                                            */
+/* ------------------------------------------------------------------ */
+
+/*
+ * Spotlight: pointing at one card recedes its siblings slightly, so a grid
+ * reads as a set you are moving through rather than a wall of equals.
+ *
+ * The rule targets the cards themselves — never the `.page-reveal` wrapper —
+ * so the reveal and interaction channels stay on separate elements.
+ */
+.page-spotlight {
+  --page-spotlight-dim: 0.62;
+  --page-spotlight-scale: 0.988;
+}
+
+@media (any-hover: hover) {
+  .page-spotlight:has(.page-interactive:hover) .page-interactive:not(:hover) {
+    opacity: var(--page-spotlight-dim);
+    transform: scale(var(--page-spotlight-scale));
+  }
+}

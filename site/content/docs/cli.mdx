@@ -1,0 +1,211 @@
+---
+title: "概览"
+description: "mizuoto 命令行与网页界面、HTTP 接口调用同一个核心：本页介绍它的共同约定、前台任务、退出码，以及在服务器运行时使用它。"
+icon: Terminal
+---
+
+`mizuoto` 命令行能做网页界面能做的事：合成、克隆与设计音色、转换与编辑录音、语音识别、检查 torch 与引擎、管理模型、预设、项目、数据集与训练、远程主机、任务和设置。命令行只是一层很薄的外壳：每条命令解析参数，调用核心里对应的那**一个**方法，再把结果打印出来。网页界面背后的 HTTP 接口调用的也是同一批方法，所以两边的行为一致，`--json` 打印的记录与接口返回的 JSON 结构相同。
+
+本页介绍共同约定和常用流程；每条命令的选项见 [命令参考](/docs/cli-commands)，设置项与环境变量见 [配置与环境变量](/docs/cli-config)。
+
+## 命令一览
+
+```text
+mizuoto
+├── webui                     启动服务器并打开网页界面
+├── version
+├── speak | design | convert | edit | asr
+├── voice    list | info | add | design | from-preset | from-output | edit | remove
+│            add-ref | remove-ref | set-transcript | retranscribe
+│            add-weights | remove-weights | fit | prepare | export | import
+├── model    list | info | spec | speakers | download | verify | delete | import
+├── asset    list | download | delete
+├── engine   list | info | licence | accept-licence | enable | disable | op
+├── doctor                    检查 torch、各引擎及其可选依赖
+├── runtime                   列出已加载的模型，并卸载它们
+├── env      vars
+├── preset   list | save | delete | default
+├── project  list | new | show | import | script | cast | set | render | export | delete
+├── dataset  list | create | info | import | add | prepare | check | rows | edit-row | delete
+├── train    methods | new | list | status | run | metrics | edit | export | delete
+├── output   list | info | delete
+├── job      list | show | log | cancel | retry
+├── agent                     把本机的引擎提供给另一台 Mizuoto
+├── remote   list | add | remove | use
+└── config   show | get | set | path
+```
+
+任何一级都可以加 `--help`；只输入组名（如 `mizuoto model`）也会显示该组的帮助。每一级都接受 `--debug`。
+
+## 与网页界面的区别
+
+- **任务在前台运行。** `speak`、`design`、`model download`、`train run`、`project render` 等会创建一个任务，并在当前终端里执行到结束；进度条显示在 stderr 上（只在 stderr 是终端时显示，`--json` 时关闭），下载会显示已下载量、速度和剩余时间。
+- **<kbd>Ctrl</kbd>+<kbd>C</kbd> 取消任务。** 任务被标记为 **已取消**，引擎在下一次检查时停下（下一个 token 或下一步），训练阶段的进程被结束，命令以退出码 130 结束。
+- **不需要启动服务器。** 每条命令自己打开数据文件夹（设置、数据库、模型），执行完就关闭；引擎运行在命令自己的进程里，加载的模型随命令一起释放，所以每条 `speak` 都要重新加载一次模型。需要连续合成很多句时，用服务器（网页界面或 [HTTP 接口](/docs/advanced-api)）更快，那里模型会保留在内存中。
+- **命令行可以使用任何路径。** 网页界面只能读取 **浏览器可以打开的文件夹**（`paths.browse_roots`）里的服务器文件，而 `--ref`、`model import`、`dataset import` 等可以直接给出本机任意路径。
+
+## 输出与 `--json`
+
+列表和查询类命令默认打印表格；加 `--json` 打印 JSON，结构与对应接口返回的记录相同，适合脚本处理：
+
+```bash
+mizuoto model list --installed --json | jq -r '.[].id'
+mizuoto job show j_abc123 --json
+```
+
+几处说明：
+
+- `speak` 结束后逐行打印结果文件的路径、时长和采样率；结果总是保存在结果文件夹（并出现在 **历史** 中），`-o` 再复制一份到指定位置，扩展名决定格式。
+- `speak --json` 打印 `{"job": …, "outputs": […]}`：完成的任务和它生成的结果记录。
+- `speak --plan` 只检查请求并打印将要执行的计划（模型、设备、音色模式、分段、参数），不运行任何东西。
+- 警告（例如被 `--lenient` 丢弃的参数）以 `warning:` 开头打印在 stderr 上，不会混入 stdout。
+
+## 退出码
+
+命令出错时，先打印错误信息，如果错误带有修复建议，第二行打印建议的命令；退出码表示错误类别。错误码定义在 `mizuoto/core/codes.py`，每个错误类的退出码定义在 `mizuoto/core/errors.py`：
+
+| 退出码 | 错误码 | 典型情况 |
+| --- | --- | --- |
+| 0 | | 成功 |
+| 1 | `internal_error` | 未分类的内部错误；确认提示时回答了"否" |
+| 2 | `not_found` | 模型、音色、任务、结果或引擎不存在。命令行参数写错（未知选项、取值超出范围）时 Click 也以 2 退出 |
+| 3 | `conflict`、`busy` | 名称已存在；阶段正在运行；`webui` 找不到可用端口 |
+| 4 | `invalid_input`、`invalid_path`、`capability_not_supported`、`parameter_not_supported`、`parameter_out_of_range`、`reference_invalid`、`language_not_supported` | 请求不合法：模型不支持这种音色模式或参数，参考音频太短或太长，语言不支持；`webui` 的证书文件不存在 |
+| 5 | `licence_not_accepted` | 需要接受许可的引擎（Fish Speech、IndexTTS）还没有接受许可 |
+| 7 | `model_missing`、`engine_not_installed`、`asset_missing` | 模型没有下载；引擎需要的包没有安装（torch，或许可受限引擎的 `mizuoto-fishspeech` / `mizuoto-indextts`）；共享文件缺失 |
+| 8 | `device_unavailable` | 设备不存在或不可用，例如设备写成了不存在的远程主机名 |
+| 9 | `compute_unavailable` | 没有可用设备，或 GPU 显存不足（`detail.reason` 为 `out_of_memory` 或 `no_device`） |
+| 10 | `worker_failed`、`engine_error` | 训练阶段的进程或远程代理退出或不再响应；引擎内部抛出异常 |
+| 11 | `timeout` | 操作超时 |
+| 12 | `download_failed` | 一个文件从所有下载来源都没能下载 |
+| 14 | `remote_unavailable` | 远程主机连不上、拒绝了令牌或协议版本不同 |
+| 130 | `cancelled` | <kbd>Ctrl</kbd>+<kbd>C</kbd> 中断，或任务被取消 |
+
+缺少依赖包时的输出类似：
+
+```text
+IndexTTS needs mizuoto-indextts, which is not installed
+mizuoto doctor indextts
+```
+
+## 调试与日志
+
+```bash
+mizuoto --debug speak "你好" -m qwen3tts/1.7b-custom-voice --preset vivian
+mizuoto speak "你好" -m qwen3tts/1.7b-custom-voice --preset vivian --debug   # 放在子命令后面也可以
+```
+
+也可以用环境变量 `MIZUOTO_LOG_LEVEL` 设置日志级别（`DEBUG`、`INFO`、`WARNING`、`ERROR`，默认 `INFO`）。每个任务的完整日志保存在数据文件夹的 `jobs/<任务 id>.log`，用 `mizuoto job log <任务 id>` 查看；训练阶段的输出也写进其任务的日志。
+
+## 在服务器运行时使用
+
+命令行和服务器可以同时打开同一个数据文件夹。它们是两个独立的进程，共享设置文件、数据库和各个文件夹：
+
+- **设置**：`mizuoto config set` 写入 `settings.toml`，正在运行的服务器在约 1 秒内读到改动，网页界面随之刷新。服务器地址和端口要在下次启动服务器时生效。
+- **任务**：命令行的任务也写进数据库，所以 `mizuoto job list` 能看到服务器的任务，网页界面的 **任务** 面板也能看到命令行跑过的任务。任务记录着运行它的进程；一个进程打开数据文件夹时，只把**已经退出的**进程留下的未完成任务标为 **已中断**，不会动另一个仍在运行的进程的任务。
+- **GPU 不排队**：命令行的任务立即在自己的进程里运行，不进入服务器的 GPU 队列，并加载自己的一份模型。如果服务器已经把同一个模型加载在同一块 GPU 上，显存里会有两份；显存不够时任务以 `compute_unavailable`（退出码 9）失败。
+- **已加载的模型**：`mizuoto runtime` 列出正在运行的服务器持有的模型（通过数据文件夹中的 `server.json` 找到服务器），`mizuoto runtime --unload [MODEL]` 在服务器上卸载它们。
+- **取消**：`mizuoto job cancel` 只能取消本进程里的任务，对服务器正在运行的任务会报告 `Job … is not running`。要取消服务器的任务，在网页界面的 **任务** 面板里点 **取消**，或调用 `POST /api/v1/jobs/{job_id}/cancel`。
+- `mizuoto job retry` 在前台重新运行一个失败、已取消或已中断的任务（它保存的请求会重新规划）。
+
+## 常用流程
+
+### 检查引擎、下载模型、合成
+
+```bash
+mizuoto doctor                                        # torch 与硬件是否匹配，各引擎是否可用
+mizuoto engine list                                   # 引擎、可用状态、许可
+mizuoto model list -e qwen3tts                        # 模型目录
+mizuoto model download qwen3tts/1.7b-custom-voice
+mizuoto model speakers qwen3tts/1.7b-custom-voice     # 预置说话人
+mizuoto speak "今天天气不错。" -m qwen3tts/1.7b-custom-voice --preset vivian \
+    --instruct "语气轻快" -o hello.mp3
+```
+
+不带 `-m` 时使用设置 `tts.default_model`。`mizuoto model spec <模型>` 列出模型接受的音色模式、语言、通用参数和引擎选项。
+
+### 克隆与设计音色
+
+```bash
+# 用一段参考音频克隆（--ref-text 是它说的内容；省略时由语音识别补全，或用无文本克隆）
+mizuoto speak "这是克隆出来的声音。" -m cosyvoice/cosyvoice2-0.5b --ref me.wav --ref-text "参考音频里的话"
+
+# 存进音色库，以后用 -v 引用
+mizuoto voice add "我的声音" --ref me.wav --text "参考音频里的话" --consent "本人录音"
+mizuoto speak "你好。" -m qwen3tts/1.7b-base -v 我的声音
+
+# 按描述设计一个音色，并保存到音色库
+mizuoto design "你好，很高兴认识你。" -m qwen3tts/1.7b-voice-design \
+    -d "温暖、低沉的男声，略带沙哑" --save-as "低沉男声"
+```
+
+`-v` 接受音色的 id 或 slug（`mizuoto voice list` 的第一列）；名称里的中文会保留在 slug 中。
+
+### 边生成边播放
+
+`--stream` 把 WAV 写到 stdout，模型生成多少就写多少，适合接播放器：
+
+```bash
+mizuoto speak "一段比较长的文字……" -m cosyvoice/cosyvoice2-0.5b -v 我的声音 --stream | ffplay -nodisp -autoexit -
+```
+
+stdout 是终端时 `--stream` 会拒绝运行；结果仍然完整保存，路径打印在 stderr 上。
+
+### 批量与参数
+
+```bash
+mizuoto speak - --batch -m qwen3tts/1.7b-custom-voice --preset serena < lines.txt   # 每行一个结果
+mizuoto speak "……" -m f5tts/v1-base -v 我的声音 -p num_steps=48 --speed 0.9 --seed 42
+mizuoto speak "……" -m indextts/v2 -v 我的声音 --emotion happy=0.8 --emotion surprised=0.3
+mizuoto preset save 慢速 -m f5tts/v1-base -p speed=0.85 -p num_steps=48
+mizuoto speak "……" -m f5tts/v1-base -v 我的声音 -P 慢速
+```
+
+`-p` 设置通用参数（`temperature`、`top_p`、`top_k`、`repetition_penalty`、`max_new_tokens`、`num_steps`、`guidance_scale`、`speed`、`duration`、`seed`、`text_normalization`、`segment_silence_ms`），`-O` 设置引擎自己的选项；值按 JSON 解析。模型不接受某个参数时默认报错（退出码 4），加 `--lenient` 则丢弃并给出警告。
+
+### 转写、转换与编辑
+
+```bash
+mizuoto asr clip.wav -l zh
+mizuoto convert source.wav -m cosyvoice/cosyvoice2-0.5b -v 我的声音 -o converted.wav
+mizuoto edit take.wav -m f5tts/v1-base -t "修改后完整的一句话" --span 1.20:1.85
+```
+
+### 训练
+
+```bash
+mizuoto dataset create alice -l zh --consent "Alice 本人同意"
+mizuoto dataset add alice ./recordings
+mizuoto dataset prepare alice              # 按静音切分、语音识别补全文本、峰值归一化
+mizuoto dataset check alice
+mizuoto train methods gptsovits/v2pro-base
+mizuoto train new alice-v1 -m gptsovits/v2pro-base -d alice
+mizuoto train run alice-v1
+mizuoto train status alice-v1
+```
+
+所有训练都在 Mizuoto 自己的环境中运行；每个阶段是同一个 Python 的子进程。
+
+### 项目
+
+```bash
+mizuoto project new 小王子 -m qwen3tts/1.7b-custom-voice --preset vivian -l zh -s script.txt
+mizuoto project cast 小王子 狐狸 -v 狐狸的声音 -m cosyvoice/cosyvoice2-0.5b
+mizuoto project render 小王子
+mizuoto project export 小王子 -o 小王子.mp3 --srt 小王子.srt
+```
+
+## Shell 补全
+
+```bash
+mizuoto --install-completion   # 为当前 shell 安装补全
+mizuoto --show-completion      # 只打印补全脚本
+```
+
+安装后重新打开终端即可补全命令、子命令和选项。
+
+## 下一步
+
+- [命令参考](/docs/cli-commands)：每条命令的参数和选项。
+- [配置与环境变量](/docs/cli-config)：设置项、环境变量和数据文件夹。
+- [常见问题](/docs/advanced-faq)

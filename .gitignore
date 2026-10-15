@@ -1,0 +1,21 @@
+# Upstream checkouts some developers keep at the root, to read beside the native ports (the vendored copies v1 ran
+# are at the tag v1-engine-workers).
+/CosyVoice/
+/F5-TTS/
+/fish-speech/
+/GPT-SoVITS/
+/index-tts/
+/OmniVoice/
+/Qwen3-TTS/
+
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+/dist/
+.pytest_cache/
+.ruff_cache/
+.venv/
+node_modules/
+mizuoto/webui/dist/
+mizuoto/webui/openapi.json

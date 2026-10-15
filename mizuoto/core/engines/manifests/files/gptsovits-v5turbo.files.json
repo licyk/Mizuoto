@@ -1,0 +1,21 @@
+{
+ "repo": "lj1995/GPT-SoVITS",
+ "revision": "8f8857563c040d542de108a2c18b0425abd6c9c5",
+ "files": [
+  {
+   "path": "gsv-v5-pretrained/s2Gv5turbo.pth",
+   "size": 766406144,
+   "sha256": "287b32a06b7d486f5303ec520468b0728fb01aac8b0f5d86fd5455c9a1d3e022"
+  },
+  {
+   "path": "gsv-v5-pretrained/vocoder.pth",
+   "size": 57761163,
+   "sha256": "b7543c83222aa2105bb4efb56845086bc5f2eeba61243d723ffa062052b3221f"
+  },
+  {
+   "path": "s1v3.ckpt",
+   "size": 155284856,
+   "sha256": "87133414860ea14ff6620c483a3db5ed07b44be42e2c3fcdad65523a729a745a"
+  }
+ ]
+}

@@ -1,0 +1,2 @@
+# Patches to vendored code must apply byte for byte (some upstream files use CRLF).
+*.patch -text

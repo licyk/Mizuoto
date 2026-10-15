@@ -1,0 +1,106 @@
+---
+title: "引擎参考"
+description: "每个内置引擎在 Mizuoto 中怎样实现、与上游一致到什么程度：变体、代码位置、对照结果和训练方法，“一致”如何定义与检查，以及每个引擎都遵守的规则。"
+icon: Microscope
+---
+
+Mizuoto 的每个引擎都是一个移植版：把上游项目的模型代码，在 Mizuoto 的运行时（`mizuoto/runtime`）和共享构件（`mizuoto/nn`、`mizuoto/text`）之上重新写一遍。不内嵌任何上游代码，也没有引擎导入 transformers、onnxruntime 或上游的包。每个移植版都遵守同一个标准：在 CPU 上、以 fp32、用同一个种子运行时，它逐采样地给出被它取代的那份代码的输出。
+
+本节逐个引擎记录：做到这一点需要什么，引擎在哪些地方有意与上游不同，它怎样使用显存、怎样跑得快，怎样训练，以及对照的结果。该选哪个引擎、各自能做什么，见[引擎详解](/docs/advanced-engines)；引擎怎样编写和注册，见[接入引擎](/docs/development-engine)。
+
+## 引擎一览
+
+| 引擎 | 变体 | 代码 | 一致程度（CPU、fp32、同一种子） | 训练 |
+| --- | --- | --- | --- | --- |
+| [Qwen3-TTS](/docs/engines-qwen3tts) | `base`、`custom_voice`、`custom_voice_lite`、`voice_design` | `mizuoto/engines/qwen3tts` | 8 个完整链路用例全部相同 | `speaker` |
+| [F5-TTS](/docs/engines-f5tts) | `v1_base`、`base`、`e2_base` | `mizuoto/engines/f5tts` | 6 个完整链路用例全部相同 | `full` |
+| [OmniVoice](/docs/engines-omnivoice) | `v0` | `mizuoto/engines/omnivoice` | 4 个完整链路用例全部相同 | `full`、`lora` |
+| [CosyVoice](/docs/engines-cosyvoice) | `v1_base`、`v1_sft`、`v1_instruct`、`v2`、`v3` | `mizuoto/engines/cosyvoice` | 音色提示相同时完全相同；走完整链路时 SNR 为 23–68 dB（CAM++ 的浮点噪声） | `llm`、`llm_flow` |
+| [Fish Speech](/docs/engines-fishspeech) | `s2_pro` | `packages/native/fishspeech`（`mizuoto-fishspeech`） | 两个完整链路用例的编码和音频都相同 | `lora` |
+| [IndexTTS](/docs/engines-indextts) | `v1_5`、`v2`、`v2_5` | `packages/native/indextts`（`mizuoto-indextts`） | 4 个完整链路用例全部相同 | 无 |
+| [GPT-SoVITS](/docs/engines-gptsovits) | `v2`、`v2pro`、`v2proplus`、`v4`、`v5turbo` | `mizuoto/engines/gptsovits` | 15 个完整链路用例全部相同 | `speaker` |
+| [VoxCPM](/docs/engines-voxcpm) | `v2`、`v1_5`、`v1` | `mizuoto/engines/voxcpm` | 与上游自己的包相比，27 个完整链路用例在 bf16 和 fp32 下全部相同 | `full`、`lora` |
+| [语音识别](/docs/engines-asr) | `whisper` | `mizuoto/engines/asr` | 63 段音频的转写结果完全相同 | 无 |
+
+两边用同样的种子时，每个训练器在 CPU 上给出的损失、学习率和保存的权重都与上游逐字节相同，两种实现也都能加载对方导出的结果（除 CosyVoice 的音色提示之外，合成出的音频也相同）。契约套件（真实模型走完整链路）在 CPU 上对每个引擎都通过：Qwen3-TTS 24 项、F5-TTS 12 项、OmniVoice 12 项、CosyVoice 18 项、Fish Speech 6 项、IndexTTS 18 项、GPT-SoVITS 24 项、VoxCPM 18 项。
+
+## “相同”指什么
+
+### 参考实现
+
+七个引擎的参考实现是 **Mizuoto 0.1**（git 标签 `v1-engine-workers`）。0.1 在各自独立的环境里、通过一个小小的适配层运行各上游项目自己的代码；所以“与 0.1 相同”就是与 Mizuoto 当时驱动的上游相同，包括适配层的选择（文本怎样分段、各块的顺序、参数怎样映射）。0.1 的适配层与上游不一致的地方，保留 0.1 的行为：F5-TTS 按顺序生成长文本的各块，GPT-SoVITS 按适配层的方式缩放停顿。
+
+有两个引擎的参考实现不同：
+
+- **VoxCPM** 在 0.1 之后才加入。它的参考实现是上游自己的包（清单固定的那个提交），在同一套 Mizuoto 完整链路里通过适配层运行，库版本与上游锁定的一致。
+- **CosyVoice** 对照的是运行在 torch 2.8 上的上游，而不是它发布时用的 torch 2.3.1：上游在 2.3.1 和 2.8 上彼此并不一致（抽样会分叉；音色转换只一致到 62 dB），而 Mizuoto 需要 torch 2.8 或更新版本。
+
+### 条件
+
+CPU、fp32（VoxCPM 还有它默认的 bf16）、同一个种子、同一个 torch 版本、同样的线程数（CPU 内核按线程数拆分求和）。之所以在 CPU 上下结论，是因为 logit 上任何一点差别都可能让一次抽样或一次束搜索的选择翻转，之后的一切随之分叉；在 GPU 上用降低的精度时，内核随形状变化，上游连自己都对不上（批量与单条请求相比）。在 CPU 上用 fp32 时计算是确定的，所以一个与上游做法完全相同的移植版，给出的就是与上游完全相同的比特。
+
+### 层级
+
+| 层级 | 比较什么 | 通过条件 |
+| --- | --- | --- |
+| T0 操作 | DSP、采样器、分词器、文本规范化、g2p | 完全相同：`torch.equal`、相同的 id、相同的字符串 |
+| T1 模块 | 每个模块用真实权重处理捕获的输入 | 最大绝对误差 ≤ 1e-5 × max(1, ‖ref‖∞)，余弦相似度 ≥ 0.99999 |
+| T2 阶段 | 教师强制下的 logits；捕获输入得到的离散输出（语音分词器编码、VQ 编码） | argmax 100 % 一致；离散输出 ≥ 99.9 % 一致，且每处翻转都有解释 |
+| T3 端到端 | 一个带种子的完整请求走 Mizuoto 的完整链路 | token 相同；音频相同，或最大绝对误差 ≤ 1e-4 |
+
+上表每个引擎在 T3 上都完全相同、误差为零，只有 CosyVoice 在两边各自生成音色提示时例外。有两条需要主动开启的路径标准放宽：`compute.compile`（在 1e-4 以内，CosyVoice 除外，它的声码器会放大浮点差异）和 Qwen3-TTS 的 `fused_projections`（CPU 上相同，GPU 上不同）。
+
+除音频外还比较行为：应用的参数和警告、选中的音色方式、分段、流式各块的长度、采样率，以及无效请求的错误码。
+
+**训练**相同，指两边用同样的种子时，每一步的损失、学习率等指标以及保存的权重都与上游相同。上游很少给所有东西播种（0.1 从来没有），所以参考实现是按原生训练阶段的播种方式给生成器播种之后的上游。
+
+**在 GPU 上**不与上游做逐采样比较。GPU 上检查的是 Mizuoto 自己的加速路径不改变任何结果：CUDA 图和每步只等待设备一次的解码循环，与同一块 GPU 上普通的 eager 代码给出相同的 token 和音频。
+
+## 怎样检查
+
+- **对照工具**（`scripts/parity/`）让用例用任一实现走完整的 Mizuoto 链路并比较结果：`stack.py run <cases> --impl reference|native`（VoxCPM：`--impl upstream|native`）、`compare.py <engine>`，训练器用 `train.py run|compare`。用例在 `scripts/parity/cases/<engine>.jsonl`（共 74 个）；环境、音频、夹具和报告放在仓库之外的 `MIZUOTO_PARITY_DIR`。参考实现先与自己的重复运行比较：自己都不能复现的用例无法用来评判移植版。命令见[测试](/docs/development-testing)。
+- **组件检查**：`scripts/parity/check_tokenizer.py`（BPE 与 transformers 的分词器对比）、`scripts/parity/dsp_fixtures.py`（DSP 与 torchaudio、librosa、Whisper 和 soxr 对比，保存为 `tests/fixtures/dsp/*.npz`）、`scripts/parity/check_rng.py`（显式生成器与播种后的默认随机流对比），以及按引擎的模块脚本，例如 `voxcpm_modules.py`。
+- **CI 中**：`tests/engines_native/` 让每个引擎和训练器在一个与其结构相同的小型随机模型上运行，并在模拟设备上分别以全部流式加载、一半流式加载和不流式加载权重运行，结果必须相同；`tests/runtime/test_dsp.py` 用夹具检查 DSP。
+- **契约套件**（`python scripts/dev.py test-engines`）让已安装的真实模型走规划、任务和运行时：每种音色方式都能发声且听得懂（经语音识别 WER 低于 0.35）、种子可复现、分段、取消，以及进程中不留残余。
+
+## 每个引擎都遵守的规则
+
+- **上游的计算、顺序和形状。** 批处理会改变浮点求和，所以即使有更简单的写法，移植版也保留上游的张量形状（三个嵌入在一次调用里查出、缓存靠拼接增长、SDPA 用 transformers 当时传的参数调用）。
+- **随机数来自请求。** 每次抽样都来自 `ctx.generator_for(device)` 或 `ctx.rng`，从不使用 torch 的全局生成器。用种子 *s* 初始化的全新 `torch.Generator`，与 `torch.manual_seed(s)` 之后的默认生成器产出相同的序列，CPU 和 CUDA 上都是如此（`check_rng.py`），所以按上游的顺序做上游的抽样，就能复现上游带种子的运行。上游在构建模型时就有抽样（默认初始化会消耗全局生成器）的地方，若这些值有影响，移植版在私有生成器上重放这些抽样（CosyVoice 3 的声码器噪声、各训练器的初始化），或让生成器直接跳过它们（Fish Speech 的训练器）。
+- **不改进程级状态。** 不改环境变量、工作目录、`sys.path`、`torch.backends` 标志、全局种子或日志配置；`tests/test_architecture.py` 禁止这样做，契约套件也会在请求前后比较进程状态的摘要（`mizuoto.snapshot` 操作）。
+- **复现库的数值。** `mizuoto.nn.dsp` 与上游调用的库逐位一致：torchaudio（2.3.1 和 2.8.0）、librosa（0.10、0.11、1.0）、openai-whisper、经 `librosa.resample` 调用的 soxr、Matcha-TTS 的 mel、ffmpeg 程序的重采样器，以及 soundfile 的 WAV。`mizuoto.text.tokenize.bpe` 对 Qwen2 系列分词器给出与 transformers 相同的 id；文本规范化用 kaldifst 应用原始的 FST；ONNX 权重直接从 protobuf 读取，不需要 onnx。
+- **严格加载检查点。** 缺少或多出的键都是错误；上游有时会给缺少的键保留随机权重。
+- **在推理模式之外加载**，请求在推理模式之内运行（见下）。
+
+<Callout type="warn" title="两个 CPU 内核陷阱">
+
+两者都是在对照 E2-TTS 时发现的：`F.linear` 作用于跨步（非连续）的三维输入时，如果权重需要梯度，或者权重是*推理张量*（在 `torch.inference_mode()` 里创建的），就会走另一个舍入不同的 CPU 内核，即使在 `no_grad` 下也是如此。上游的权重是需要梯度的普通参数。所以原生引擎保持 `nn.Module` 创建参数时的样子（不调用 `requires_grad_(False)`），模型在推理模式之外加载；请求仍在推理模式里运行。
+
+</Callout>
+
+## 共享构件
+
+| 模块 | 是什么 | 引擎 |
+| --- | --- | --- |
+| `runtime/lm/qwen.py`、`runtime/lm/cache.py` | 具有 transformers 数值行为的 Qwen2/Qwen3 解码器（`hf_sdpa`、`mask_for`）、`DynamicCache` 和可选的预分配 `BufferCache` | Qwen3-TTS、OmniVoice、CosyVoice 2/3、IndexTTS 的情感模型；Fish Speech 使用其中的缓存 |
+| `runtime/sampling.py` | 按 transformers 顺序排列的 logits 处理器；`multinomial` 本身的计算，去掉等待设备的检查 | Qwen3-TTS、IndexTTS、CosyVoice |
+| `runtime/graphs.py` | 对解码器单 token 步的 CUDA 图（`DecoderSteps`、`LayerSteps`） | Qwen3-TTS、Fish Speech、CosyVoice 2/3、VoxCPM、GPT-SoVITS、IndexTTS |
+| `runtime/compile.py` | `Compiled`：开启 `compute.compile` 时，用 `torch.compile` 编译一个热点模块 | F5-TTS、CosyVoice、GPT-SoVITS、IndexTTS、VoxCPM |
+| `nn/transformer/` | F5 的 DiT（`dit.py`）、E2 的 UNetT、wenet 的 Conformer、Seed-VC 的 DiT、VITS、BERT | F5-TTS、CosyVoice、GPT-SoVITS、IndexTTS |
+| `nn/flow/` | 用 torchdiffeq 固定网格的 F5 CFM、Matcha 的 U-Net、耦合流 | F5-TTS、CosyVoice、GPT-SoVITS |
+| `nn/vocoders/` | Vocos、HiFT v1–v3、BigVGAN v1/v2、HiFi-GAN | F5-TTS、IndexTTS、CosyVoice、GPT-SoVITS |
+| `nn/codecs/` | DAC、由 ONNX 文件构建的 s3tokenizer 语音分词器、RepCodec | OmniVoice、CosyVoice、IndexTTS |
+| `nn/ssl/`、`nn/speaker/` | HuBERT、w2v-BERT 2.0；CAM++（CosyVoice 的 ONNX 图的形式，以及 3D-Speaker 代码的形式）、ECAPA、MelStyle | OmniVoice、GPT-SoVITS、IndexTTS、CosyVoice |
+| `nn/dsp/` | mel 滤波器组、kaldi fbank、重采样器、WAV 和 FLAC、用作显存回退的分块解码 | 全部 |
+| `text/tokenize/`、`text/normalize/` | Qwen2 系列 BPE、Whisper 的 tiktoken 词表、基于 kaldifst 的 wetext 文本规范化 | Qwen3-TTS、OmniVoice、Fish Speech、CosyVoice、IndexTTS、VoxCPM |
+
+运行时怎样把这些模型放进显存、怎样流式加载权重、显存不足后怎样重试，见[运行时](/docs/development-runtime)；开启加速路径的设置见[性能与加速](/docs/advanced-performance)。
+
+## 需接受许可的引擎
+
+Fish Speech 和 IndexTTS 移植的代码，其许可（Fish Audio Research License、bilibili Model Use License）同样约束移植版。因此它们是单独的发行包 `mizuoto-fishspeech` 和 `mizuoto-indextts`，各自附带许可，安装在同一个环境里，并在入口点组 `mizuoto.engines` 下注册。它们的清单随 `mizuoto` 一起发布，所以在发行包安装之前，模型目录和许可全文就已经在了。它们遵守与内置引擎相同的规则，也不从其他引擎导入任何东西。
+
+## 限制
+
+- 一致性是在 CPU 上确立的。GPU 上检查的是 Mizuoto 自己的快路径与普通路径结果相同，而不是与上游逐采样对照。
+- CUDA 图只在 NVIDIA GPU 上运行。每个引擎都声明支持 AMD（ROCm）、Intel（XPU）和 Apple（MPS）GPU，但都还没有在这些硬件上运行过。

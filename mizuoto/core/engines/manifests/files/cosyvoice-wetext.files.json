@@ -1,0 +1,26 @@
+{
+ "repo": "pengzhendong/wetext",
+ "revision": "030bb1febce0bd0168549a03e181cd9c1d70c799",
+ "files": [
+  {
+   "path": "en/tn/tagger.fst",
+   "size": 5645674,
+   "sha256": "245e2dc9174cdd007a8e9e50f3339773d1adbbc7535b71cf67478dc1683cc3ec"
+  },
+  {
+   "path": "en/tn/verbalizer.fst",
+   "size": 6398822,
+   "sha256": "03155c88f317b2795969e264c19f87faf98b9853d5ac631e419bacdc3b3ee15a"
+  },
+  {
+   "path": "zh/tn/tagger.fst",
+   "size": 527178,
+   "sha256": "cf341314c51f7ce59049f3b2c42f0ce8fd71e6d08d4d6969613aad384a5e2ae8"
+  },
+  {
+   "path": "zh/tn/verbalizer.fst",
+   "size": 1069758,
+   "sha256": "5a13cd679dd54637d12d2bd1bd33ee2165d91c867e14468c93195af02256e5da"
+  }
+ ]
+}

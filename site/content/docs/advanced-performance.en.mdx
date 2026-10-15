@@ -1,0 +1,147 @@
+---
+title: "Performance"
+description: "Where models run and how long they stay loaded, GPU memory (models larger than the GPU, running out of memory), precision, attention backends, torch.compile, and running waiting requests together."
+icon: Gauge
+---
+
+Every engine runs in the server's own process, on Mizuoto's runtime (torch). The defaults run on any machine. This page covers the settings that decide where models run and how long they stay loaded, the speed-ups you can turn on (attention backends, `compute.fast`, `compute.compile`), and how waiting requests are batched. The defaults keep every result identical to each engine's original implementation; each opt-in that changes results says so. Each engine is described in [Engines in depth](/docs/advanced-engines); every setting is listed in [Configuration](/docs/cli-config).
+
+## Devices and precision
+
+| Setting | Default | Meaning |
+| --- | --- | --- |
+| `engines.<id>.device` | `auto` | where the engine runs: `auto`, `cpu`, `cuda:N` (NVIDIA, or AMD under ROCm), `xpu:N` (Intel), `mps` (Apple silicon); `<host>/<device>` runs it on a remote host (see [Remote hosts](/docs/advanced-remote)). UI: **Device** on the engine's card |
+| `compute.default_device` | `auto` | the device for engines set to `auto`; `auto` picks the GPU with the most free memory, else the CPU. UI: **Settings** › **Compute** › **Default device** |
+| `compute.devices` | empty | the devices Mizuoto may use, such as `["cuda:0"]`; empty: all |
+| `engines.<id>.dtype` | `auto` | precision: `auto`, `fp32`, `fp16`, `bf16`. UI: **Precision** on the engine's card |
+
+### Which GPUs Mizuoto finds
+
+Mizuoto looks for GPUs without loading torch: `nvidia-smi` for NVIDIA cards, `rocm-smi` (or `amd-smi`) for AMD cards, which torch's ROCm build names `cuda:0`, `cuda:1`… like NVIDIA's, and Apple silicon by the platform (`mps`). When none of these finds a GPU but the installed torch is a build that could use one (the XPU build for Intel GPUs, a ROCm build without `rocm-smi`, a CUDA build in a container without `nvidia-smi`), Mizuoto asks torch in a separate process once (a second or two); a CPU build of torch is never asked. Once Mizuoto has loaded torch to run a model, torch's own figures are used. `mizuoto doctor` lists the GPUs found and how, and **Settings** › **Compute** shows them.
+
+Every engine runs on NVIDIA (CUDA), AMD (ROCm), Intel (XPU) and Apple (MPS) GPUs and on the CPU. On a GPU without double precision (Apple's, and Intel Arc cards), the one model part that computes in double precision, CosyVoice 3's pitch predictor, runs on the CPU while the rest of the model stays on the GPU. On Apple silicon `compute.compile` is ignored and torch's MPS backend may lack an operation an engine needs; starting Mizuoto with `PYTORCH_ENABLE_MPS_FALLBACK=1` runs such operations on the CPU. The ROCm, XPU and MPS paths are not yet tested on real hardware: please report what fails.
+
+`auto` precision is what each engine's upstream uses on the device: half precision (bf16 or fp16, when the card handles it) on a GPU, fp32 on a CPU. Fish Speech, for instance, uses bf16 on a GPU and fp32 on a CPU; CosyVoice stays in fp32 unless its load option `fp16` is on. The engines' outputs match their upstream code in fp32 on a CPU; other precisions and devices give slightly different numbers.
+
+## Loaded models and memory
+
+A model loads on first use, in the server's process, on its engine's device, and stays loaded for the next request:
+
+| Setting | Default | Meaning |
+| --- | --- | --- |
+| `compute.max_resident_models` | `3` | models kept loaded at once, across every engine; beyond it the least recently used idle one is unloaded first. UI: **Settings** › **Compute** › **Models kept in memory** |
+| `compute.unload_after_minutes` | `20` | unload a model idle this long; `0` keeps it. UI: **Unload models after idle minutes (0: never)** |
+| `engines.<id>.idle_minutes` | empty | overrides the above for one engine |
+| `engines.<id>.pinned_models` | `[]` | models never unloaded, neither for being idle nor to make room for another; they give up GPU memory last |
+| `compute.gpu_jobs` | `1` | GPU jobs that may run at once on one device. UI: **GPU jobs at once** |
+| `compute.inference_jobs` | `1` | synthesis jobs (speak, voice conversion, speech editing) that may run at once across every engine and device; requests run together as one micro-batch (`tts.micro_batch`) count as one. UI: **Synthesis jobs at once** |
+
+- Synthesis jobs run `compute.inference_jobs` at a time (one by default), whatever engine and device they use; the others wait in the queue in order (**Waiting for other synthesis jobs**). `compute.gpu_jobs` still limits the jobs on each GPU.
+- An engine serves one request at a time on a device; the next waits (**Waiting for the engine**). A job waiting for a GPU another job holds shows **Waiting for the GPU**; when the memory suffices for both, **Run anyway** in **Jobs** starts it beside the other, or raise `compute.gpu_jobs`. A fine-tune takes the whole GPU, whatever `compute.gpu_jobs` says, and the idle models on it move to RAM first.
+- Idle models are unloaded by the server only. A command (`mizuoto speak`…) loads the models it needs in its own process, and they go when it ends.
+- `mizuoto runtime` lists the loaded models of the running server (device, memory, how much of it is on the device, last use, busy or idle); `mizuoto runtime --unload [MODEL]` unloads one, or every model not in use. In the web UI the **Models in memory** panel does the same, with a bar for how much of each model is on its GPU, and **Free GPU memory** releases the memory idle models hold. The API is `GET /api/v1/runtime` and `POST /api/v1/runtime/unload`.
+- Changing any `engines.<id>.*` setting unloads that engine's models; they load with the new settings when next used.
+
+## GPU memory
+
+Mizuoto manages GPU memory as ComfyUI does. A request places only the parts of a model it needs for each step (a voice prompt's encoder, then the language model, then the vocoder), and the parts it does not need give up their memory first when another needs it. When a model does not fit at all, it loads **partly**: the layers that fit stay on the GPU and the rest of its weights stay in RAM, copied to the GPU as each layer runs. It is slower, and it runs instead of failing.
+
+| Setting | Default | Meaning |
+| --- | --- | --- |
+| `compute.vram_mode` | `auto` | `auto`/`normal`: whole when it fits, else partly; `high`: whole or not at all; `low`: weights take at most half of the GPU's memory, leaving room for other models; `none`: almost every weight streams from RAM (least memory, slowest). On Apple silicon models always load whole (its memory is shared with the system). UI: **Settings** › **Compute** › **Memory** |
+| `engines.<id>.vram_mode` | `auto` | the same for one engine's models (`auto`: the global setting). UI: **GPU memory for this engine** on its card |
+| `compute.vram_reserve_mb` | `1024` | GPU memory (MB) left free beyond what a request needs |
+| `compute.vram_limit_mb` | `0` | use at most this much of each GPU (MB; `0`: all of it), for sharing a GPU with other programs |
+| `compute.ram_reserve_mb` | empty | RAM left free (MB; empty: the larger of 2 GB and a tenth of the RAM): below it, copies kept in RAM are dropped and idle models unloaded |
+| `compute.host_copies` | `auto` | keep a copy in RAM of the weights of models on a GPU, so moving them off it costs nothing (`auto`: while RAM allows) |
+| `compute.max_pinned_mb` | `0` | page-locked RAM for weights that stream to a GPU (faster copies; `0`: up to 40 % of RAM on Windows, more on Linux) |
+| `compute.async_offload` | `-1` | copy streams that move streamed weights while the GPU computes (`-1`: two on NVIDIA and AMD, none elsewhere) |
+| `compute.oom_retry` | on | when a step runs out of GPU memory, run it again with more of its weights in RAM: the same result, slower |
+| `compute.oom_fallback` | off | after that, allow a cheaper way for the step (tiled decoding, smaller batches): it fits in less memory, and its output differs slightly and says so |
+| `compute.kv_cache` | `dynamic` | `static`: Qwen3-TTS's and CosyVoice's language models write their caches into preallocated buffers (less copying and fragmentation). Identical on a CPU; opt-in because on a GPU it may change results in the last bits |
+| `compute.cuda_graphs` | `true` | Qwen3-TTS's, Fish Speech's, CosyVoice 2/3's, VoxCPM's, GPT-SoVITS's and IndexTTS's decoding launched as CUDA graphs on NVIDIA GPUs, a frame at once: several times faster, identical results; a model partly streamed from RAM decodes without them; `false` launches kernel by kernel |
+| `engines.qwen3tts.load_options.fused_projections` | `false` | Fast mode: Qwen3-TTS's q/k/v and gate/up projections fused into one product each (as qwen-tts-webui), a few percent faster on a GPU; not bit-identical there |
+| `compute.cuda_allocator` | `auto` | torch's CUDA allocator: `native`, `async` (cudaMallocAsync), `expandable` (expandable segments); applies at the next start |
+
+- How a model is placed is in each result's details (`meta.memory`: MB streamed from RAM, MB on the device), and a result made partly from RAM, or retried after running out of memory, carries a warning. When parts are partly loaded, `meta.memory.partial` says why for each: the free memory, the working memory set aside and the reserve that were weighed, or the part it gave memory up for. The log says the same.
+- The working memory set aside for a step follows the request: a language model's cache is sized by the text, not by the longest generation `max_new_tokens` allows. A generation that runs far longer than its text and outgrows the GPU runs that step again with more weights streamed, with the same result.
+- Partly loaded models run their layers' weights through RAM each time they run: a language model pays it for every generated frame, so the more of it fits, the faster it goes. Copies overlap the computation on NVIDIA and AMD GPUs; on Intel GPUs they are synchronous.
+- `mizuoto doctor` prints the memory settings in effect.
+- How it works inside (phases, units, streaming, the budget, estimates): [Memory](/docs/development-memory).
+
+### Whole or not at all (`high`)
+
+With `compute.vram_mode = high` (**Whole or not at all**), Mizuoto always tries to load a model whole, whatever the catalogue's estimate and the card's free memory say, as ComfyUI does. It first moves idle models off that GPU to make room, then copies the weights. The request fails only when an allocation really fails: the code is `compute_unavailable` (`detail.reason` is `out_of_memory`; exit code 9 on the command line), and every model not in use is then unloaded from every GPU (see below). With `compute.gpu_jobs` above 1, a request short of room while another request holds the GPU first waits for it to finish (up to 10 minutes), then tries.
+
+In the other modes a model that does not fit loads partly, down to its smallest working set (the parts that never stream and the copies in flight). Even when the estimate says that does not fit, Mizuoto tries it: in every mode only an allocation that really fails is an error.
+
+### Running out of memory
+
+When a step of a request runs out of memory anyway (an estimate was short, another program took memory), Mizuoto moves the other idle models off that GPU, leaves half of the step's own weights in RAM and runs the step again with the same random draws, so the result is the same, only slower; it tries twice. When that is not enough, and `compute.oom_fallback` is on, an engine with a cheaper way uses it (speech recognition one 30 s window at a time, GPT-SoVITS one text at a time, F5-TTS's, IndexTTS's and VoxCPM's decoders in tiles). Otherwise the request fails with `compute_unavailable` (`detail.reason` is `out_of_memory`), and, as ComfyUI does, Mizuoto unloads every model not in use from every GPU, so the next try starts on empty devices (models on the CPU stay). If it fails again, give the engine another device, set `compute.vram_mode` to `low` or `none`, or lower `compute.max_resident_models`. Mizuoto also remembers how much memory each step really used and sets that much aside the next time.
+
+## Compiling models (`compute.compile`)
+
+`compute.compile` (off by default; **Settings** › **Compute** › **Compile models (torch.compile)**) runs the heaviest module of some engines through `torch.compile`:
+
+| Engine | Compiled |
+| --- | --- |
+| F5-TTS | the DiT (or E2's UNetT) |
+| CosyVoice | the flow estimator |
+| GPT-SoVITS v4, v5 Turbo | the CFM estimator |
+| IndexTTS-2 / 2.5 | the s2mel DiT and BigVGAN (also turned on by the load option `use_torch_compile`) |
+| VoxCPM | the local DiT |
+
+- It applies to models loaded after the change; loaded models keep what they had.
+- The first requests pay the compilation: on a CPU, 30 s to 160 s more.
+- On a CPU (fp32, 8 threads) the compiled module's time dropped by 23 % for F5-TTS (a whole request from 60 s to 45 s), 7 % for IndexTTS's DiT and 20 % for its BigVGAN, 7 % for GPT-SoVITS v4, and nothing for CosyVoice or (bf16) VoxCPM. The audio differs slightly from the uncompiled run; for VoxCPM that can move where the speech ends.
+- It needs a working C++ compiler. Without one, or when a model's code cannot be compiled, Mizuoto logs one warning and runs that model as before. The Docker image has none, so there it changes nothing.
+
+More measurements, and how speed work is checked to keep results identical: [Performance record](/docs/development-performance).
+
+## Attention backends
+
+Every attention computation of every engine and trainer goes through one switch, `compute.attention` (**Settings** › **Compute** › **Attention**), after ComfyUI's attention backends:
+
+| Value | What computes attention |
+| --- | --- |
+| `auto` (default) | each model as its original implementation did, so results stay identical to it |
+| `fast` | the fastest backend this device offers: on NVIDIA GPUs with fp16/bf16 models SageAttention, FlashAttention, xFormers when installed, else PyTorch's SDPA; elsewhere SDPA |
+| `sdpa`, `math`, `sdpa_flash`, `sdpa_efficient`, `sdpa_cudnn` | PyTorch's SDPA (its own choice of kernel), its exact math kernel, or one of its fused kernels |
+| `flash`, `xformers`, `sage`, `sage3` | FlashAttention, xFormers, SageAttention 2 (or 1), SageAttention 3 (Blackwell) |
+
+- Anything but `auto` changes results slightly (SageAttention quantises the attention scores). Outputs list the backend that computed each part (`params.attention`: the calls per backend and why any fell back), and `mizuoto runtime` shows each loaded model's backend.
+- A backend that cannot take a call falls back to the next one, ending with the model's own computation. Reasons include: not installed, the wrong GPU, a mask it does not support, a head size, fp32, a backward pass it lacks, or a kernel error. Each reason is logged once. Running out of memory is not a fallback: the memory retry handles it. With `compute.attention_strict` the request fails instead.
+- Some attention keeps its own computation whatever the setting, because no fused kernel computes it: relative positions inside the scores (wenet's, w2v-BERT's, GPT-SoVITS's VITS) and a few hand-written encoders.
+- `engines.<id>.attention` (**Attention for this engine** on the engine's card) sets it per engine.
+- Training has its own setting, `training.attention` (**Settings** › **Training** › **Attention**). It offers only backends with a backward pass, so not SageAttention.
+- The setting applies to models loaded after the change.
+- How backends are chosen and checked: [Acceleration](/docs/development-acceleration#attention).
+
+The packages are not dependencies. Each is tied to a torch version, a CUDA or ROCm runtime and a GPU generation, so you install them yourself, without letting them replace your torch. `mizuoto doctor` lists which are installed and whether each runs on each GPU (a tiny self-test), and gives the command for this machine. For example: `pip install "xformers==0.0.32.post2" --no-deps` for torch 2.8.0, `pip install flash-attn --no-build-isolation --no-deps` (it compiles), `pip install sageattention==2.2.0 --no-build-isolation --no-deps` (it needs `nvcc`).
+
+`compute.fast` (**Settings** › **Compute** › **Acceleration**) turns on GPU speed switches for the whole process, after ComfyUI's `--fast`: `tf32`, `fp16_accumulation`, `cudnn_benchmark` and `sdpa_reduced_precision`. Each changes results slightly. They take effect when Mizuoto next starts, and outputs list them (`params.fast`).
+
+## Running waiting requests together (micro-batching)
+
+`tts.micro_batch` (on by default; **Settings** › **Speech** › **Run waiting requests together**): requests queued on the server for the same model that differ only in their text are sent to the engine as one batch; each request still gets its own job and result.
+
+A request is batched only when all of these hold:
+
+- the model's variant takes **Batches** of at least 2: Qwen3-TTS (8), GPT-SoVITS (20), OmniVoice (8);
+- its text is one segment (not split, not a batch request);
+- it has no seed (a batch draws random numbers differently from a single request);
+- it is not streamed text input;
+- model, device, voice, style, language, parameters, engine options and reference clips are all the same.
+
+The running request takes the queued requests of its group just before calling the engine; when the batch fails, they go back to the queue and run one by one. The command line runs one job at a time in the foreground, so only the server (web UI, HTTP API) batches.
+
+## On a CPU
+
+Every engine and every trainer runs on a CPU, which is fine for trying things and short sentences, but much slower than a GPU, especially for long texts and training (GPT-SoVITS trains in minutes on a GPU and hours on a CPU). Smaller models (Qwen3-TTS 0.6B, GPT-SoVITS) shorten the wait noticeably; `compute.compile` helps F5-TTS most.
+
+Two settings make CPU work faster without changing any result (Linux; on other systems they change nothing):
+
+| Setting | Default | Meaning |
+| --- | --- | --- |
+| `compute.cpu_allocator` | `auto` | CPU memory: `tuned` (`auto` on Linux) reuses large blocks and puts big tensors on huge pages, 10–20 % faster on the CPU with identical results; `system` keeps the C library's defaults; applies at the next start |
+| `compute.cpu_threads` | `auto` | `cores` (`auto` on Linux) binds torch's CPU threads to distinct physical cores; `off` leaves them to the scheduler (better when other busy programs share the CPU); applies at the next start |

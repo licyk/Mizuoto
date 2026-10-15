@@ -1,0 +1,29 @@
+[build-system]
+requires = ["setuptools", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mizuoto-indextts"
+description = "IndexTTS 1.5, 2 and 2.5 for Mizuoto's native runtime (bilibili Model Use License)"
+requires-python = ">=3.10"
+dynamic = ["version"]
+license = "LicenseRef-bilibili-Model-Use"
+# A separate distribution because the bilibili Model Use License covers this port. It runs inside Mizuoto's own environment and registers itself as an engine.
+dependencies = ["mizuoto", "sentencepiece>=0.2"]
+
+[project.optional-dependencies]
+# Japanese text for IndexTTS-2.5: fugashi's word segmentation with its small dictionary (wheels on every platform).
+ja = ["fugashi>=1.3", "unidic-lite>=1.0.8"]
+
+[project.entry-points."mizuoto.engines"]
+indextts = "mizuoto_indextts:IndexTtsEngine"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["mizuoto_indextts*"]
+
+[tool.setuptools.package-data]
+mizuoto_indextts = ["LICENSE.txt", "assets/tn/*.fst", "assets/tn/README.md"]
+
+[tool.setuptools.dynamic]
+version = { attr = "mizuoto_indextts.VERSION" }

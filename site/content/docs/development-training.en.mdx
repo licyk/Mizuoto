@@ -1,0 +1,199 @@
+---
+title: "Trainers"
+description: "How training methods are declared in a manifest, how datasets are added, prepared and checked, how a method's stages run one by one as child processes of Mizuoto's own interpreter, how fingerprints decide what is stale, how trainers are written, and what exports register."
+icon: GraduationCap
+---
+
+Every trainable engine trains natively, in Mizuoto's own environment, on the same modules it runs inference with. Each trainer reproduces its upstream recipe: given the same seed on the CPU, its losses, learning rates and saved weights equal byte for byte those of the upstream scripts (as Mizuoto 0.1 ran them; for VoxCPM, upstream's own script). Training needs no environment and no extra of its own: trainers use the modules and dependencies inference uses, without transformers, accelerate, peft, Lightning, Hydra, datasets or webdataset. The host side is `mizuoto/core/training/service.py` (`TrainingService`); the engine side is `mizuoto/training/` (`Trainer`, `StageContext`, `stage.py`) plus each engine's trainer module. Using the Train screen is in [Train](/docs/guide-train).
+
+<Mermaid chart={`sequenceDiagram
+    participant S as TrainingService
+    participant J as train job
+    participant P as Stage process (same interpreter)
+    participant T as Trainer
+    S->>J: run(): pick the stages, submit a train job
+    loop each stage
+        J->>P: python -m mizuoto.training.stage request.json
+        P->>T: seed the process, load_trainer(), stage_ID(ctx)
+        T-->>J: ProgressEvent / MetricEvent / OutputEvent / LogEvent (JSON lines)
+        P-->>J: HeartbeatEvent every 10 s
+        T-->>J: ResultEvent(result)
+        J->>S: record fingerprint and result, register artifacts on export
+    end`} />
+
+## Training methods in the manifest
+
+A training method is `[training.<id>]` in the engine's manifest (`TrainingMethod`). OmniVoice's LoRA:
+
+```toml
+[training.lora]
+title = "Fine-tune with LoRA"
+export = "model"
+min_seconds = 30.0
+stages = [
+    { id = "tokens", title = "Audio tokens", uses = [] },
+    { id = "train", title = "Train", uses = ["steps", "learning_rate", "batch_tokens", "grad_accumulation", "lora_rank"] },
+    { id = "export", title = "Merge and export", uses = ["preview_text"] },
+]
+
+[training.lora.hyperparams.lora_rank]
+type = "int"
+default = 16
+min = 1
+max = 256
+help = "The adapters' rank (alpha is twice it, as upstream)."
+```
+
+| Field | Meaning |
+| --- | --- |
+| `stages` | Declared statically, each with `id`, `title`, `help` and `uses` (the hyperparameters it reads; omitted: all). The UI and the fingerprints know the stages without running anything |
+| `hyperparams` | `OptionSpec`s; `group = "basic"` shows first, `variants` limits one to some variants |
+| `export` | `voice_weights` (a voice's own weights, GPT-SoVITS) or `model` (a new user model) |
+| `variants` | Starts only from models of these variants |
+| `min_seconds` | The least audio the dataset must hold |
+| `assets` | Training-only shared assets per variant (GPT-SoVITS's pretrained discriminators); `"*"` for every variant |
+| `devices` | Device kinds it trains on; the trainer's own `DEVICES` win over it |
+| `enabled`, `note` | Switch a method off and say why |
+
+The trainer class is the engine's `TRAINER = "module:Class"` (see [Adding an engine](/docs/development-engine)). `TrainingService.methods(model)` says for each method whether it can start from that model and, if not, the `reason`: disabled, wrong variant, the engine runs on a remote host, the model is not installed, the engine is not available, it has no trainer, the device kind does not fit, the trainer's `REQUIRES` do not import, training assets are missing. Each reason carries the command that fixes it.
+
+The methods today:
+
+| Engine | Method | Stages | Export |
+| --- | --- | --- | --- |
+| GPT-SoVITS | `speaker` | `text`, `speech`, `semantic`, `sovits`, `gpt`, `export` | `voice_weights` |
+| F5-TTS | `full` | `prepare`, `train`, `export` | `model` |
+| Qwen3-TTS | `speaker` | `prepare`, `train`, `export` | `model` |
+| OmniVoice | `full`, `lora` | `tokens`, `train`, `export` | `model` |
+| VoxCPM | `full`, `lora` | `prepare`, `train`, `export` | `model` |
+| CosyVoice | `llm`, `llm_flow` | `features`, `llm`, (`flow`), `export` | `model` |
+| Fish Speech | `lora` | `tokens`, `train`, `export` | `model` |
+| dummy | `speaker`, `full` | `prepare`, `train`, `export` | `voice_weights`, `model` |
+
+## Datasets
+
+Training starts from a dataset. A dataset is `datasets/<slug>/`: `dataset.json`, `manifest.jsonl` (one row per clip: `id`, `audio`, `text`, `speaker`, `language`, `duration`, the rate, `excluded`, the source and `licence_tags`) and `audio/<id>.flac` (at most 48 kHz). The dataset's fingerprint is the SHA-256 of `manifest.jsonl`.
+
+- **Adding.** Clips come from files (a `.lab` or `.txt` beside one is its text), uploads, a voice's references, earlier outputs (their licence tags kept), or a folder in a known layout (GPT-SoVITS `.list`, LJSpeech, CSV, plain).
+- **Preparing.** `prepare` (the `dataset_prepare` job, resource `cpu`) cuts at silences with slicer2 at GPT-SoVITS's defaults, transcribes through ASR and peak-normalises.
+- **Checking.** `check` gives a `DatasetReport`: a duration histogram, clips too short or too long, empty texts, clipping, sample rates and licence tags; rows can be filtered by the report's issues and excluded or deleted one by one.
+- **Licences.** A trainer gets `training_rows(dataset, target engine)`: excluded rows and rows without text are left out, and when some rows' licence tags forbid training the target engine (a manifest's `trains_others = false`) the request is refused as a whole.
+
+## Experiments, fingerprints and stale stages
+
+An experiment is `experiments/<engine>/<name>/`: `experiment.json` (base model, dataset, method, hyperparameters, stage states), the trainer's work folder `work/`, and `metrics.jsonl`.
+
+Each finished stage records a fingerprint, computed by `fingerprints()` and chained in stage order:
+
+```python
+used = hp if stage.uses is None else {k: hp.get(k) for k in stage.uses}
+source = json.dumps({"previous": previous, "stage": stage.id, "dataset": dataset_fp,
+                     "model": [exp.base_model, revision], "method": exp.method,
+                     "hp": used, "language": exp.language}, sort_keys=True)
+previous = out[stage.id] = hashlib.sha256(source.encode()).hexdigest()[:20]
+```
+
+The dataset's fingerprint is the SHA-256 of its `manifest.jsonl`; `hp` is the method's defaults merged with the experiment's values. When states are read (`_with_status`), a finished stage whose fingerprint differs from the current one is `stale`, and so is every finished stage after it. Changing the learning rate therefore makes only the training stage that reads it, and what follows, stale; feature extraction before it stays done.
+
+One more rule: when a stage is **run again**, the finished stages after it that were not part of the same run lose their fingerprints. They read the old stage's files, so they are stale even when the inputs (and fingerprints) are the same.
+
+`run()` picks the stages: all of them with `restart`; the given `stages`, provided every stage before them is done; otherwise from the first unfinished stage to the end. When all are done it refuses with the hint `mizuoto train run <exp> --restart`.
+
+## The train job
+
+A run is one `train` job whose steps are the selected stages:
+
+- **Resources**: `engine:<engine>:<dev>` and `gpu:<dev>` (`cpu` on a CPU), so it waits for the engine's own inference and other jobs on the GPU. The device is `training.devices[0]`, else the engine's. A GPU run takes `gpu:<dev>` whole (`JobSpec.exclusive`, whatever `compute.gpu_jobs` allows); before it starts, the engine's loaded models are unloaded (`runtime.unload_engine`) and every other idle model's weights on that device move to RAM (`runtime.release_device`), and no model comes back while it runs. The run's peak memory is then estimated; when it exceeds the free memory the log warns, naming the preset that would fit.
+- **One process per stage**: `host_target("mizuoto.training.stage", cwd=work)` runs `python -m mizuoto.training.stage <request.json>` with the server's own interpreter, through `JobContext.run_worker`. The stage sees every device under its own name. The heartbeat timeout is 30 minutes (`STAGE_HEARTBEAT_TIMEOUT`); any output line resets it, and the stage beats every 10 s anyway.
+- **The request**: `trainer`, `stage`, `engine`, `method`, `experiment`, `workdir`, `dataset_dir`, `rows` (absolute audio paths, text, speaker, language, duration, rate; already filtered by licence in `training_rows`), `base_model` (`id`, `dir`, `variant`), `assets`, `device`, `precision` (`training.precision`), `hyperparams`, `language`, `results` (what finished stages returned), and the settings `training.previews` and `training.keep_checkpoints`.
+- **Events**: `MetricEvent`s are batched each second into `metrics.jsonl` and published as `train_metrics` (the UI's loss chart follows them live); `ProgressEvent` becomes the step's progress and message; `OutputEvent(kind="sample")` is copied into an output of kind `sample`. A stage run again first drops its earlier points from `metrics.jsonl`.
+
+### Why a child process
+
+Stages run in their own process, not in the server's: a run gives all its memory back when it ends, a crash in a stage cannot take the server down, and a stage may seed the process-wide generators (dropout masks and data shuffling draw from them in the upstream recipes) without touching anyone else's randomness.
+
+`mizuoto/training/stage.py` is that process:
+
+1. It moves the real stdout aside for events and points file descriptor 1 at stderr, so whatever libraries print goes to the log, not into the event stream. Events are JSON lines prefixed with `@mizuoto ` (`mizuoto/core/jobs/jsonl.py`), and records of the `mizuoto` loggers become `LogEvent`s.
+2. A thread emits a `HeartbeatEvent` every 10 s (`HEARTBEAT_SECONDS`).
+3. `stage_main` seeds Python's, NumPy's and torch's generators (`seed_everything`, with the request's `seed`, 1234 when it has none; the training service sends none today, so every run is seeded with 1234 and repeats), builds the `StageContext`, loads the trainer with `load_trainer(request["trainer"])` and calls `run_stage(stage, ctx)`; the result must be JSON-serialisable and goes back as a `ResultEvent`.
+4. Failures map to events and exit codes (`mizuoto.core.codes`): `Cancelled` or SIGTERM → `EXIT_CANCELLED` (130); `EngineError` → an `ErrorEvent` with its code; running out of memory → `compute_unavailable`; anything else → the traceback as a log line and `engine_error`.
+
+`python -m mizuoto.training.stage --entry module:function <request.json>` runs another job function the same way.
+
+<Callout type="warn" title="Events and progress bars share one pipe">
+
+A job worker's stdout (events) and stderr (libraries) reach the host on one pipe, so an event can arrive glued to a progress bar's unfinished `\r` line. The host splits lines at the event prefix (`parse_lines` in `mizuoto/core/jobs/jsonl.py`); before that, every metric after a progress-bar redraw was lost.
+
+</Callout>
+
+## Trainer and StageContext
+
+```python
+class Trainer:
+    ENGINE: ClassVar[str] = ""
+    REQUIRES: ClassVar[tuple[str, ...]] = ()             # modules training needs beyond inference, probed by import
+    DEVICES: ClassVar[tuple[str, ...] | None] = None     # device kinds; None: the manifest method's
+
+    def run_stage(self, stage: str, ctx: StageContext) -> dict[str, Any]:
+        return getattr(self, f"stage_{stage}")(ctx) or {}  # stage id → stage_<id>
+```
+
+A trainer is a `mizuoto.training.Trainer` subclass with one `stage_<id>(ctx)` method per stage id its methods declare; `ctx.request["method"]` says which method runs. The trainer's module imports no torch at the top: the host imports it to read `REQUIRES` and `DEVICES` (`InferenceService.trainer_needs`), so the maths lives in modules it imports inside the stage methods. CosyVoice's trainer, for example, sets `DEVICES = ("cuda", "cpu")`: upstream trains under torchrun on CUDA only, and nothing in the native port needs CUDA.
+
+A stage method returns a JSON-serialisable dict, stored as the stage's `result`; later stages read it from `ctx.results`. `StageContext` (`mizuoto/training/context.py`) offers:
+
+| Member | Purpose |
+| --- | --- |
+| `workdir`, `rows`, `base_model`, `assets`, `device`, `precision`, `results`, `hyperparams`, `name`, `engine`, `request` | The parsed request; `rows` are `Row`s (`id`, `audio`, `text`, `speaker`, `language`, `duration`, `sample_rate`); dataset clips are FLAC (`mizuoto.nn.dsp.flac.read_audio` reads them) |
+| `hp(name, default)` | An effective hyperparameter, `default` when `None` |
+| `progress(value, message)` | 0–1, or `None` (indeterminate) |
+| `metric(epoch, step, values, lr)` | One loss point |
+| `output(path, label, kind)` | A file the stage made: `sample` for a preview, `checkpoint` for weights |
+| `log(message, level)` | A log line |
+| `preview(text, reference, label, weights=…, model_dir=…, variant=…, preset=…)` | Loads the engine's own implementation in the stage process (a private `Runtime`) and speaks `text` with the new weights (`weights` on the base model) or the new model (`model_dir`) under seed 1234, kept as a sample. A failure is only a warning, never a failed stage; skipped when `training.previews` is off |
+
+Stages must be re-runnable: each clears its own output folder first.
+
+### Memory
+
+Training's memory presets (`training.memory`: `standard`, `low`, `lowest`) and tools are in `mizuoto/training/memory.py`: gradient checkpointing puts back the global generators and the trainer's own during the backward recomputation, so losses and weights do not change; `low` adds only tools that keep results, `lowest` also those that change them slightly; a method's own hyperparameters win. A stage on a GPU adds `memory/peak_mb` to its metrics, and `MethodInfo.memory_mb` estimates a run's peak per preset. Details in [Memory management](/docs/development-memory).
+
+## Exports
+
+The `export` stage returns `{"artifacts": [...]}`, which the host's `_register` takes in:
+
+- `{"kind": "voice_weights", "files": {"gpt": …, "sovits": …}}`: moved into `Voice.weights[engine]` of the experiment's voice; without one, a new voice is made from up to three dataset clips of 3–10 s with text, closest to 6 s.
+- `{"kind": "model", "folder": …, "variant": …, "title": …, "speakers": …}`: becomes a user model through `register_user_model`, whose `model.json` records `trained_from` and the experiment (and Qwen3's `speakers`).
+
+A voice or model exported again is listed once, at its latest export. `mizuoto train export <exp>` runs the `export` stage alone. The exports keep the upstream recipes' formats and weight names, so upstream's implementation (and Mizuoto 0.1) loads them too, and the other way round.
+
+## OmniVoice's trainer, as an example
+
+`mizuoto/engines/omnivoice/train.py`, methods `full` and `lora`, export `model`, after upstream's `examples/run_finetune.sh` and `run_finetune_lora.sh`, with no transformers, peft, accelerate or webdataset:
+
+- `tokens`: the clips shuffled with seed 42, each read, made mono, resampled to 24 kHz, peak-normalised and encoded by the model's own HiggsAudio tokenizer (loaded with the inference engine's `load_audio_tokenizer`), into WebDataset-style shards listed by `data.lst`.
+- `train`: upstream's fine-tune loop with its SDPA configs: the shards read by data-loader workers seeded as upstream seeds them, length-grouped batches under a 4-D mask, the masked cross-entropy, AdamW with the cosine schedule, gradient clipping and accumulation. LoRA is peft's, written without peft. Each update's loss is a `ctx.metric`. It ends with `out/checkpoint-<steps>` in upstream's layout.
+- `export`: `merge_lora`: the adapter merged into the base weights (or the fine-tuned weights as they are), saved as `model.safetensors` beside the base model's config, tokenizers and chat template, then a `ctx.preview` cloning one of the dataset's clips.
+
+Upstream reseeds everything with its config's seed after building the model; the native trainer makes those later draws on private generators seeded the same way (the data-loader workers' seeds, the LoRA dropout masks), while the LoRA initialisation draws from the stage process's global generator in module order, as upstream does; so a seeded run gives upstream's losses and weights.
+
+## Adding a trainer
+
+<Steps>
+<Step>
+
+In the manifest, `[training.<id>]`: the stages and what they `use`, the hyperparameters, `export`, and `assets` and `devices` when needed. On the engine class, `TRAINER = "mizuoto.engines.<id>.train:<Class>"`.
+
+</Step>
+<Step>
+
+A `Trainer` subclass with a `stage_<id>(ctx)` per stage, its heavy imports inside the methods. Draw from the process-wide generators in upstream's order, or from private generators where upstream reseeded; report with `ctx.progress`, `ctx.metric` and `ctx.log`. Packages training needs beyond inference go in `REQUIRES`.
+
+</Step>
+<Step>
+
+`export` returns `artifacts` and speaks a `ctx.preview`. Add `tests/engines_native/test_<id>_train_tiny.py` (a tiny random model, a few clips, every stage), then train a small dataset end to end (the UI's Train page, or `mizuoto train new` / `mizuoto train run`), and compare it with upstream (`scripts/parity/train.py`, see [Testing](/docs/development-testing#parity-with-the-references)). Record which upstream behaviours it reproduces to give the same results in the design record `AGENTS.md` and the engine's notes.
+
+</Step>
+</Steps>

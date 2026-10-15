@@ -1,0 +1,250 @@
+---
+title: "Performance record"
+description: "How Mizuoto's speed is measured under the rule that results never change (perf.py, train_perf.py), the conditions of each measurement, and what each round of work changed: the CPU rounds, the attention dispatcher, CUDA graphs per engine and torch.compile."
+icon: Timer
+---
+
+Speed work on the inference and training code follows one rule: **the results do not change**. Every optimisation recorded here gives the same audio sample for sample, and the same losses and saved weights bit for bit, as the code before it on the CPU, where the engines' parity with upstream is established. On a GPU, "the same" means identical to the code before on the same GPU, driver, torch and settings. Faster paths that change the arithmetic are opt-in features, described in [Acceleration](/docs/development-acceleration); the user-facing settings are in [Performance](/docs/advanced-performance).
+
+## How it is measured
+
+| Tool | What it does |
+| --- | --- |
+| `scripts/parity/perf.py run <cases.jsonl>… --name NAME [--only ID] [--repeat N] [--device D] [--setting k=v] [--reference NAME] [--profile] [--torch-profile]` | Runs parity cases through the whole stack in one process, each `--repeat` times (3): the first loads the model and prepares the voice, the others are warm. Records the wall time, load, first chunk, engine total, real-time factor, and the time inside each phase (`ctx.use` / `ctx.run`, exclusive of nested phases, plus the time outside phases). Compares the audio sample for sample across the runs and with `--reference`: an earlier run of that name, else the case's parity fixture |
+| `perf.py compare --a NAME --b NAME [--report out.md]`, `perf.py show NAME` | The warm runs of two rounds side by side, the speed-up and the phases that changed most |
+| `scripts/parity/train_perf.py run <engine> --fixture F --name NAME [--reference NAME] [--profile]`, `compare` | A fine-tune with a parity fixture's recipe through the whole stack, every stage a child process as in use: each stage's time, the time per step, every metric and the SHA-256 of every weight file the export wrote, compared with an earlier run |
+
+- `--profile` adds an uncounted run under cProfile (in-process stages for `train_perf.py`); `--torch-profile` lists the operators by their own time.
+- Records go to `MIZUOTO_PERF_DIR` (default `~/code_workspace/experiment/perf`), one JSON file per case and round.
+- A warm time is the fastest warm run: the machine's other work only ever slows a run down. Comparisons that matter are interleaved, the two codes in separate processes, one after the other.
+
+<Steps>
+<Step>
+
+Freeze the code being measured (a worktree at the commit) and run the baseline: `perf.py run` over the case set, `train_perf.py run` for each trainer.
+
+</Step>
+<Step>
+
+Profile (`--profile`, `--torch-profile`) to find where the time goes; for a kernel-level change, write a micro-benchmark and check the operation's output with `torch.equal` over the shapes the engines use.
+
+</Step>
+<Step>
+
+Run the changed code with `--reference` set to the baseline: every case must give identical audio, every fine-tune identical metrics and weight hashes. Then run the parity stack for the engines whose code changed, and the test suite.
+
+</Step>
+<Step>
+
+`perf.py compare` for the table; record the round here.
+
+</Step>
+</Steps>
+
+The inference set is thirteen cases: Qwen3-TTS `base-clone-en` and `cv-en-aiden`, F5-TTS `clone-en`, OmniVoice `clone-en`, CosyVoice `v2-clone-en` and `v3-clone-en`, GPT-SoVITS `v2-clone-zh` and `v4-clone-zh`, Fish Speech `clone-en`, IndexTTS `v2-clone-en` and `v15-clone-en`, VoxCPM `v2-clone-en` and `v15-clone-en`. The training set is one fine-tune per trainer on an 11-clip dataset.
+
+## Conditions
+
+- **CPU**: AMD Ryzen 9 5900X (12 cores; torch uses 12 threads), 125 GB RAM, torch 2.8.0 with MKL 2024.2 and oneDNN 3.7.1, Python 3.11; fp32, except VoxCPM in bf16 (its upstream default). Other work on the machine takes about 9 % of its threads; a run whose compute thread is preempted stalls, so single runs vary by up to ±10 %.
+- **GPU**: two RTX 3090 (24 GB), **shared with another workload** that held about 21 GB of each and kept both 100 % busy. Every GPU number below is inflated by that sharing; comparisons were interleaved on the same GPU and torch. Models that did not fit beside the other workload were measured as their decoding loop alone: the real sizes, random weights and a few of their layers, which is labelled where it applies.
+
+## Where the time goes on the CPU
+
+The warm request before the CPU rounds:
+
+| Engine, case | Audio s | Warm s | Phases (s) |
+| --- | --- | --- | --- |
+| Qwen3-TTS base-clone-en | 5.44 | 34.25 | talker 30.2, codec decoder 4.0 |
+| Qwen3-TTS cv-en-aiden | 3.76 | 20.72 | talker 19.9, codec decoder 0.9 |
+| F5-TTS clone-en | 4.74 | 69.75 | transformer 69.7 |
+| OmniVoice clone-en | 4.82 | 32.48 | language model 32.3 |
+| CosyVoice v2-clone-en | 6.84 | 18.67 | language model 12.1, flow 6.5 |
+| CosyVoice v3-clone-en | 4.52 | 16.71 | flow 9.6, language model 7.1 |
+| GPT-SoVITS v2-clone-zh | 7.34 | 4.42 | gpt 3.4, sovits 0.9 |
+| GPT-SoVITS v4-clone-zh | 3.96 | 31.45 | sovits (CFM + vocoder) 29.6, gpt 1.8 |
+| Fish Speech clone-en | 4.32 | 110.55 | language model 107.3, codec 3.3 |
+| IndexTTS v2-clone-en | 5.17 | 57.20 | gpt 39.3, s2mel 15.2, bigvgan 2.6 |
+| IndexTTS v15-clone-en | 3.71 | 45.89 | gpt 44.2, bigvgan 1.7 |
+| VoxCPM v2-clone-en | 6.72 | 76.91 | language model 75.6, vae 1.3 |
+| VoxCPM v15-clone-en | 5.60 | 21.82 | language model 20.7, vae 1.1 |
+
+- **Matrix products dominate** (`F.linear`/`addmm`: 50–90 % of the time). The autoregressive LMs run one token at a time against fp32 weights, so they are bound by memory bandwidth (Qwen3-TTS's 1.7B talker reads about 6.8 GB a frame at about 36 GB/s). Faster kernels, lower precision or other thread counts would change the sums.
+- **VoxCPM 2 spent 40 of its 77 s in attention**: each step attended over the whole 8192-position static cache under a mask, though a few hundred positions were filled.
+- **Allocation**: every layer allocates and frees tensors of a few to tens of megabytes, and with glibc's defaults each is mapped fresh and its pages zeroed by the kernel.
+
+## CPU, round 1: CPU settings and exact clean-ups
+
+| Change | Why it is exact |
+| --- | --- |
+| `compute.cpu_allocator` and `compute.cpu_threads` ([Acceleration](/docs/development-acceleration#cpu-settings)) | where memory comes from and where threads run, not what is computed; the same thread count splits the work the same way |
+| VoxCPM attends over the cache up to the next multiple of 256 past the current length, mask kept, instead of all 8192 positions | masked positions add exact zeros, and SDPA gives the same bits for any cut at a multiple of 64 (every length up to 3100, bf16 and fp32, batch 1 and 2) |
+| DiT rotary embedding: cos and sin once per forward, no multiplication by 1, no concatenation of an empty tail (F5-TTS, CosyVoice 3, GPT-SoVITS v4/v5) | the same values |
+| CosyVoice's flow U-Net builds its per-head mask once per forward, not in each of its 56 blocks | the same tensor |
+| IndexTTS: GPT-2's GELU in place; a beam reorder that keeps every row skipped | the same operations in the same order |
+
+Inference, warm request (s), every case identical to before:
+
+| Engine, case | Before → after | Speed-up |
+| --- | --- | --- |
+| VoxCPM v2-clone-en | 75.34 → 36.28 | ×2.08 |
+| F5-TTS clone-en | 68.14 → 41.22 | ×1.65 |
+| VoxCPM v15-clone-en | 21.42 → 14.40 | ×1.49 |
+| CosyVoice v2-clone-en | 18.55 → 14.70 | ×1.26 |
+| CosyVoice v3-clone-en | 16.66 → 13.58 | ×1.23 |
+| IndexTTS v2-clone-en | 52.07 → 43.97 | ×1.18 |
+| Qwen3-TTS cv-en-aiden | 20.71 → 18.08 | ×1.15 |
+| Qwen3-TTS base-clone-en | 34.22 → 30.63 | ×1.12 |
+| Fish Speech clone-en | 110.43 → 98.36 | ×1.12 |
+| GPT-SoVITS v4-clone-zh | 29.24 → 26.38 | ×1.11 |
+| IndexTTS v15-clone-en | 40.12 → 36.65 | ×1.09 |
+| OmniVoice clone-en | 28.73 → 27.92 | ×1.03 |
+| GPT-SoVITS v2-clone-zh | 4.32 → 4.44 | within the noise |
+
+Training, one fine-tune per trainer (s), metrics and weight tensors identical (the stages get the CPU settings through their environment):
+
+| Engine, recipe | Run before → after | Speed-up |
+| --- | --- | --- |
+| F5-TTS full, 1 epoch | 34.8 → 28.8 | ×1.21 |
+| CosyVoice 2 llm, 2 epochs | 98.5 → 82.9 | ×1.19 |
+| Fish Speech S2 Pro LoRA, 2 steps | 207.4 → 175.9 | ×1.18 |
+| Qwen3-TTS 1.7B speaker, 1 epoch | 121.2 → 103.4 | ×1.17 |
+| VoxCPM 0.5B LoRA, 3 steps | 29.8 → 26.4 | ×1.13 |
+| GPT-SoVITS v2Pro speaker, 1 + 1 epochs | 246.0 → 227.3 | ×1.08 |
+| OmniVoice LoRA, 3 steps | 39.8 → 36.9 | ×1.08 |
+
+**How the CPU settings were chosen.** Each configuration ran in separate, interleaved processes. Fixing the `mmap` threshold and keeping free heap together helped F5-TTS (warm median 64.0–68.6 s → 53.7–60.9 s); either alone made things slower; glibc's `hugetlb` and tcmalloc gave no more than torch's own huge pages. OmniVoice looked bimodal per process (about 28 s or 38 s, whatever the allocator): the cause was thread placement. Of six processes with default placement one ran at 38.5 s; of six with threads bound to cores none did (27.6–28.3 s).
+
+## CPU, round 2: training
+
+Profiles of the fine-tunes showed backward passes and products as everywhere, AdamW's per-tensor loop, dropout masks, and, for Fish Speech, 41 s of a 123 s training stage spent replaying about 18 billion 32-bit draws from the process-wide generator only to put it where upstream's is when training starts.
+
+| Change | Why it is exact |
+| --- | --- |
+| The generator jumped ahead instead of drawing: MT19937's state after *n* draws computed in GF(2) (`mizuoto/training/rng.py`), 204 jumps in 2.3 s instead of 41–52 s | the state equals drawing's byte for byte (tested from 1 to 2·10⁹ draws) |
+| Fish Speech's LoRA merged with one float32 copy of each base weight, not two | the same values |
+| Fish Speech's codec `snake` in place when no gradient is taken | the same operations in the same order |
+
+Fish Speech S2 Pro LoRA (2 steps): 207.4 s before the CPU rounds, 172–173 s after round 1, 128.5–130.6 s after round 2 (training stage 146.8 → 83 s), metrics and weights identical. Its warm request went from 110.4 to 85.7 s (the codec 3.3 → 2.0 s), its parity cases unchanged.
+
+## The attention dispatcher
+
+Routing every attention call through `mizuoto.runtime.accel` ([Acceleration](/docs/development-acceleration#attention)) costs about 1 µs a call under `auto`: +1.11 µs on a decode-sized call (16 heads, 1 query, 300 keys, head dim 128: 28.8 → 30.0 µs), +0.82 µs on a small one. The most calls a request made in the set is 7,152 (Fish Speech), well under 0.1 % of its time. All thirteen cases and all seven fine-tunes stayed identical; warm times moved within the machine's noise (Fish Speech, interleaved: 86.6/86.9 s before, 86.5/87.3 s after).
+
+With `compute.attention = fast` on the CPU every call goes through the policy, all on SDPA, no fallbacks (calls per request: F5-TTS 704, OmniVoice 896, GPT-SoVITS v4 3,044, VoxCPM 1.5 3,928, CosyVoice 2 4,688, Qwen3-TTS 4,877, IndexTTS 2 6,667, Fish Speech 7,152). Seven engines still gave identical audio; IndexTTS 2 differed by at most 2 int16 steps (86.1 dB SNR, same length), its perceiver's hand-written softmax being computed by SDPA.
+
+## GPU: decoding without waits, as CUDA graphs
+
+Each autoregressive decoder launched thousands of small kernels per step one by one and waited for the device many times a step (`torch.multinomial`'s checks, masks copied at each step, padding masks read back, stop checks), so the CPU's launch time and the GPU's work added up. Each now waits once per step and, with `compute.cuda_graphs`, replays its step's kernels as CUDA graphs ([Acceleration](/docs/development-acceleration#cuda-graphs-computecuda_graphs)). Every result below is the old code's audio or tokens; the CPU parity cases of each engine stayed identical. All on the shared GPUs described above.
+
+### Qwen3-TTS
+
+The decoding loop at the 1.7B model's sizes, random weights, 4 or 8 of its 28 talker layers, 100 frames, batch 1 (the 1.7B model did not fit beside the other workload); ms per frame, best warm run of two interleaved rounds:
+
+| torch | Configuration | 4 layers | 8 layers |
+| --- | --- | --- | --- |
+| 2.8.0+cu128 | before | 66.8 | 70.1 |
+| | graphs off | 47.7 | 50.7 |
+| | **default** | **24.6** | **25.4** |
+| | qwen-tts-webui, its default (graphs, fused projections) | 23.3 | 24.5 |
+| | qwen-tts-webui, graphs, not fused | 28.6 | 29.7 |
+| 2.10.0+cu130 | before | 67.4 | 71.5 |
+| | graphs off | 39.3 | 40.3 |
+| | **default** | **20.9** | **20.9** |
+| | qwen-tts-webui, its default | 18.4 | 19.9 |
+
+×2.7–3.4 faster, within 5–13 % of qwen-tts-webui's fused path. Per frame (4 layers) Mizuoto launches 2,519 kernels and qwen-tts-webui 2,121; the difference is the fused projections (588 against 327 GEMMs) and a cache grown by concatenation rather than written into a buffer, both of which change the bits on CUDA.
+
+**Fused projections** (`fused_projections`, opt-in), ms per frame at 4 / 8 layers:
+
+| torch | Exact | Fused | qwen-tts-webui |
+| --- | --- | --- | --- |
+| 2.8.0+cu128 | 24.6 / 25.5 | 23.7 / 24.6 | 24.1 / 24.5 |
+| 2.10.0+cu130 | 20.0 / 20.8 | 19.2 / 20.0 | 17.9 / 19.9 |
+
+3–4 % faster, level with qwen-tts-webui within the noise of the shared GPU (±1 ms between rounds).
+
+### Fish Speech
+
+The decoding loop with the real fast transformer, 2 or 4 of its 36 slow layers, random weights, 60 frames (S2 Pro, 11 GB, did not fit); ms per frame, torch 2.8:
+
+| Code | 2 slow layers | 4 slow layers |
+| --- | --- | --- |
+| before | 93.8 | 96.8 |
+| graphs off | 43.4 | 44.3 |
+| **default** | **38.9** | **38.1** |
+
+Removing the waits gives most of it (×2.2); graphs add about 10 % on the saturated GPU, where reading the fast transformer's weights (about 4 GB a frame) bounds the step. Each slow layer cost about 1.5 ms a frame before and 0.45 ms after.
+
+### CosyVoice 2/3
+
+The real CosyVoice 2 LM (2 GB, it fit), 150 tokens, ms per token:
+
+| Code | Round 1 | Round 2 |
+| --- | --- | --- |
+| before | 69.6 | 70.7 |
+| graphs off | 14.3 | 14.1 |
+| **default** | **9.9** | **10.3** |
+
+About ×7: a token is 40 ms of audio, so the LM went from 1.7× slower than real time to 4× faster. The same tokens for three seeds (about 400 tokens each, to EOS) with and without graphs.
+
+### VoxCPM
+
+Whole requests (VAE included) on the real weights, 6.4–6.9 s of audio, best of three warm requests, torch 2.8:
+
+| Model | Before | Graphs off | **Default** |
+| --- | --- | --- | --- |
+| 0.5B | 4.49 s (RTF 0.65) | 4.32 s | **2.36 s (RTF 0.34)** |
+| 1.5 | 3.00 s (RTF 0.47) | 2.95 s | **1.87 s (RTF 0.29)** |
+
+×1.9 and ×1.6. On CUDA the first VoxCPM request in a process decodes its (identical) latents with other bits than later requests do (the VAE); later requests are identical, and the code before does the same, so comparisons start after a throwaway request.
+
+### GPT-SoVITS
+
+Through the whole stack on the GPU (`perf.py --device cuda:0`), best warm run:
+
+| Case | Before | Graphs off | **Default** | Speed-up |
+| --- | --- | --- | --- | --- |
+| v2-clone-zh | 1.61 s | 1.26 s | **0.89 s** | ×1.81 |
+| v2-batch-cut5-zh | 3.72 s | 2.90 s | **2.29 s** | ×1.62 |
+| v2pro-serial-en | 1.78 s | 1.35 s | **0.89 s** | ×2.00 |
+| v4-batch-cut5-zh | 4.05 s | 3.58 s | **3.14 s** | ×1.29 |
+
+v4 gains least: its flow and vocoder dominate, and on the crowded GPU the model manager moved the GPT off the device for them between requests, so its graphs were captured again at each request. Calling `capture_begin`/`capture_end` directly instead of `torch.cuda.graph` (whose `gc.collect()` and `empty_cache()` ran at each of 25 captures) is what kept that from making v4 slower.
+
+### IndexTTS
+
+The real models did not fit wholly beside the other workload, so through the stack their weights streamed and graphs did not engage: the removed waits alone gave v1.5 10.25 → 9.59 s and v2 36.3 → 33.4 s (×1.07–1.09), identical audio. The decoding loop at the 1.5 GPT's sizes, 4 or 8 of its 24 layers, random weights, fp16, three beams, 120 steps; ms per step:
+
+| Code | 4 layers | 8 layers |
+| --- | --- | --- |
+| before | 15.5 | 19.2 |
+| graphs off | 6.0 | 8.6 |
+| **default** | **5.9** | **5.95** |
+
+×2.6–3.2; eager costs about 0.65 ms a layer, graphs next to nothing, so the full 24 layers gain more.
+
+### On the CPU
+
+The same changes help the CPU a little: Qwen3-TTS `cv-en-aiden` 17.05 → 16.76 s, `base-clone-en` 26.19 → 25.83 s, audio identical.
+
+## `torch.compile` on the CPU
+
+`compute.compile`, fp32, 8 threads; time of the compiled module, warm:
+
+| Engine | Module | Change |
+| --- | --- | --- |
+| F5-TTS | DiT | −23 % (whole request 60 → 45 s) |
+| IndexTTS | s2mel DiT / BigVGAN | −7 % / −20 % |
+| GPT-SoVITS v4 | CFM estimator | −7 % |
+| CosyVoice | flow estimator | none (its convolutions and products are already library kernels) |
+| VoxCPM (bf16) | local DiT | none |
+
+The first request pays the compilation: +30 s to +160 s. The audio is not identical ([Acceleration](/docs/development-acceleration#torchcompile-computecompile)).
+
+## Not done because it changes results
+
+- bf16 or quantised weights, another thread count, the tanh form of GELU, SDPA's grouped-query path for Fish Speech's repeated heads, a static KV cache by default.
+- Truncating VoxCPM's attention to exactly the filled positions: identical in bf16, not in fp32 (the kernel's blocks change); the cut at a multiple of 256 is identical in both.
+- `foreach=True` Adam/AdamW: identical for float32 parameters but slower on the CPU (1032 against 748 ms a step for 100 tensors of 2048 × 2048; Qwen3-TTS's training ×0.92). `fused=True` AdamW: its results differ.
+- Caching weight norm within a step for GPT-SoVITS's discriminators: the gradients would sum in another order.
+- For Qwen3-TTS on CUDA: a static cache bucketed by 256 with a mask (another SDPA kernel), and batching a long text's segments (other draws).

@@ -1,0 +1,73 @@
+---
+title: "OmniVoice"
+description: "The OmniVoice engine as implemented in Mizuoto: the bidirectional Qwen3 with iterative unmasking, the HiggsAudio v2 tokenizer (DAC and HuBERT), pydub's arithmetic without pydub, what reproduces upstream exactly, the full and LoRA fine-tunes, and its parity results."
+icon: Languages
+---
+
+Xiaomi's diffusion language model TTS for over 600 languages ([k2-fsa/OmniVoice](https://github.com/k2-fsa/OmniVoice), Apache-2.0). Code: `mizuoto/engines/omnivoice`. On the CPU in fp32 with the same seed it is identical to Mizuoto 0.1 (upstream on transformers 5.3) in every parity case, and both trainers give 0.1's adapter and exported weights byte for byte. User-facing details: [Engines in depth](/docs/advanced-engines#omnivoice).
+
+## Variants and files
+
+One variant, `v0` (catalogue model `omnivoice/omnivoice`): cloning (the transcript is required; Mizuoto supplies it by speech recognition when it is missing, so the engine never loads Whisper itself), design from a closed vocabulary of attributes, the model's own voice, and 13 inline non-verbal tags.
+
+The model folder holds `config.json`, `model.safetensors`, the BPE tokenizer files and `audio_tokenizer/` (`config.json`, `model.safetensors`, `preprocessor_config.json`). A voice's cache is `prompt.pt`, as upstream's voice-clone prompt.
+
+Precision: bf16 on a CUDA GPU that has it (else fp16), fp32 elsewhere; `engines.omnivoice.dtype` overrides.
+
+## How it works
+
+The audio is 8 codebooks of the HiggsAudio v2 tokenizer. The language model, Qwen3-0.6B run **bidirectionally**, sees the style tokens, the text, the reference's codes and the target as masked positions; over a fixed number of steps (32 by default) it unmasks the most confident codes, with classifier-free guidance in log-probability space, a per-codebook penalty and Gumbel noise on positions. Every step is a full forward over the whole sequence (no KV cache). The target length comes from a rule-based estimate (per-script character weights scaled by the reference's speaking rate), or from `speed` and `duration`.
+
+| Module | What it is |
+| --- | --- |
+| `engine.py` | `create_voice_clone_prompt`, the duration, `_generate_iterative`, chunked long text, post-processing |
+| `model.py` | The network: the bidirectional Qwen3 over text and audio codes (`audio_embeddings`, `audio_heads`) |
+| `audio_tokenizer.py` | HiggsAudio v2's tokenizer as transformers 5.3 computes it: DAC acoustic encoder + HuBERT semantic branch, Euclidean residual codebooks; `fc2` + the DAC decoder |
+| `audio.py` | Post-processing without pydub (`Segment`: pydub's millisecond arithmetic on int16 arrays, `audioop.rms`) |
+| `duration.py` | The rule-based duration estimate, upstream's tables |
+| `text.py` | Chunking at punctuation, `add_punctuation`, `combine_text`, tag-aware tokenisation |
+| `voice_design.py` | The closed design vocabulary and `_resolve_instruct` |
+| `lang_map.py` | Language names to OmniVoice's ids |
+| `train.py` | `OmniVoiceTrainer` (methods `full`, `lora`) |
+
+Shared: `runtime/lm/qwen.py`, `nn/codecs/dac.py`, `nn/ssl/hubert.py`, `text/tokenize/bpe.py`, `nn/dsp/resample.py`, `nn/dsp/wav.py`, `nn/dsp/flac.py`.
+
+## What reproduces upstream
+
+- **The attention mask.** The language model is `runtime/lm/qwen`'s decoder under a full 4-D boolean mask: transformers returns a 4-D mask as it is, and SDPA gets it with the KV heads repeated, not causal. The conditional and unconditional rows run in one batch, as upstream batches them.
+- **Draws.** Gumbel noise on positions (and on classes with `class_temperature`) comes from the request's generator, per step and per item, as upstream draws it; a batch's composition changes the draws, as it does upstream.
+- **The tokenizer** is DAC (odd strides with an output padding, no final tanh), HuBERT (the positional convolution's weight norm folded over dim 2) and Euclidean residual codebooks. The semantic decoder and `fc1` are used only in training and are not loaded.
+- **HuBERT's draws.** HuBERT draws one `torch.rand([])` per layer even in eval mode, from the CPU generator; `HubertModel` makes the same draws on `ctx.generator_for("cpu")`. A clone without a cached voice prompt therefore gets other noise than one with it, in 0.1 as in Mizuoto; Mizuoto always prepares the prompt before the request, so this never shows.
+- **pydub without pydub.** Silence removal on the prompt and the output is reproduced on int16 arrays with pydub's arithmetic: millisecond lengths rounded, positions truncated, `audioop.rms` floored. `audioop` is gone in Python 3.13, so a port was needed anyway.
+- **Levels and long text.** The reference is levelled to an RMS of 0.1 and the output levelled back; long outputs are generated in text chunks, conditioned on the reference (or the first chunk), and cross-faded.
+- **The text tokenizer** is `mizuoto.text`'s BPE, without transformers' "Mistral fix" (the model names transformers 5.3, where it does not apply).
+
+## Deviations
+
+- **No free-text design.** The model was trained on a closed attribute vocabulary; free text is refused, as in 0.1.
+- **No FlashInfer or CUDA graphs.** 0.1's load options for them are gone; SDPA serves every platform.
+- **Upstream's text normalisation** (`normalize_text`, WeTextProcessing) is not used by Mizuoto's requests and is not ported.
+
+## Memory
+
+Two phases: the audio tokenizer (the voice prompt, then decoding) and the language model. The language model reruns over the whole sequence each step, so it is a `oneshot` model for weight streaming (its largest units stay on the device). Training: gradient checkpointing over the model's layers is identical, LoRA dropout included; `lowest` keeps AdamW's state in RAM (identical on the CPU).
+
+## Training
+
+Methods `full` and `lora` (stages `tokens`, `train`, `export`; upstream's `extract_audio_tokens` and `OmniTrainer` with its SDPA fine-tune configurations; no transformers, peft, accelerate or webdataset). Seeded alike, both give 0.1's codes, batches, losses, learning rates, LoRA adapter and exported `model.safetensors` byte for byte on the CPU, also with gradient accumulation and over several shards and loader workers. The LoRA is merged into the exported model.
+
+- **Upstream reseeds with its config's 42 after building the model**, so the stage's seed matters only through peft's LoRA initialisation, drawn first from the process-wide generator in module order (`A` and `B` made as `nn.Linear`, `A` drawn again).
+- **Draws after the reseed come from private generators**: each epoch's loader base seed and the LoRA dropout masks on one seeded 42; worker *w*'s `Random` and `Generator` seeded `(base + w) mod 2**32`. In each worker webdataset first spends one `randint(0, 1000000)` on a seed it never uses, then the processor draws. The shard list is shuffled with `Random(epoch)`, the samples through webdataset's 20 000-sample buffer seeded with the epoch; the workers' batches come in turn.
+- **Batches by length** (`StreamLengthGroupDataset`, `PaddingDataCollator`'s 4-D mask), as the SDPA configurations do, not FlexAttention's packing.
+- **Clipping** sums the per-tensor norms in upstream's parameter order (the token embedding first).
+- **The token order** follows `JsonlDatasetReader`'s seed-42 order.
+- Checkpoints keep no optimiser state. More loader workers than shards made 0.1 fail; here the spare workers idle. Previews are seeded.
+
+## Parity
+
+Identical sample for sample to 0.1 on the CPU in fp32 in all four stack cases: cloning, design from attributes, its own voice and the fine-tuned model. At module level also the voice prompt's codes, the tokenizer's decode, the logits, `class_temperature`, `speed`, `duration`, batches and the chunked long-text path. Two more cases load each implementation's LoRA export in the other; identical. The contract suite passes (12 tests).
+
+## Limitations
+
+- Every step is a full forward of the conditional and unconditional rows over the whole sequence; there is no CUDA-graph path for this engine.
+- Free-text voice design is not available (the model takes attributes only).

@@ -1,0 +1,178 @@
+---
+title: "Remote hosts"
+description: "Run an engine on another machine: that machine runs mizuoto agent, this one sets the engine's device to host/device, and voices, outputs and the UI stay here."
+icon: Network
+---
+
+When one machine has the GPU and another is where you use Mizuoto, an engine can run on the GPU machine. That machine runs `mizuoto agent` (the **agent** below); the machine you use (the **host** below) adds it as a remote host and sets the engine's device to `<name>/<device>`, for example `gpu-box/cuda:0`. Synthesis, streaming and cancelling then work as they do locally; only the engine, and the models it loads, run on the agent.
+
+```bash
+# On the GPU machine (the same Mizuoto version as here, with torch; its own models):
+mizuoto doctor
+mizuoto model download qwen3tts/1.7b-base
+mizuoto agent --host 0.0.0.0                 # prints the token it made
+
+# Here:
+mizuoto remote add gpu-box 192.168.1.20 --token <token>
+mizuoto remote use qwen3tts gpu-box --device cuda:0
+mizuoto speak "Hello, world." -m qwen3tts/1.7b-base -v "My voice"
+```
+
+## What runs where
+
+| On the agent | On the host |
+| --- | --- |
+| torch and the engines' packages (`mizuoto doctor` there) | The model catalogue and the checks of each request (the plan) |
+| Installed models (`mizuoto model download`) | The voice library, reference clips and voice caches |
+| The engines, in the agent's own process; loaded models, idle unloading | Outputs, history, jobs and their logs |
+| GPU memory: loading, running out of it | The web UI, the HTTP API, the command line |
+| A cache of the files hosts sent: `<cache>/remote/files/<sha256>/` | Training (always here) |
+
+- **Model states come from the agent.** For an engine whose device names a remote host, a model is "installed" when the agent's list of installed models has it (the host asks again every 15 seconds or so), not when this machine's models folder does. Install the models on the agent with its own `mizuoto` commands.
+- **Both machines run the same Mizuoto version.** Mizuoto 0.2 speaks agent protocol 2, at the level of a loaded engine (load, prepare a voice, synthesize, convert, edit). A host and an agent of different protocols refuse each other at the handshake, with the hint to install the same Mizuoto version on both machines.
+- **Files travel by content.** Files a request names (reference clips, an emotion clip…) are sent by SHA-256: those the agent already has are not sent again, the others are uploaded once in 8 MB pieces. When the agent starts it deletes files no host has used for a month.
+- **Voice caches come back.** The cache an engine prepares for a voice (on its first use) is written on the agent and sent back file by file into the voice's cache folder on the host, which later requests read.
+- **Streaming, streamed text and cancelling work.** Audio chunks come back as they are made; a cancel is forwarded to the engine on the agent.
+- **Training stays here.** With the engine on a remote host, its training methods say why: `<engine> runs on <host>, and training runs on this machine: mizuoto remote use <engine> --local`.
+
+## The agent: the machine with the engines
+
+```bash
+mizuoto agent [--host ADDRESS] [--port PORT] [--token TOKEN] [--ssl-certfile CERT] [--ssl-keyfile KEY]
+```
+
+| Option | Setting | Default | Meaning |
+| --- | --- | --- | --- |
+| `--host` | `remote.agent.host` | `127.0.0.1` | Address to listen on; `0.0.0.0` for every interface |
+| `--port` | `remote.agent.port` | `7870` | Port |
+| `--token` | `remote.agent.token` | none | The token hosts must give; made and saved when there is none |
+| `--ssl-certfile` | `remote.agent.ssl_certfile` | none | PEM certificate: serve TLS |
+| `--ssl-keyfile` | `remote.agent.ssl_keyfile` | none | The certificate's private key |
+
+- The agent uses that machine's own data folder (settings, models, cache), as `mizuoto webui` there would; set `MIZUOTO_DATA_DIR` to give it another one. It runs the engines in its own process.
+- On its first start without a token the agent makes a random one, saves it as `remote.agent.token` and prints it:
+
+  ```text
+  Made a token and saved it (remote.agent.token): <token>
+  Mizuoto agent on 0.0.0.0:7870: asr, qwen3tts
+  On the host: mizuoto remote add <name> <this machine>:7870 --token …
+  ```
+
+  The second line lists the engines available there. Later starts reuse the saved token; to see it again, open that machine's `settings.toml` (`mizuoto config path`).
+- Listening beyond this machine without TLS, the agent warns:
+
+  ```text
+  warning: without TLS, requests and audio cross the network unencrypted; use a private network or a tunnel
+  ```
+
+- The agent runs in the foreground until <kbd>Ctrl</kbd>+<kbd>C</kbd>. Its idle unloading and GPU memory handling follow that machine's settings (`compute.*`, `engines.<id>.*`). A port in use stops it with a hint to choose another `--port`.
+- Licence-gated engines (Fish Speech, IndexTTS): install their package (`mizuoto-fishspeech`, `mizuoto-indextts`) on the agent and accept the licence there before downloading models (`mizuoto engine accept-licence <id>`), and accept it on the host before synthesizing.
+
+## The host: the machine that uses remote engines
+
+### Adding a host
+
+<Tabs items={["Command line", "Web UI"]}>
+<Tab value="Command line">
+
+```bash
+mizuoto remote add gpu-box 192.168.1.20 --token <token>
+mizuoto remote add gpu-box gpu.example.com:7870 --token <token> --tls --ca-file ./agent.pem
+```
+
+| Argument or option | Meaning |
+| --- | --- |
+| `NAME` | A short name, used in engine devices (`gpu-box/cuda:0`); not empty, without `/` or `.` |
+| `ADDRESS` | The agent's `host` or `host:port` (port 7870 by default); IPv6 as `[::1]:7870` |
+| `--token` | The agent's token. Left out when changing a host, the saved one is kept |
+| `--tls` | The agent serves TLS |
+| `--ca-file` | A CA bundle, or the agent's own certificate when it is self-signed |
+| `--json` | Print JSON |
+
+The host is contacted at once: online, the command prints the agent's machine name, Mizuoto version, devices and installed engines; unreachable, the host is saved anyway and its state (`offline` or `refused`) is shown.
+
+</Tab>
+<Tab value="Web UI">
+
+**Settings** › **Remote hosts** › **Add a host**: fill in **Name**, **Address** and **Token**, turn on **TLS** and give the **CA file on this machine** when needed, then **Add**. When changing a host, leave **Token** empty to keep the saved one.
+
+Each host shows its state (**Online**, **Offline**, **Refused**), **Devices**, **Installed engines** and **Used by**; **Check again** reconnects at once.
+
+</Tab>
+</Tabs>
+
+| State | Meaning |
+| --- | --- |
+| `online` | The handshake succeeded |
+| `offline` | Unreachable (address, port, firewall, or no agent running), or TLS on one side only |
+| `refused` | Reachable, but the token is wrong or the protocol versions differ |
+
+### Moving an engine to a host
+
+<Tabs items={["Command line", "Web UI"]}>
+<Tab value="Command line">
+
+```bash
+mizuoto remote use qwen3tts gpu-box --device cuda:0   # engines.qwen3tts.device = "gpu-box/cuda:0"
+mizuoto remote use qwen3tts gpu-box                   # device auto: the agent chooses
+mizuoto remote use qwen3tts --local                   # back on this machine (device = "auto")
+```
+
+Setting it directly works too: `mizuoto config set engines.qwen3tts.device gpu-box/cuda:0`. `--device` is the device as the agent names it (`auto`, `cuda:0`, `cpu`) and cannot contain `/`. When the engine is not available on the agent, the command says so: `(not available there: on gpu-box, mizuoto doctor qwen3tts)`.
+
+</Tab>
+<Tab value="Web UI">
+
+**Models** › **Engines**: in the engine card's **Device**, pick a device of the remote host (shown as `host · device`).
+
+</Tab>
+</Tabs>
+
+An engine on a remote host is marked **On gpu-box** (the host's name) on its engine card and model rows, with the hints **Its packages are gpu-box’s: mizuoto doctor qwen3tts there** for the engine and **These are the models on gpu-box: download them there with mizuoto model download** for its models.
+
+### Listing and removing
+
+```bash
+mizuoto remote list          # name, address, state, version, devices, engines, used by
+mizuoto remote remove gpu-box
+```
+
+`remote list` contacts every host again. Removing a host sets the engines that used it back to `auto`, on this machine.
+
+## When something fails
+
+| Situation | Error | Notes |
+| --- | --- | --- |
+| The agent cannot be reached | `remote_unavailable` (exit 14, HTTP 502) | "Cannot reach gpu-box at …", with a hint to check that the agent runs |
+| Wrong token | `remote_unavailable` | "gpu-box refused: The agent refused the token", with a hint to `mizuoto remote add` again with the right token |
+| Protocol versions differ | `remote_unavailable` | Host and agent of different Mizuoto versions: the hint says to install the same Mizuoto version on both machines |
+| TLS on one side only | `remote_unavailable` | "Cannot reach …" or "… closed the connection" |
+| The device names no known host | `device_unavailable` (exit 8) | "No remote host 'x'": `mizuoto remote add` it first |
+| The model is not on the agent | `model_missing` (exit 7) | "… is not installed on gpu-box", with a hint to run `mizuoto model download <model>` there |
+| The engine is not available on the agent (torch or its package is missing) | `engine_not_installed` (exit 7) | With a hint to run `mizuoto doctor <engine>` on the agent |
+| The connection drops or the agent stops answering | `worker_failed` or `remote_unavailable` | The running request fails; the next one reconnects |
+
+Timeouts:
+
+| Setting | Default | Meaning |
+| --- | --- | --- |
+| `remote.connect_timeout` | `10` s | Time allowed to connect and complete the handshake |
+| `remote.heartbeat_timeout` | `60` s | The agent beats every 5 s while it works; a request whose agent stays silent this long fails |
+
+## Security
+
+- Each connection starts with the token, which the agent compares in constant time; a wrong one closes the connection.
+- Without TLS, requests, reference clips and the synthesized audio cross the network unencrypted. Use it on a trusted network, through a VPN or an SSH tunnel, or give the agent a certificate (`--ssl-certfile`) and add `--tls` on the host.
+- With a self-signed agent certificate, give that certificate as `--ca-file` on the host; the host name in the certificate is then not checked. Without `--ca-file` the system's CAs are used.
+- Tokens never appear in `mizuoto config show` or the settings the API returns, only whether one is set.
+
+## HTTP API
+
+| Method and path | Meaning |
+| --- | --- |
+| `GET /api/v1/remote/hosts?refresh=true` | Each host's state (`refresh` reconnects) |
+| `PUT /api/v1/remote/hosts/{name}` | Add or change: `{"address", "token", "tls", "ca_file"}`; a `null` token keeps the saved one |
+| `DELETE /api/v1/remote/hosts/{name}` | Remove; returns the engines that run here again |
+| `PUT /api/v1/remote/engines/{engine_id}` | `{"host": "gpu-box", "device": "cuda:0"}`; a `null` host means this machine |
+
+See [HTTP API](/docs/advanced-api) for the API's conventions and [Configuration](/docs/cli-config) for the settings.

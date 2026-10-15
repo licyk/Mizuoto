@@ -1,0 +1,89 @@
+---
+title: "快速开始"
+description: "从什么都没有到听到第一句合成的语音：安装、启动、看一眼设置、用演示引擎合成，再换成真正的引擎。"
+icon: Rocket
+---
+
+本页走最短的路线。每一步的细节见[安装](/docs/installation)和[首次运行](/docs/first-run)。
+
+<Steps>
+<Step>
+
+### 安装 Mizuoto
+
+需要 Python 3.10–3.13。先安装 torch 2.8 或更新版本中适合本机硬件的构建，再用发布构建（`dist/` 中的 wheel）安装 Mizuoto：
+
+```bash
+pip install "torch>=2.8" --index-url https://download.pytorch.org/whl/cu128   # NVIDIA；其他构建见“安装”
+pip install dist/mizuoto-*.whl
+mizuoto doctor                                  # 检查 torch 是否适合本机
+```
+
+AMD、Intel、Apple 芯片和纯 CPU 的 torch 构建，以及从源码或用 Docker 安装，见[安装](/docs/installation)。
+
+</Step>
+<Step>
+
+### 启动网页界面
+
+```bash
+mizuoto webui
+```
+
+服务器就绪后终端会打印 `SERVER_READY url=http://127.0.0.1:7869`，浏览器随后自动打开这个地址。默认端口是 **7869**，默认只允许本机访问。按 <kbd>Ctrl</kbd>+<kbd>C</kbd> 停止服务器。
+
+</Step>
+<Step>
+
+### 看一眼设置
+
+界面打开后直接进入 **合成** 页，试用之前不需要做任何设置。下载真正的模型之前，值得看一眼两项设置：
+
+- **设置 › 下载 › 下载来源**：模型从哪里下载（**Hugging Face**、**hf-mirror.com**、**ModelScope**；在中国大陆，后两者通常更快）。
+- **设置 › 计算**：本机的显卡和正在使用的 torch 构建，不合适时给出安装正确构建的命令（与 `mizuoto doctor` 的检查相同）。
+
+要立即下载，见下面第 5 步或[首次运行](/docs/first-run)。
+
+</Step>
+<Step>
+
+### 用演示引擎合成
+
+演示引擎随 Mizuoto 自带，不需要下载，也不需要 torch，它用音调代替语音，但走的是和真实引擎完全相同的流程。
+
+1. 在左侧导航栏打开 **合成**（界面默认就在这里）。
+2. 在 **模型** 中选择 **Dummy voice**（带 **演示** 标记）。
+3. 在 **音色** 中选择 **预置说话人**，**说话人** 选 `alto`。
+4. 在 **文本** 中输入任意内容。
+5. 点页面底部的 **合成**（或在文本框中按 <kbd>Ctrl</kbd>+<kbd>Enter</kbd>）。
+
+任务卡片会出现在页面底部，完成后结果出现在 **结果** 中，点播放按钮试听。
+
+</Step>
+<Step>
+
+### 换成真正的引擎
+
+1. 打开 **模型** 选择器，选一个真实模型，例如 **Qwen3-TTS 1.7B CustomVoice**。还没准备好的模型带有 **未下载**、**不可用** 等标记，但仍可以选择。
+2. 页面底部的 **合成** 按钮会换成模型还缺的那一步，这里是 **下载 Qwen3-TTS 1.7B CustomVoice（大小）**。点它，等进度条走完。（缺少 torch 时，这里显示的是安装它的命令。）
+3. 下载完成后 **合成** 按钮回来了。选一个 **预置说话人**，可以在 **风格** 的 **怎么说** 中写一句指令（如“开心地，稍快一些”），然后点 **合成**。
+
+下载是任务，可以离开页面，进度在右上角的 **任务** 中查看。第一次合成会先加载模型，之后会快很多。
+
+</Step>
+</Steps>
+
+## 命令行中的同样操作
+
+```bash
+mizuoto speak "Hello there." -m dummy/default --preset alto -o hello.wav     # 演示引擎
+mizuoto model download qwen3tts/1.7b-custom-voice                            # 下载模型
+mizuoto speak "很高兴认识你。" -m qwen3tts/1.7b-custom-voice --preset vivian --instruct "开心地说" -o vivian.wav
+```
+
+## 接下来
+
+- 克隆自己的声音：[音色](/docs/guide-voices)。
+- 合成页每个选项的含义：[合成](/docs/guide-speak)。
+- 朗读一整本书或一段多人对话：[项目](/docs/guide-projects)。
+- 有 NVIDIA 显卡却没被用上，或下载很慢：[首次运行](/docs/first-run)和[常见问题](/docs/advanced-faq)。

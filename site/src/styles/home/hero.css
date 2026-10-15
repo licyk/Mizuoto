@@ -1,0 +1,263 @@
+/*
+ * Hero.
+ *
+ * No fixed `min-height` and no minimum track width on the preview column:
+ * both were the cause of the hero overflowing short viewports and squeezing
+ * the headline between 1041px and 1200px.
+ */
+
+.page-section.is-hero {
+  padding-block: clamp(2rem, 5vh, 4rem);
+}
+
+.home-hero-backdrop::before {
+  position: absolute;
+  top: -18rem;
+  right: -14rem;
+  width: min(66rem, 90vw);
+  aspect-ratio: 1;
+  border-radius: 50%;
+  background: radial-gradient(
+    circle,
+    color-mix(in srgb, var(--page-accent) 17%, transparent),
+    transparent 66%
+  );
+  content: "";
+  filter: blur(10px);
+  animation: home-glow-breathe 14s ease-in-out infinite alternate;
+}
+
+.home-hero-backdrop::after {
+  position: absolute;
+  inset: 0;
+  opacity: 0.28;
+  background-image:
+    linear-gradient(
+      color-mix(in srgb, var(--color-fd-border) 45%, transparent) 1px,
+      transparent 1px
+    ),
+    linear-gradient(
+      90deg,
+      color-mix(in srgb, var(--color-fd-border) 45%, transparent) 1px,
+      transparent 1px
+    );
+  background-position: center top;
+  background-size: 56px 56px;
+  mask-image: linear-gradient(to bottom, black, transparent 76%);
+  content: "";
+}
+
+@keyframes home-glow-breathe {
+  from {
+    opacity: 0.72;
+    transform: translate3d(-2%, -1%, 0) scale(0.96);
+  }
+
+  to {
+    opacity: 1;
+    transform: translate3d(2%, 1%, 0) scale(1.04);
+  }
+}
+
+.home-hero-layout {
+  display: grid;
+  align-items: center;
+  gap: clamp(2rem, 6vh, 3.5rem);
+}
+
+@container page-section (min-width: 62rem) {
+  .home-hero-layout {
+    grid-template-columns: minmax(0, 1.05fr) minmax(0, 1fr);
+    gap: clamp(2rem, 5cqi, 5rem);
+  }
+}
+
+/*
+ * Between the two-column threshold and a comfortably wide window the copy
+ * column is narrow enough that the display size set by the viewport would wrap
+ * the headline into a block. Step it down against the container instead.
+ */
+@container page-section (max-width: 76rem) {
+  .home-hero-copy h1 {
+    font-size: clamp(1.9rem, calc(1.2rem + 2.7 * var(--page-fluid)), 3.4rem);
+  }
+}
+
+.home-hero-copy {
+  position: relative;
+  z-index: 1;
+  min-width: 0;
+}
+
+.home-eyebrow,
+.home-hero-copy h1,
+.home-hero-copy > p,
+.home-hero-actions,
+.home-platforms {
+  animation: home-hero-enter var(--page-enter) var(--page-ease-enter) both;
+}
+
+.home-hero-copy h1 {
+  animation-delay: 90ms;
+}
+
+.home-hero-copy > p {
+  animation-delay: 180ms;
+}
+
+.home-hero-actions {
+  animation-delay: 270ms;
+}
+
+.home-platforms {
+  animation-delay: 360ms;
+}
+
+@keyframes home-hero-enter {
+  from {
+    opacity: 0;
+    transform: translateY(16px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.home-eyebrow {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.55rem;
+  padding: 0.45rem 0.72rem;
+  border: 1px solid color-mix(in srgb, var(--page-accent) 28%, var(--color-fd-border));
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--page-surface-strong) 82%, transparent);
+  box-shadow: 0 12px 40px color-mix(in srgb, var(--page-accent) 8%, transparent);
+  color: var(--page-accent-strong);
+  font-size: 0.78rem;
+  font-weight: 650;
+  letter-spacing: 0.02em;
+}
+
+.home-eyebrow svg {
+  width: 0.95rem;
+  height: 0.95rem;
+}
+
+.home-hero-copy h1 {
+  max-width: 18ch;
+  margin-top: clamp(0.9rem, 2vh, 1.5rem);
+  color: var(--page-ink);
+  font-size: var(--page-display);
+  font-weight: 720;
+  line-height: 1.05;
+  letter-spacing: -0.055em;
+  text-wrap: balance;
+}
+
+.home-hero-copy h1 span {
+  color: var(--page-accent-strong);
+}
+
+.home-hero-copy > p {
+  max-width: 40rem;
+  margin-top: clamp(0.9rem, 2vh, 1.55rem);
+  color: var(--color-fd-muted-foreground);
+  font-size: var(--page-lead);
+  line-height: 1.8;
+  text-wrap: pretty;
+}
+
+.home-hero-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  margin-top: clamp(1.1rem, 2.5vh, 2rem);
+}
+
+.home-primary-link,
+.home-secondary-link {
+  display: inline-flex;
+  min-height: 3rem;
+  align-items: center;
+  justify-content: center;
+  gap: 0.55rem;
+  padding: 0.72rem 1rem;
+  border-radius: 0.78rem;
+  cursor: pointer;
+  font-size: 0.9rem;
+  font-weight: 650;
+}
+
+.home-primary-link:focus-visible,
+.home-secondary-link:focus-visible {
+  outline: 2px solid var(--page-accent-strong);
+  outline-offset: 3px;
+}
+
+.home-primary-link {
+  background: var(--page-accent);
+  box-shadow: 0 14px 36px color-mix(in srgb, var(--page-accent) 22%, transparent);
+  color: var(--page-on-accent);
+}
+
+.home-secondary-link {
+  border: 1px solid var(--color-fd-border);
+  background: var(--page-surface);
+  color: var(--color-fd-foreground);
+}
+
+@media (any-hover: hover) {
+  .home-primary-link:hover,
+  .home-secondary-link:hover {
+    transform: translateY(-2px);
+  }
+
+  .home-primary-link:hover {
+    background: var(--page-accent-strong);
+    box-shadow: 0 18px 44px color-mix(in srgb, var(--page-accent) 30%, transparent);
+  }
+
+  .home-secondary-link:hover {
+    border-color: color-mix(in srgb, var(--page-accent) 35%, var(--color-fd-border));
+    background: var(--page-surface-strong);
+  }
+
+  .home-primary-link:hover .page-interactive-part {
+    transform: translateX(3px);
+  }
+
+  /* The secondary action advances one section, so its chevron moves downward. */
+  .home-secondary-link:hover .page-interactive-part {
+    transform: translateY(3px);
+  }
+}
+
+.home-primary-link:active,
+.home-secondary-link:active {
+  transform: translateY(0) scale(0.98);
+}
+
+.home-platforms {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.55rem 1rem;
+  margin-top: clamp(0.9rem, 2vh, 1.4rem);
+  color: var(--color-fd-muted-foreground);
+  font-size: 0.76rem;
+}
+
+.home-platforms span {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+}
+
+.home-platforms span::before {
+  width: 0.32rem;
+  height: 0.32rem;
+  border-radius: 50%;
+  background: var(--page-accent);
+  content: "";
+}

@@ -1,0 +1,168 @@
+/*
+ * Section primitive and page shell.
+ *
+ * Sections use `min-block-size`, never `block-size`: content taller than the
+ * viewport grows the section instead of being clipped. `svh` rather than `dvh`
+ * because `dvh` changes as a mobile URL bar collapses, which would re-trigger
+ * snapping mid-gesture.
+ */
+
+.paged {
+  position: relative;
+  isolation: isolate;
+
+  /* `overflow-x: clip` contains decorative bleed without creating a scroll
+   * container, so the sticky header and the fixed rail keep working. */
+  overflow-x: clip;
+  overflow-y: visible;
+  background:
+    linear-gradient(
+      180deg,
+      color-mix(in srgb, var(--page-accent) 4%, transparent),
+      transparent 28rem
+    ),
+    var(--color-fd-background);
+}
+
+.dark .paged {
+  background: linear-gradient(180deg, rgb(40 58 28 / 26%), transparent 32rem), #0c0f09;
+}
+
+/*
+ * Snap is scoped with `:has()` so documentation pages are never snapped.
+ * `scroll-padding-top` keeps `/#capabilities` style anchors clear of the
+ * sticky header.
+ */
+html:has(.paged) {
+  scroll-behavior: smooth;
+  scroll-padding-top: var(--page-nav);
+  scroll-snap-type: y proximity;
+}
+
+@media (max-height: 600px) {
+  html:has(.paged) {
+    scroll-snap-type: none;
+  }
+}
+
+.page-section {
+  position: relative;
+  display: grid;
+  align-content: center;
+  min-block-size: var(--page-section-min);
+  padding-block: clamp(2.5rem, 6vh, 5rem);
+  container: page-section / inline-size;
+
+  /*
+   * No `scroll-margin-top` here: `scroll-padding-top` on the scroll container
+   * already reserves the header, and declaring both makes anchors and snap
+   * positions land a full header-height too low.
+   */
+  scroll-snap-align: start;
+}
+
+/* Opts a section out of the viewport floor. */
+.page-section.is-auto {
+  min-block-size: 0;
+  scroll-snap-align: none;
+}
+
+/*
+ * The outro fills the viewport and pins the footer to the bottom of it, so the
+ * last screen reads as one closing view rather than a card floating above an
+ * off-screen footer.
+ */
+.page-section.is-outro {
+  align-content: stretch;
+}
+
+.page-section.is-outro .page-shell {
+  display: grid;
+  grid-template-rows: 1fr auto;
+  align-items: center;
+}
+
+.page-section.is-band {
+  border-block: 1px solid color-mix(in srgb, var(--color-fd-border) 72%, transparent);
+  background:
+    radial-gradient(circle at 20% 10%, var(--page-accent-soft), transparent 28rem),
+    color-mix(in srgb, var(--page-surface) 50%, transparent);
+}
+
+.page-section.is-ink {
+  border-block: 1px solid color-mix(in srgb, var(--color-fd-border) 70%, transparent);
+  background:
+    radial-gradient(
+      circle at 80% 50%,
+      color-mix(in srgb, var(--page-accent) 16%, transparent),
+      transparent 30rem
+    ),
+    color-mix(in srgb, var(--page-preview-bg) 96%, black);
+  color: #eef2e8;
+}
+
+/*
+ * The section is a centring grid; the body is the single grid item and the
+ * carrier for the scroll-pass animation, so transforms on it never disturb
+ * the section's own box.
+ */
+.page-section-body {
+  display: grid;
+}
+
+.page-shell {
+  width: min(var(--page-shell-width), calc(100% - var(--page-gutter) * 2));
+  margin-inline: auto;
+}
+
+.page-section-backdrop {
+  position: absolute;
+  z-index: -1;
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+/* --- shared heading --- */
+
+.page-section-heading {
+  max-width: 42rem;
+}
+
+.page-section-heading.is-centered {
+  margin-inline: auto;
+  text-align: center;
+}
+
+.page-section-heading > span {
+  color: var(--page-accent-strong);
+  font-size: 0.7rem;
+  font-weight: 750;
+  letter-spacing: 0.16em;
+}
+
+.page-section-heading h2 {
+  margin-top: 0.7rem;
+  color: var(--page-ink);
+  font-size: var(--page-title);
+  font-weight: 700;
+  line-height: 1.12;
+  letter-spacing: -0.045em;
+  text-wrap: balance;
+}
+
+.page-section-heading p {
+  margin-top: 1rem;
+  color: var(--color-fd-muted-foreground);
+  font-size: var(--page-lead);
+  line-height: 1.75;
+  text-wrap: pretty;
+}
+
+.page-section.is-ink .page-section-heading h2 {
+  color: #f5f8ee;
+}
+
+.page-section.is-ink .page-section-heading p {
+  color: rgb(245 248 238 / 62%);
+}

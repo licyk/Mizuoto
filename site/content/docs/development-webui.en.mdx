@@ -1,0 +1,247 @@
+---
+title: "Web UI"
+description: "How the Vue 3 + Material 3 interface is built: Material Design 3's token and component layers, the ui/ wrapper layer and its rule tests, the API client and queries, socket events, engine availability gates, stores, kept-alive views and i18n, and adding a screen with Projects as the example."
+icon: Monitor
+---
+
+The web UI is a Vue 3 project in `mizuoto/webui/`. Its components are Material Web (`@material/web`), its icons Lucide (`@lucide/vue`), its data layer TanStack Query (`@tanstack/vue-query`) with `openapi-fetch`, its state Pinia. The build, `mizuoto/webui/dist/`, ships in the wheel as package data and is served by the API's `SPAStaticFiles` (see [HTTP API and command line](/docs/development-api)). The base (`theme/`, `ui/`, motion, layers, the shell, stores, i18n, rule tests) is rvc-next's; where it comes from is in [Design references and decisions](/docs/development-design).
+
+```
+mizuoto/webui/src/
+  main.ts          QueryClient, Pinia, router; mounts App
+  App.vue          the shell: navigation, the jobs and loaded-models sheets, the kept-alive RouterView, the socket
+  router.ts        routes (hash history) and each destination's last address
+  api/             baseUrl.ts, client.ts, socket.ts, types.ts, schema.d.ts (generated), queries/*.ts
+  ui/              wrapper components, icons.ts, layers.ts, motion/; index.ts is the only way in
+  theme/           tokens.css, scheme.ts (seed colour #4f6b3a), applyTheme.ts, breakpoints.ts
+  components/      feature components (ModelGate, EngineCard, LoadedModelsSheet, VoicePicker, JobCard, ScriptEditor…)
+  views/           one *View.vue per screen
+  stores/          auth, jobs, preferences, player, handoff
+  i18n/            en.ts, zh-CN.ts, index.ts
+  audio/           player.ts, recorder.ts, streamPlayer.ts
+```
+
+While developing, `python scripts/dev.py dev` runs the API server and Vite together (`http://localhost:5173`); Vite proxies `/api` and `/ws` to `MIZUOTO_BACKEND` (default `http://127.0.0.1:7869`). When the API server restarts, the proxy's connection errors become one short line (`vite.config.ts`, tested in `devProxy.test.ts`). Setting up is in [Development setup](/docs/development-setup).
+
+## Material Design 3 layers
+
+The UI is built on Material Design 3 (M3) in two layers: a **token layer** that everything reads, and a **component layer** on top of it. The token layer depends on no component library; the component layer can be replaced piece by piece.
+
+### The token layer: `src/theme/`
+
+| File | Holds |
+| --- | --- |
+| `scheme.ts` | Every colour role (`primary`, `on-primary`, `surface-container`, `outline`…) generated from one seed colour with `@material/material-color-utilities`' Tonal Spot scheme, light and dark, at contrast 0 (standard), 0.5 (medium) and 1 (high) |
+| `applyTheme.ts` | Writes the roles as `--md-sys-color-*` on `:root` and sets `data-theme` |
+| `tokens.css` | The static tokens: the 15 type styles (`--md-sys-typescale-*`, on the Roboto Flex variable font), corner shapes (`--md-sys-shape-corner-*`), motion easings and durations (`--md-sys-motion-*`), state-layer opacities (hover 8 %, focus 12 %, pressed 12 %, dragged 16 %, from `@material/web` 2.5.0's token file; disabled content 38 %, container 12 %), shadows, spacing (on a 4px unit), in-page z-order and widths that grow with the window; and fallback colours for the first paint |
+| `breakpoints.ts` | M3's window size classes: compact (&lt; 600px), medium (&lt; 840px), expanded (&lt; 1200px), large (&lt; 1600px), extra-large |
+
+- **Colours come from the seed only.** The default seed is `#4f6b3a`; users pick any colour, contrast, light or dark (system, light, dark) and motion in Settings › Appearance. Preferences live in localStorage and are synced to the server through `/api/v1/client-state/{key}`. A small script in `index.html` reads them and sets `data-theme` before the bundle runs, so the first paint does not flash the wrong theme.
+- **Tokens use Google's official names** (`--md-sys-*`), so `@material/web`'s components read them with no mapping; the project's own tokens start with `--app-`.
+- **Elevation is shown by surface tone first** (`surface`, `surface-container-low` … `surface-container-highest`), shadows second.
+- **Colour roles are used in pairs**: content on a `primary` container uses `on-primary`, on `surface-container` `on-surface`; the generated pairs guarantee contrast.
+- **Motion**: named transitions (`fade-through`, `shared-axis-x`, `container`, `sheet`, `scrim`, `list`…, in `ui/motion/`), and a container transform from a list to an item through View Transitions where the browser has them. With reduced motion chosen by the system or in the app, every transition becomes a 100 ms fade and there is no ripple.
+- **Layout**: a bottom navigation bar on compact windows, a navigation rail on wider ones (`AppShell`).
+- The font (`@fontsource-variable/roboto-flex`) and the icons are bundled into `dist/`: the UI loads nothing from outside and works offline.
+
+### The component layer: `src/ui/`
+
+- The components `@material/web` has are wrapped in project Vue components: buttons (`AppButton`: filled, tonal, outlined, text), icon buttons, FAB, checkbox, filter chip, divider, text field and text area, slider, linear and circular progress, switch, tabs. The wrapper owns the props, the event names and the types; `vite.config.ts` declares `md-*` tags as custom elements.
+- What `@material/web` lacks is built from tokens in the same folder: the shell, navigation bar and rail, top app bar, card, dialog, side sheet, menus and picker menu, snackbar, tooltip, segmented button, select, expansion panel, stepper, data list, line chart, waveform, spectrogram, level meter and more.
+- Both kinds read the same tokens and look alike. `@material/web` is in maintenance mode and gains no components; should one break with a future browser or Vue version, it is replaced inside `src/ui/` and feature code does not change.
+- Icons are Lucide (`@lucide/vue`), not Material Symbols, imported only in `ui/icons.ts`.
+- Button emphasis: at most one filled button per region (a view's main action, such as Speak or Train), tonal for secondary actions, outlined or text for the rest. Interactive elements have a visible focus indicator and, as a rule, a target of at least 48×48px (`dense` controls in compact rows and cards excepted).
+- MUI is not used (it implements Material Design 2), nor is M3 Expressive; the token layer keeps shape and motion values in one place, so they can change by tokens alone.
+
+## The `ui/` wrapper layer
+
+`src/ui/index.ts` is the only way to the shared components:
+
+```ts
+/**
+ * Shared components. Views and composites import only from here; they do not restyle these
+ * components and use no literal colours, radii or durations.
+ */
+```
+
+- Only components under `ui/` (plus `theme/tokens.css` and the tests' `test/setup.ts`) import `@material/web`. Views and feature components import `AppButton`, `TextField`, `AppDialog`, `SegmentedButton`, `Stepper`, `LineChart`… from `@/ui`.
+- Icons are re-exported through `ui/icons.ts` too; `ui/` is the only place that imports `@lucide/vue`. Add a new icon there first, then use it as `icons.X`. `AppIcon` sets `fill: none`: Material buttons fill slotted icons, which turned Lucide's strokes into blobs.
+- Styles use tokens only: the colour roles `--md-sys-color-*` (generated from the seed colour by `applyTheme.ts`), spacing `--app-space-*`, in-page stacking `--app-z-*`, type classes such as `type-title-large`.
+- `ui/layers.ts` is the one record of everything open over the page (dialogs, sheets, menus, pickers), in the order it opened: a later layer paints above earlier ones, Escape and outside clicks close only the topmost, everything under a modal layer is `inert`, and focus moves into a layer and back when it closes. A new overlay component registers there instead of setting its own z-index.
+
+The `/dev` route (`DevComponentsView.vue`) shows every `ui/` component, for checking them by eye.
+
+### Rule tests
+
+Several conventions are vitest tests; breaking one fails `dev.py test-web`:
+
+| Test | Rule |
+| --- | --- |
+| `src/imports.test.ts` | Modules under `src/` import each other through the `@/` alias, never by a relative path |
+| `src/tokens.test.ts` | No hex colours in `.vue` and `.css` files (outside `<script>`) except under `src/theme/` |
+| `src/layout.test.ts` | In rows that hold a file name the text element has `min-width: 0` (a long name must not push the buttons out of view); Speak and a voice's page are one column of sections with their actions in `PageFooter`; a button beside a field is centred on it; sections are never side by side |
+| `src/ui/layers.test.ts` | The layers' keyboard, painting, outside-click, modality and focus rules |
+| `src/i18n/i18n.test.ts` | `zh-CN` has exactly `en`'s keys and the same placeholders; the fixed vocabulary ("音色", "合成", "克隆") holds; every server error code has a title |
+| `src/ui/ui.test.ts` and others | Single components, motion helpers, theme generation, window size classes, navigation |
+
+"Views import components only from `@/ui`" is a convention; no test enforces it yet.
+
+## API client and queries
+
+`api/client.ts` makes one `openapi-fetch` client from the generated `paths` type:
+
+```ts
+export const api = createClient<paths>({ baseUrl: BASE_URL });
+api.use(auth);   // adds the bearer token; on 401 sets the auth store's `needed`, which opens the token dialog
+```
+
+- `BASE_URL` (`api/baseUrl.ts`) is derived from the running script's URL: everything before the last `/assets/` is the deployment root. No API address is compiled in, so the UI works under `api_prefix` unchanged. Routing uses hash history, so any sub-path works without server-side rewrites.
+- `unwrap(call)` returns the data or throws `ApiError(status, code, message, detail)`; FastAPI's own 422 validation errors become `invalid_input`. `components/errors.ts` turns it into a title (`errors.<code>`), a hint (`detail.hint`) and details on screen.
+- Media URLs (`urls.output()`, `urls.audioFile()`) are fetched by `<audio>` directly and authenticated by the `mizuoto_token` cookie; uploads use `uploadRaw()` (XMLHttpRequest, for progress; the body is raw bytes).
+- Types come from `api/types.ts`: `S = components['schemas']` plus aliases for the common models. Models used both as request and response are split, e.g. send `S['SpeakRequest-Input']`, read `S['SpeakRequest-Output']`.
+
+`api/queries/<resource>.ts` wraps endpoints as composables: `useQuery` to read, `useMutation` to write. Query keys live in `api/queries/keys.ts`, shared by the query modules and the socket handlers:
+
+```ts
+projects: ['projects'] as const,
+project: (id: string) => ['projects', 'id', id] as const,
+```
+
+Keys are hierarchical, so invalidating `keys.projects` invalidates the list and every project. The `QueryClient` in `main.ts` does not refetch on window focus and does not retry 4xx errors.
+
+## Socket events
+
+`connectSocket(qc)` in `api/socket.ts` connects once (when `App.vue` mounts), at `${BASE_PATH}/ws/socket.io`, with the token in the handshake's `auth`. Its listeners are typed from the schema's `ServerEvents`:
+
+```ts
+type Listeners = { [K in keyof ServerEvents]: (payload: ServerEvents[K]) => void };
+```
+
+REST is the source of truth; events only patch or invalidate queries:
+
+- `job_updated` goes into the jobs store (`upsert` drops a snapshot older than the state it holds) and into `keys.job(id)`; when a job finishes, the `AFFECTS` table invalidates the lists its kind changes, e.g. `project_render` → `keys.projects`, `train` → experiments, voices, models and outputs.
+- `runtime_changed` (the loaded models, for the **Models in memory** sheet, `LoadedModelsSheet`) and `compute_changed` are written into the query data directly (`keys.runtime`, `keys.computeUsage`); `train_metrics` appends its points to the experiment's metrics.
+- The other `*_changed` events invalidate their keys through `createInvalidator()`, so a burst within 300 ms causes one refetch.
+- On connect and reconnect the active jobs are fetched again (`resync()`); a reconnect also invalidates the usual lists on screen.
+- `job_log` goes to the open log viewers (`onJobLog(jobId, listener)`); an event holds at most 50 lines, the rest come over REST.
+
+## Engine availability
+
+Every engine is installed with Mizuoto, but one can still be *missing* something: torch, or a licence-gated engine's own distribution. The engine list (`EngineStatus.available`, `missing`) and the doctor's report (`useDoctor(engine)` in `api/queries/engines.ts`: `GET /api/v1/engines/{id}/doctor`, or `GET /api/v1/runtime/doctor` for all) drive what the UI offers:
+
+- **`ModelGate`** (`components/ModelGate.vue`) replaces Speak's main button with the one action a model still needs, checked in this order: enable the engine, accept its licence, install what is missing, download the model. For a missing package it shows the command: the doctor's `install_command` for torch (the build for this machine), else `pip install <package>`; for an engine on a remote host it says the host lacks it.
+- **`EngineCard`** shows **Available** or **Not available** with the missing packages, and a doctor panel with the findings for that engine (torch, extras, training).
+- **`ModelsView`** marks each engine group whose engine is unavailable and says what it needs.
+- **`SettingsView`** shows the torch check under **Compute** (the doctor's `torch` finding): the installed version and build, and the command that installs the recommended build when they differ.
+
+## Stores
+
+| Store | Holds |
+| --- | --- |
+| `auth` | The token (localStorage and the `mizuoto_token` cookie), whether one is needed |
+| `jobs` | The jobs this session knows: every active job, and those that finished while the page was open; the screen each was started from (`upsert(job, from)`, `fromScreen()`); `onFinished()` for "a job started on another screen finished" notices. Progress updates are frequent, so they land here rather than in the query cache |
+| `preferences` | Theme, seed colour, contrast, language, motion, last screen, Speak's last choices; kept in localStorage and synced to the server through `/api/v1/client-state/{key}`, so they follow the user across browsers |
+| `player` | The page's one player (`audio/player.ts`) |
+| `handoff` | Hand-offs between screens: "Re-run with these settings", "Use this voice", "Use as reference"; Speak takes them when it opens |
+
+## Kept-alive views
+
+`App.vue` wraps `RouterView` in `KeepAlive :max="12"`, so each page keeps its state while another is shown. The cache key is:
+
+```ts
+const viewKey = (path: string, name: unknown) =>
+  (path.startsWith('/voices/') || path.startsWith('/train/') || path.startsWith('/projects/') ? path : String(name));
+```
+
+List pages get one instance per route; the detail pages of voices, datasets, experiments and projects one per path. The shell's scroller is shared, so each page's scroll offset is kept in `offsets` and put back inside the view transition's update. A kept-alive page is not unmounted: whatever must be saved on leaving hooks both `onDeactivated` and `onBeforeUnmount` (as `ProjectView.vue`'s draft does).
+
+Each route's `meta.screen` in `router.ts` names the navigation destination it belongs to; `addressOf(screen)` remembers each destination's last address, so the navigation goes back to the voice or project it left rather than to the list.
+
+## i18n
+
+`i18n/en.ts` is the message tree; `zh-CN.ts` must have exactly the same keys (tested). `useI18n()` gives `t(key, params)` with placeholders written `{n}`; the locale comes from the preferences, `auto` following the system language. Keys built from a server value (an error code, a stage id) use `tOr(key, fallback)`, which shows a readable fallback when there is no message. Add new text to both files at once.
+
+## Adding a screen: Projects
+
+The Projects screen (long-form scripts read line by line by a cast of voices) is the most recent complete screen and makes a good template. Its API is `mizuoto/api/routers/projects.py`; its event is `projects_changed`.
+
+<Steps>
+<Step>
+
+**Generate the types.** With the routes in place, run `python scripts/dev.py typegen`; `schema.d.ts` gains `/api/v1/projects` and friends and the `Project`, `ProjectInput`… models. Alias them in `api/types.ts`:
+
+```ts
+export type Project = S['Project'];
+export type ProjectInput = S['ProjectInput'];
+export type ProjectLine = S['Line-Output'];
+export type LineInput = S['Line-Input'];
+```
+
+</Step>
+<Step>
+
+**Keys and queries.** Add `projects` and `project(id)` to `api/queries/keys.ts` and create `api/queries/projects.ts`:
+
+```ts
+export const useProjects = () => useQuery({ queryKey: keys.projects, queryFn: () => unwrap(api.GET('/api/v1/projects')) });
+
+export function useProjectActions() {
+  // create, save, remove, importScript, useTake: on success, invalidate the list and set the project
+  // render, exportAudio: return a Job, put into the jobs store with the screen it came from
+  const render = useMutation({
+    mutationFn: ({ id, body }: { id: string; body: S['RenderRequest'] }) =>
+      unwrap(api.POST('/api/v1/projects/{project_id}/render', { ...path(id), body })),
+    onSuccess: (job) => jobs.upsert(job, 'projects'),
+  });
+  ...
+}
+```
+
+</Step>
+<Step>
+
+**The socket.** Handle the new event in `api/socket.ts` and list the keys the new job kinds affect in `AFFECTS`:
+
+```ts
+socket.on('projects_changed', (e) => {
+  invalidate(keys.projects);
+  for (const id of e.ids) invalidate(keys.project(id));
+});
+// AFFECTS: project_render: [keys.projects], project_export: [keys.outputs]
+```
+
+Add `keys.projects` to the lists invalidated on reconnect.
+
+</Step>
+<Step>
+
+**The views.** `views/ProjectsView.vue` is the list: `useProjects()`, `EmptyState`, a grid of `AppCard`s and `NewProjectDialog`. `views/ProjectView.vue` is the detail page, taking the route's `id` as a prop: edits live in a local draft saved with `PUT` 800 ms after typing stops, and on `onDeactivated` and `onBeforeUnmount`; a running render is found in the jobs store by `kind` and `request.project` and shown with `JobCard`; the main actions sit in `PageFooter`. "Try in Speak" on a line hands the request to Speak through `handoff.sendRequest()`. Components come from `@/ui` only; styles use tokens only.
+
+</Step>
+<Step>
+
+**The routes.** Add them to `router.ts` with `meta.screen` naming the destination; if it can be the remembered last screen, add it to `SCREENS`:
+
+```ts
+{ path: '/projects', name: 'projects', component: () => import('@/views/ProjectsView.vue'), meta: { screen: 'projects' } },
+{ path: '/projects/:id', name: 'project', component: () => import('@/views/ProjectView.vue'), props: true, meta: { screen: 'projects' } },
+```
+
+</Step>
+<Step>
+
+**Navigation and keep-alive.** Add an entry to `nav` in `App.vue` (the icon first goes into `ui/icons.ts`); add the detail prefix to `viewKey` when each item needs its own instance, and the screen to the `lastScreen` watcher when it should be remembered:
+
+```ts
+{ to: addressOf('projects'), label: t('nav.projects'), icon: icons.BookOpen },
+```
+
+</Step>
+<Step>
+
+**Text and tests.** Add `nav.projects` and `projects.*` to `en.ts` and `zh-CN.ts`; rows that may hold a long name get `min-width: 0` (listed in `layout.test.ts` where it matters). Run `python scripts/dev.py test-web` (vitest and `vue-tsc`).
+
+</Step>
+</Steps>
+
+How tests are written and what CI runs is in [Testing](/docs/development-testing).

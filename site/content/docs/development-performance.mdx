@@ -1,0 +1,250 @@
+---
+title: "性能记录"
+description: "在结果不变的规则下怎样测量 Mizuoto 的速度（perf.py、train_perf.py），每次测量的条件，以及每一轮工作改了什么：CPU 上的几轮、注意力分发器、各引擎的 CUDA Graph 和 torch.compile。"
+icon: Timer
+---
+
+推理和训练代码的提速工作遵循一条规则：**结果不变**。这里记录的每项优化，在 CPU 上（引擎与上游的一致性就是在 CPU 上确立的）都与之前的代码给出逐样本相同的音频，以及逐位相同的损失和保存的权重。在 GPU 上，“相同”指在同一块 GPU、同一驱动、同一 torch 和同一设置下与之前的代码完全相同。改变运算的提速是需要主动开启的功能，见[加速](/docs/development-acceleration)；面向用户的设置见[性能与加速](/docs/advanced-performance)。
+
+## 怎样测量
+
+| 工具 | 作用 |
+| --- | --- |
+| `scripts/parity/perf.py run <cases.jsonl>… --name NAME [--only ID] [--repeat N] [--device D] [--setting k=v] [--reference NAME] [--profile] [--torch-profile]` | 在一个进程中让一致性用例经过整个系统，每个运行 `--repeat` 次（3 次）：第一次加载模型并准备音色，其余为预热后的运行。记录墙钟时间、加载、首块音频、引擎总时间、实时率，以及每个阶段（`ctx.use` / `ctx.run`，不含嵌套阶段，另有阶段之外的时间）内的时间。逐样本比较各次运行之间的音频，以及与 `--reference` 的音频：该名称的一次早先运行，否则为用例的一致性基准文件 |
+| `perf.py compare --a NAME --b NAME [--report out.md]`、`perf.py show NAME` | 两轮的预热运行对照，加速比，以及变化最大的阶段 |
+| `scripts/parity/train_perf.py run <engine> --fixture F --name NAME [--reference NAME] [--profile]`、`compare` | 按一致性基准的配方经过整个系统做一次微调，每个阶段都像实际使用时一样是子进程：每个阶段的时间、每步时间、每个指标，以及导出写出的每个权重文件的 SHA-256，并与早先的运行比较 |
+
+- `--profile` 在 cProfile 下多跑一次不计入的运行（`train_perf.py` 则在进程内运行各阶段）；`--torch-profile` 按自身耗时列出算子。
+- 记录写到 `MIZUOTO_PERF_DIR`（默认 `~/code_workspace/experiment/perf`），每个用例每轮一个 JSON 文件。
+- 预热时间取最快的预热运行：机器上的其他工作只会让运行变慢。重要的比较都交错进行，两份代码在各自的进程里先后运行。
+
+<Steps>
+<Step>
+
+冻结要测量的代码（在该提交上建一个工作树），运行基线：对用例集运行 `perf.py run`，对每个训练器运行 `train_perf.py run`。
+
+</Step>
+<Step>
+
+用 `--profile`、`--torch-profile` 找出时间花在哪里；涉及内核层面的改动，先写一个微基准，并在引擎实际用到的形状上用 `torch.equal` 检查该运算的输出。
+
+</Step>
+<Step>
+
+以基线为 `--reference` 运行改动后的代码：每个用例的音频都必须完全相同，每次微调的指标和权重哈希都必须完全相同。然后对代码有改动的引擎运行一致性验证，并运行测试套件。
+
+</Step>
+<Step>
+
+用 `perf.py compare` 生成表格，并把这一轮记在这里。
+
+</Step>
+</Steps>
+
+推理用例集共 13 个：Qwen3-TTS `base-clone-en` 与 `cv-en-aiden`，F5-TTS `clone-en`，OmniVoice `clone-en`，CosyVoice `v2-clone-en` 与 `v3-clone-en`，GPT-SoVITS `v2-clone-zh` 与 `v4-clone-zh`，Fish Speech `clone-en`，IndexTTS `v2-clone-en` 与 `v15-clone-en`，VoxCPM `v2-clone-en` 与 `v15-clone-en`。训练用例集是每个训练器在一个 11 段音频的数据集上做一次微调。
+
+## 测量条件
+
+- **CPU**：AMD Ryzen 9 5900X（12 核；torch 用 12 个线程），125 GB 内存，torch 2.8.0（MKL 2024.2、oneDNN 3.7.1），Python 3.11；fp32，VoxCPM 除外（bf16，其上游默认值）。机器上的其他工作约占 9 % 的线程；计算线程被抢占的运行会停顿，所以单次运行的波动可达 ±10 %。
+- **GPU**：两块 RTX 3090（24 GB），**与另一项工作共用**，它在每块卡上占约 21 GB 显存并让两块卡都保持 100 % 繁忙。下面所有 GPU 数字都因共用而偏大；比较都在同一块 GPU、同一 torch 上交错进行。放不进剩余显存的模型只测量其解码循环：真实尺寸、随机权重、只取少数几层，用到这种方式的地方都会注明。
+
+## CPU 上时间花在哪里
+
+CPU 优化之前的预热请求：
+
+| 引擎、用例 | 音频（秒） | 预热（秒） | 各阶段（秒） |
+| --- | --- | --- | --- |
+| Qwen3-TTS base-clone-en | 5.44 | 34.25 | talker 30.2，codec decoder 4.0 |
+| Qwen3-TTS cv-en-aiden | 3.76 | 20.72 | talker 19.9，codec decoder 0.9 |
+| F5-TTS clone-en | 4.74 | 69.75 | transformer 69.7 |
+| OmniVoice clone-en | 4.82 | 32.48 | language model 32.3 |
+| CosyVoice v2-clone-en | 6.84 | 18.67 | language model 12.1，flow 6.5 |
+| CosyVoice v3-clone-en | 4.52 | 16.71 | flow 9.6，language model 7.1 |
+| GPT-SoVITS v2-clone-zh | 7.34 | 4.42 | gpt 3.4，sovits 0.9 |
+| GPT-SoVITS v4-clone-zh | 3.96 | 31.45 | sovits（CFM + 声码器）29.6，gpt 1.8 |
+| Fish Speech clone-en | 4.32 | 110.55 | language model 107.3，codec 3.3 |
+| IndexTTS v2-clone-en | 5.17 | 57.20 | gpt 39.3，s2mel 15.2，bigvgan 2.6 |
+| IndexTTS v15-clone-en | 3.71 | 45.89 | gpt 44.2，bigvgan 1.7 |
+| VoxCPM v2-clone-en | 6.72 | 76.91 | language model 75.6，vae 1.3 |
+| VoxCPM v15-clone-en | 5.60 | 21.82 | language model 20.7，vae 1.1 |
+
+- **矩阵乘法占主导**（`F.linear`/`addmm`：50–90 % 的时间）。自回归语言模型对着 fp32 权重一次生成一个 token，受内存带宽限制（Qwen3-TTS 的 1.7B talker 每帧以约 36 GB/s 读取约 6.8 GB）。更快的内核、更低的精度或其他线程数都会改变求和结果。
+- **VoxCPM 2 的 77 秒中有 40 秒花在注意力上**：每一步都在掩码下对整个 8192 个位置的静态缓存做注意力，而实际只填了几百个位置。
+- **内存分配**：每层都要分配和释放几到几十 MB 的张量，按 glibc 默认设置每次都重新映射，并由内核清零页面。
+
+## CPU 第一轮：CPU 设置与精确的清理
+
+| 改动 | 为什么结果不变 |
+| --- | --- |
+| `compute.cpu_allocator` 和 `compute.cpu_threads`（[加速](/docs/development-acceleration#cpu-设置)） | 改变的是内存从哪里来、线程在哪里运行，而不是计算什么；线程数相同，工作的切分方式就相同 |
+| VoxCPM 只对缓存中当前长度之后下一个 256 的倍数以内的位置做注意力（保留掩码），而不是全部 8192 个位置 | 被掩码的位置加上的是精确的零，且在任何 64 的倍数处截断时 SDPA 给出逐位相同的结果（长度直到 3100，bf16 与 fp32，批大小 1 与 2） |
+| DiT 的旋转位置编码：每次前向只算一次 cos 和 sin，不再乘以 1，不再拼接空尾部（F5-TTS、CosyVoice 3、GPT-SoVITS v4/v5） | 数值相同 |
+| CosyVoice 的 flow U-Net 每次前向只构造一次按头的掩码，而不是在 56 个块中各构造一次 | 同一个张量 |
+| IndexTTS：GPT-2 的 GELU 原地计算；跳过保留所有行的 beam 重排 | 同样的运算、同样的顺序 |
+
+推理，预热请求（秒），每个用例都与之前完全相同：
+
+| 引擎、用例 | 之前 → 之后 | 加速比 |
+| --- | --- | --- |
+| VoxCPM v2-clone-en | 75.34 → 36.28 | ×2.08 |
+| F5-TTS clone-en | 68.14 → 41.22 | ×1.65 |
+| VoxCPM v15-clone-en | 21.42 → 14.40 | ×1.49 |
+| CosyVoice v2-clone-en | 18.55 → 14.70 | ×1.26 |
+| CosyVoice v3-clone-en | 16.66 → 13.58 | ×1.23 |
+| IndexTTS v2-clone-en | 52.07 → 43.97 | ×1.18 |
+| Qwen3-TTS cv-en-aiden | 20.71 → 18.08 | ×1.15 |
+| Qwen3-TTS base-clone-en | 34.22 → 30.63 | ×1.12 |
+| Fish Speech clone-en | 110.43 → 98.36 | ×1.12 |
+| GPT-SoVITS v4-clone-zh | 29.24 → 26.38 | ×1.11 |
+| IndexTTS v15-clone-en | 40.12 → 36.65 | ×1.09 |
+| OmniVoice clone-en | 28.73 → 27.92 | ×1.03 |
+| GPT-SoVITS v2-clone-zh | 4.32 → 4.44 | 在波动范围内 |
+
+训练，每个训练器一次微调（秒），指标和权重张量完全相同（训练阶段通过环境变量得到 CPU 设置）：
+
+| 引擎、配方 | 运行之前 → 之后 | 加速比 |
+| --- | --- | --- |
+| F5-TTS full，1 个 epoch | 34.8 → 28.8 | ×1.21 |
+| CosyVoice 2 llm，2 个 epoch | 98.5 → 82.9 | ×1.19 |
+| Fish Speech S2 Pro LoRA，2 步 | 207.4 → 175.9 | ×1.18 |
+| Qwen3-TTS 1.7B speaker，1 个 epoch | 121.2 → 103.4 | ×1.17 |
+| VoxCPM 0.5B LoRA，3 步 | 29.8 → 26.4 | ×1.13 |
+| GPT-SoVITS v2Pro speaker，1 + 1 个 epoch | 246.0 → 227.3 | ×1.08 |
+| OmniVoice LoRA，3 步 | 39.8 → 36.9 | ×1.08 |
+
+**CPU 设置是怎样选定的。** 每种配置都在相互交错的独立进程中运行。同时固定 `mmap` 阈值并保留空闲堆内存对 F5-TTS 有帮助（预热中位数 64.0–68.6 秒 → 53.7–60.9 秒）；只改其中一项反而更慢；glibc 的 `hugetlb` 和 tcmalloc 都不比 torch 自己的大页更好。OmniVoice 看起来每个进程呈双峰（约 28 秒或 38 秒，与分配器无关）：原因是线程放置。默认放置的六个进程中有一个跑出 38.5 秒；线程绑定到核心的六个进程中没有一个这样（27.6–28.3 秒）。
+
+## CPU 第二轮：训练
+
+对微调做性能剖析，结果显示：与其他地方一样主要是反向传播和矩阵乘法，此外是 AdamW 逐张量的循环、dropout 掩码，以及 Fish Speech 在 123 秒的训练阶段中花 41 秒重放约 180 亿次 32 位随机数抽取，只为把进程级生成器推进到上游开始训练时所处的状态。
+
+| 改动 | 为什么结果不变 |
+| --- | --- |
+| 跳跃式推进生成器而不是逐个抽取：在 GF(2) 中计算 MT19937 抽取 *n* 次后的状态（`mizuoto/training/rng.py`），204 次跳跃用 2.3 秒，而不是抽取的 41–52 秒 | 状态与逐个抽取逐字节相同（从 1 次到 2·10⁹ 次抽取都测试过） |
+| Fish Speech 合并 LoRA 时每个基座权重只做一份 float32 拷贝，而不是两份 | 数值相同 |
+| 不求梯度时 Fish Speech 编解码器的 `snake` 原地计算 | 同样的运算、同样的顺序 |
+
+Fish Speech S2 Pro LoRA（2 步）：CPU 优化前 207.4 秒，第一轮后 172–173 秒，第二轮后 128.5–130.6 秒（训练阶段 146.8 → 83 秒），指标和权重完全相同。它的预热请求从 110.4 秒降到 85.7 秒（编解码器 3.3 → 2.0 秒），一致性用例不变。
+
+## 注意力分发器
+
+让每次注意力调用都经过 `mizuoto.runtime.accel`（[加速](/docs/development-acceleration#注意力)）在 `auto` 下每次调用约多 1 微秒：解码规模的调用（16 个头、1 个查询、300 个键、头维度 128）多 1.11 微秒（28.8 → 30.0 微秒），小调用多 0.82 微秒。用例集中调用次数最多的请求是 7,152 次（Fish Speech），远低于其时间的 0.1 %。全部 13 个用例和全部 7 次微调都保持完全相同；预热时间在机器的波动范围内变化（Fish Speech 交错测量：之前 86.6/86.9 秒，之后 86.5/87.3 秒）。
+
+在 CPU 上设置 `compute.attention = fast` 时，每次调用都经过策略，全部由 SDPA 计算，没有回退（每个请求的调用次数：F5-TTS 704，OmniVoice 896，GPT-SoVITS v4 3,044，VoxCPM 1.5 3,928，CosyVoice 2 4,688，Qwen3-TTS 4,877，IndexTTS 2 6,667，Fish Speech 7,152）。七个引擎的音频仍完全相同；IndexTTS 2 最多相差 2 个 int16 步长（SNR 86.1 dB，长度相同），因为它的 perceiver 中手写的 softmax 改由 SDPA 计算。
+
+## GPU：不等待设备的解码，以 CUDA Graph 运行
+
+每个自回归解码器都逐个启动每步的几千个小内核，并且每步要等待设备多次（`torch.multinomial` 的检查、每步复制的掩码、读回的填充掩码、停止检查），于是 CPU 的启动时间和 GPU 的计算时间相加。现在每个解码器每步只等待一次，并在开启 `compute.cuda_graphs` 时以 CUDA Graph 重放一步的内核（[加速](/docs/development-acceleration#cuda-graphcomputecuda_graphs)）。下面每个结果都与旧代码的音频或 token 相同；每个引擎在 CPU 上的一致性用例都保持完全相同。全部在上文所述的共用 GPU 上测量。
+
+### Qwen3-TTS
+
+按 1.7B 模型尺寸、随机权重、28 层 talker 中取 4 或 8 层、100 帧、批大小 1 的解码循环（1.7B 模型放不进剩余显存）；每帧毫秒数，两轮交错中最快的预热运行：
+
+| torch | 配置 | 4 层 | 8 层 |
+| --- | --- | --- | --- |
+| 2.8.0+cu128 | 之前 | 66.8 | 70.1 |
+| | 关闭图 | 47.7 | 50.7 |
+| | **默认** | **24.6** | **25.4** |
+| | qwen-tts-webui 默认（图、合并投影） | 23.3 | 24.5 |
+| | qwen-tts-webui，图，不合并 | 28.6 | 29.7 |
+| 2.10.0+cu130 | 之前 | 67.4 | 71.5 |
+| | 关闭图 | 39.3 | 40.3 |
+| | **默认** | **20.9** | **20.9** |
+| | qwen-tts-webui 默认 | 18.4 | 19.9 |
+
+快 ×2.7–3.4，与 qwen-tts-webui 的合并路径相差 5–13 %。每帧（4 层）Mizuoto 启动 2,519 个内核，qwen-tts-webui 启动 2,121 个；差别在于合并投影（588 个 GEMM 对 327 个）以及缓存是拼接增长而不是写入缓冲区，这两者在 CUDA 上都会改变结果的二进制位。
+
+**合并投影**（`fused_projections`，需主动开启），4 / 8 层下每帧毫秒数：
+
+| torch | 精确 | 合并 | qwen-tts-webui |
+| --- | --- | --- | --- |
+| 2.8.0+cu128 | 24.6 / 25.5 | 23.7 / 24.6 | 24.1 / 24.5 |
+| 2.10.0+cu130 | 20.0 / 20.8 | 19.2 / 20.0 | 17.9 / 19.9 |
+
+快 3–4 %，在共用 GPU 的波动范围内（两轮之间 ±1 毫秒）与 qwen-tts-webui 持平。
+
+### Fish Speech
+
+带真实快速 transformer、36 个慢速层中取 2 或 4 层、随机权重、60 帧的解码循环（11 GB 的 S2 Pro 放不进）；每帧毫秒数，torch 2.8：
+
+| 代码 | 2 个慢速层 | 4 个慢速层 |
+| --- | --- | --- |
+| 之前 | 93.8 | 96.8 |
+| 关闭图 | 43.4 | 44.3 |
+| **默认** | **38.9** | **38.1** |
+
+大部分收益来自去掉等待（×2.2）；在满载的 GPU 上图再快约 10 %，此时每帧读取快速 transformer 的权重（约 4 GB）限制了速度。每个慢速层每帧的开销从约 1.5 毫秒降到 0.45 毫秒。
+
+### CosyVoice 2/3
+
+真实的 CosyVoice 2 语言模型（2 GB，放得下），150 个 token，每个 token 毫秒数：
+
+| 代码 | 第 1 轮 | 第 2 轮 |
+| --- | --- | --- |
+| 之前 | 69.6 | 70.7 |
+| 关闭图 | 14.3 | 14.1 |
+| **默认** | **9.9** | **10.3** |
+
+约 ×7：一个 token 对应 40 毫秒音频，所以语言模型从比实时慢 1.7 倍变成比实时快 4 倍。三个种子（每个约 400 个 token，直到 EOS）在开关图时 token 都相同。
+
+### VoxCPM
+
+真实权重上的完整请求（含 VAE），6.4–6.9 秒音频，三次预热请求中最快的一次，torch 2.8：
+
+| 模型 | 之前 | 关闭图 | **默认** |
+| --- | --- | --- | --- |
+| 0.5B | 4.49 秒（RTF 0.65） | 4.32 秒 | **2.36 秒（RTF 0.34）** |
+| 1.5 | 3.00 秒（RTF 0.47） | 2.95 秒 | **1.87 秒（RTF 0.29）** |
+
+×1.9 和 ×1.6。在 CUDA 上，进程中第一个 VoxCPM 请求解码其（相同的）潜变量时得到的二进制位与之后的请求不同（VAE）；之后的请求完全相同，之前的代码也是如此，所以比较从一次丢弃的请求之后开始。
+
+### GPT-SoVITS
+
+在 GPU 上经过整个系统（`perf.py --device cuda:0`），最快的预热运行：
+
+| 用例 | 之前 | 关闭图 | **默认** | 加速比 |
+| --- | --- | --- | --- | --- |
+| v2-clone-zh | 1.61 秒 | 1.26 秒 | **0.89 秒** | ×1.81 |
+| v2-batch-cut5-zh | 3.72 秒 | 2.90 秒 | **2.29 秒** | ×1.62 |
+| v2pro-serial-en | 1.78 秒 | 1.35 秒 | **0.89 秒** | ×2.00 |
+| v4-batch-cut5-zh | 4.05 秒 | 3.58 秒 | **3.14 秒** | ×1.29 |
+
+v4 收益最小：它的 flow 和声码器占主导，而且在拥挤的 GPU 上，模型管理器在两次请求之间为它们把 GPT 移出设备，因此每个请求都要重新捕获 GPT 的图。直接调用 `capture_begin`/`capture_end` 而不是 `torch.cuda.graph`（后者在 25 次捕获的每一次都运行 `gc.collect()` 和 `empty_cache()`），才使 v4 没有因此变慢。
+
+### IndexTTS
+
+真实模型在剩余显存中放不下整个，所以经过整个系统时权重是流式加载的，图不会启用：仅去掉等待就让 v1.5 从 10.25 降到 9.59 秒，v2 从 36.3 降到 33.4 秒（×1.07–1.09），音频相同。按 1.5 GPT 尺寸、24 层中取 4 或 8 层、随机权重、fp16、3 个 beam、120 步的解码循环；每步毫秒数：
+
+| 代码 | 4 层 | 8 层 |
+| --- | --- | --- |
+| 之前 | 15.5 | 19.2 |
+| 关闭图 | 6.0 | 8.6 |
+| **默认** | **5.9** | **5.95** |
+
+×2.6–3.2；即时执行每层约 0.65 毫秒，图几乎不花时间，所以完整的 24 层收益更大。
+
+### 在 CPU 上
+
+同样的改动对 CPU 也略有帮助：Qwen3-TTS `cv-en-aiden` 17.05 → 16.76 秒，`base-clone-en` 26.19 → 25.83 秒，音频相同。
+
+## 在 CPU 上的 `torch.compile`
+
+`compute.compile`，fp32，8 线程；被编译模块预热后的耗时：
+
+| 引擎 | 模块 | 变化 |
+| --- | --- | --- |
+| F5-TTS | DiT | −23 %（整个请求 60 → 45 秒） |
+| IndexTTS | s2mel DiT / BigVGAN | −7 % / −20 % |
+| GPT-SoVITS v4 | CFM 估计器 | −7 % |
+| CosyVoice | flow 估计器 | 无（它的卷积和矩阵乘法已经是库内核） |
+| VoxCPM（bf16） | 局部 DiT | 无 |
+
+第一个请求要付出编译时间：多 30 到 160 秒。音频不完全相同（[加速](/docs/development-acceleration#torchcompilecomputecompile)）。
+
+## 因改变结果而没有采用的做法
+
+- bf16 或量化权重、其他线程数、GELU 的 tanh 近似、Fish Speech 重复头的 SDPA 分组查询路径、默认使用静态 KV 缓存。
+- 把 VoxCPM 的注意力截到恰好已填充的位置：bf16 下相同，fp32 下不同（内核的分块方式变了）；在 256 的倍数处截断两者都相同。
+- `foreach=True` 的 Adam/AdamW：对 float32 参数结果相同，但在 CPU 上更慢（100 个 2048 × 2048 张量每步 1032 毫秒对 748 毫秒；Qwen3-TTS 训练 ×0.92）。`fused=True` 的 AdamW：结果不同。
+- GPT-SoVITS 判别器在一步内缓存权重归一化：梯度会以另一种顺序求和。
+- Qwen3-TTS 在 CUDA 上：按 256 分桶并带掩码的静态缓存（另一个 SDPA 内核），以及把长文本的各段合成一批（抽样不同）。

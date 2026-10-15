@@ -1,0 +1,51 @@
+{
+ "repo": "fishaudio/s2-pro",
+ "revision": "1de9996b6be38b745688de084d87a5633f714e4e",
+ "files": [
+  {
+   "path": "chat_template.jinja",
+   "size": 4116,
+   "sha256": "87a2728cb8dc9fe424d624542f6060ec05a1d285ebbec578bb078900e33396b5"
+  },
+  {
+   "path": "codec.pth",
+   "size": 1871099728,
+   "sha256": "74fc41c5a7151c6f350af8bd7e5d6e3accfcc7f3dfbfac23afd35af07052bb2f"
+  },
+  {
+   "path": "config.json",
+   "size": 1863,
+   "sha256": "261b519a2a9576710fc8533a77297fae007f0e7b3aa28a217f8352b7f32fe993"
+  },
+  {
+   "path": "model-00001-of-00002.safetensors",
+   "size": 4986872984,
+   "sha256": "c4218e8ac93be83b35eee30b4f94cb2e9b5ecff40f3e21611438d2f4f8804aad"
+  },
+  {
+   "path": "model-00002-of-00002.safetensors",
+   "size": 4136876104,
+   "sha256": "76738d23465deaac431433232c0762908cc99a6eddc3d49f67307d92680827be"
+  },
+  {
+   "path": "model.safetensors.index.json",
+   "size": 32686,
+   "sha256": "c8cb9974d3d17663a95dba1d6c3ea531fc42d377c0dff946f3a01a0ec48d45a3"
+  },
+  {
+   "path": "special_tokens_map.json",
+   "size": 101864,
+   "sha256": "c2ff18fde6e43b7408435bc8ed079af74531befba549358a97cbc59ce606bc6b"
+  },
+  {
+   "path": "tokenizer.json",
+   "size": 12217872,
+   "sha256": "f24e08099d45a8adf3f52f5f0b03276e433bb9d689bb15fcbcc48ce58744588b"
+  },
+  {
+   "path": "tokenizer_config.json",
+   "size": 860832,
+   "sha256": "b8d149343ae425b0da67e6708686aceb51be7815d9792f265fc12ff04d5e9856"
+  }
+ ]
+}

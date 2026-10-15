@@ -1,0 +1,5 @@
+{
+  "en-narrator": {"voice": "narrator", "note": "designed by Qwen3-TTS VoiceDesign (seed 3), 7.1 s"},
+  "en-vivian": {"voice": "vivian-clip", "note": "Qwen3-TTS CustomVoice, 4.8 s; ASR transcript", "transcript": "Hello, this is Kodama speaking with Qwen3TTS."},
+  "zh-serena": {"fixture": "qwen3tts/ref-zh-serena/reference.wav", "transcript": "春天的早晨，阳光洒在湖面上，微风吹过，带来淡淡的花香。", "language": "zh", "note": "made by the reference stack from case ref-zh-serena"}
+}

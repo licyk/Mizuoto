@@ -1,0 +1,186 @@
+---
+title: "发布"
+description: "Mizuoto 的依赖及其理由、支持的平台，以及发行包怎样构建和检查：版本同步、wheel、冒烟测试、CI 与发布工作流、Docker 镜像、模型镜像和本文档站。"
+icon: Package
+---
+
+一次发布产出三个发行包：`mizuoto`（wheel 和 sdist，内含构建好的 Web UI，以及所有采用宽松许可证的引擎），以及两个需要接受许可的引擎的 wheel：`mizuoto-fishspeech` 和 `mizuoto-indextts`。三者都装进同一个环境，装在用户自选的 torch 之上。本页讲它们怎样构建和检查。Mizuoto 还没有发布到 PyPI：wheel 来自 `scripts/build_wheels.py`（`dist/`）或发布工作流的产物，发布是维护者的步骤。
+
+## 依赖
+
+Mizuoto 是一个环境：核心、API、命令行、Web UI 和每个引擎的依赖都写在 `pyproject.toml` 里，一次安装。每个新依赖都要回答：它在 CI 覆盖的每个平台（Linux x86_64、Windows x86_64、macOS arm64，CPython 3.10–3.13）上有没有 wheel，它会不会改变结果，它会不会改动进程级状态。
+
+### 必需的依赖
+
+| 用途 | 包 | 说明 |
+| --- | --- | --- |
+| Web 与命令行 | fastapi（≥ 0.115.3）、starlette（≥ 0.40）、uvicorn、websockets、python-socketio、pydantic 2、httpx、typer（&lt; 0.28）、rich、tomli-w、tomli（Python &lt; 3.11）、send2trash | Starlette 0.40 起 `FileResponse` 支持 Range，播放器可以拖动；uvicorn 要有 websockets 才能处理 WebSocket；typer 锁上限，因为命令行用到它的私有模块 |
+| 音频 | av（PyAV）、numpy | 解码、编码、重采样都用 PyAV，其余用 numpy；不调用 ffmpeg 或 sox 程序 |
+| 运行时 | torch（≥ 2.8）、safetensors、soxr、tokenizers | torch 的构建由用户选（见下）；soxr 是 librosa 调用的同一个重采样器；tokenizers 构建与 transformers 相同的 BPE |
+| 文本 | pypinyin、rjieba、jieba、opencc、kaldifst、inflect、tiktoken、regex、wordsegment、budoux、ToJyutping、fasttext-predict、pyyaml | 很多版本是**锁定**的（如 `pypinyin==0.55.0`、`opencc==1.4.2`、`inflect==7.3.1`）：引擎的输出依赖这些版本，换版本会改变音素和音频 |
+
+需要接受许可的包各自带少量依赖：`mizuoto-fishspeech` 需要 tokenizers 和 safetensors，`mizuoto-indextts` 需要 sentencepiece。
+
+### 可选附加依赖
+
+| 附加依赖 | 包 | 作用 |
+| --- | --- | --- |
+| `mizuoto[gptsovits-ja]` | `pyopenjtalk==0.4.1` | GPT-SoVITS 的日语前端；只发布源码包，安装时需要 CMake 和 C++ 编译器 |
+| `mizuoto[gptsovits-ko]` | `python-mecab-ko==1.3.7`、`jamo==0.4.1` | GPT-SoVITS 的韩语前端 |
+| `mizuoto-indextts[ja]` | fugashi、unidic-lite | IndexTTS-2.5 的日语分词 |
+
+缺少附加依赖时，相应语言的文本以 `capability_not_supported` 失败，提示里带安装命令；`mizuoto doctor` 也会列出各引擎缺哪些附加依赖。可选的注意力加速包（flash-attn、xFormers、SageAttention）不是附加依赖：它们要与用户的 torch 版本匹配，`mizuoto doctor` 给出保留现有 torch 的安装命令（`--no-deps`），见[注意力加速](/docs/development-acceleration)。
+
+### 不再需要的依赖
+
+每个引擎都在仓库内移植，下面这些上游依赖都不再需要：
+
+| 不再需要 | 由什么代替 |
+| --- | --- |
+| vLLM、TensorRT / TensorRT-LLM、FlashInfer、必需的 flash-attn | 自回归解码的同步消除与 CUDA 图、可选的 `torch.compile`、SDPA 与可选的注意力后端 |
+| transformers（多个互不兼容的版本）、accelerate、huggingface_hub、peft、loralib | 仓库内的模块（Qwen 解码器、GPT-2、BERT、HuBERT、w2v-BERT、Whisper……）、`tokenizers`、仓库内的 LoRA |
+| onnxruntime | ONNX 文件里的权重由仓库内的协议缓冲区读取器（`runtime/convert/onnx.py`）转换成 torch 模块，转换结果缓存在模型文件夹的 `.mizuoto/` 下 |
+| openai-whisper、faster-whisper（CTranslate2） | 仓库内的 Whisper、log-mel 与 `tiktoken` 词表（随包发布） |
+| torchaudio、librosa、numba、resampy、scipy | `mizuoto.nn.dsp`，与这些库逐比特一致；soxr |
+| descript-audiotools、descript-audio-codec | `mizuoto/nn/codecs/dac.py` |
+| pynini、WeTextProcessing、wetext、modelscope | kaldifst 加上导出好的 FST（共享资源，或随包发布） |
+| jieba_fast、g2p_en、nltk（以及它运行时下载的数据） | jieba；移植的 GRU 与词性标注器，数据随包发布 |
+| hyperpyyaml、omegaconf、hydra | 当作数据读取的 YAML 与 dataclass 配置 |
+| x-transformers、diffusers、conformer、Matcha-TTS、vocos、torchdiffeq、einops、ema-pytorch | 仓库内的代码 |
+| Lightning、torchmetrics、datasets、webdataset、wandb、tensorboard、pyarrow、pyworld、deepspeed | 原生训练器 |
+| pydub（及 Python 3.13 已移除的 audioop） | 保留整数语义的 numpy 移植 |
+| sox、ffmpeg 程序、soundfile | PyAV；`nn/dsp` 里的 WAV、FLAC 读写和 libswresample 重采样器的移植 |
+
+### torch 与平台
+
+torch 是依赖，但它的构建由用户先装：从 download.pytorch.org 与本机匹配的索引安装（CUDA、ROCm、XPU 或 CPU；Apple 芯片上 PyPI 的 wheel 带 MPS），再装 Mizuoto，安装 Mizuoto 不会替换它。`mizuoto/core/compute/torch_index.py` 知道 torch ≥ 2.8 发布了哪些构建（CUDA cu126–cu132、ROCm 6.4–7.2、XPU、CPU），选出驱动能运行的最新 CUDA 构建，否则 ROCm、XPU、MPS 或 CPU；`mizuoto doctor` 在已装的构建与硬件不符时打印安装命令。
+
+| 设备 | 平台 |
+| --- | --- |
+| NVIDIA（CUDA） | Linux、Windows |
+| AMD（ROCm，torch 里也叫 `cuda`） | Linux |
+| Intel（XPU） | Linux、Windows |
+| Apple 芯片（MPS） | macOS arm64 |
+| CPU | 全部 |
+
+CI 在 Linux x86_64、Windows x86_64 和 macOS arm64 上，用 CPU 版 torch 测试 Python 3.10–3.13 的每个组合，并分别用 torch 2.8.0 和最新版测试。
+
+<Callout type="warn" title="ROCm、XPU 和 MPS">
+代码为这些设备准备了相应的路径（设备探测、没有 float64 的设备上把 float64 模块放在 CPU、MPS 上不编译、只在 CUDA 上用 CUDA 图和半精度），并在模拟的设备上测试过，但还没有在 AMD、Intel 或 Apple 的硬件上验证。
+</Callout>
+
+## 版本同步
+
+所有发行包都带同一个版本号（0.2.0），它出现在下面这些地方，改动时要一起改：
+
+| 文件 | 内容 |
+| --- | --- |
+| `mizuoto/version.py` | `VERSION`，`mizuoto` 的动态版本 |
+| `packages/native/fishspeech/mizuoto_fishspeech/__init__.py` | `mizuoto-fishspeech` 的 `VERSION` |
+| `packages/native/indextts/mizuoto_indextts/__init__.py` | `mizuoto-indextts` 的 `VERSION` |
+
+需要接受许可的包依赖 `mizuoto`（见它们的 `pyproject.toml`）。`tests/core/test_engines.py::test_gated_distributions_move_in_lockstep` 检查两者都带着 Mizuoto 的版本号并依赖 `mizuoto`；`scripts/build_wheels.py` 的 `check_versions()` 在构建时再检查一遍版本，不一致就失败。
+
+<Callout type="info" title="升级会改变磁盘上的什么">
+音色缓存按 Mizuoto 的版本区分，所以升级后会重建一次。某个版本不再认识的设置键会被忽略（见[整体架构](/docs/development-architecture#设置)）。主机和它的远程 agent 必须使用同一个协议版本（`AGENT_PROTOCOL`，当前为 2）：版本不同时双方在 `hello` 时互相拒绝，并提示升级。更多见[数据目录与兼容性](/docs/development-architecture#数据目录与兼容性)。
+</Callout>
+
+## Wheel：`scripts/build_wheels.py`
+
+```bash
+python scripts/dev.py wheels                       # all：mizuoto 和每个需要接受许可的引擎
+python scripts/dev.py wheels host                  # 只构建 mizuoto
+python scripts/dev.py wheels native indextts       # 指定的需要接受许可的引擎
+python scripts/build_wheels.py host --skip-web --out /wheels
+```
+
+- **host**：在 `mizuoto/webui` 中 `bun install --frozen-lockfile` 和 `bun run build`（`--skip-web` 沿用现有的 `dist/`，Docker 的 `wheels` 阶段就是这样），检查 `dist/index.html` 存在，然后用 `uv build` 构建 `mizuoto` 的 sdist，再由它构建 wheel；构建所用的是 `mizuoto/`、`pyproject.toml` 和 `README.md` 的干净副本（没有 `__pycache__`，没有残留的 `build/`）。
+- **native**：`packages/native/` 下的每个包（或指定的那些），复制时去掉 `__pycache__`、`*.egg-info`、`build` 和 `dist`，用 `uv build --wheel` 构建。
+- 默认输出到 `dist/`。脚本只用标准库加 uv 和 bun。
+
+随 wheel 发布的包数据列在 `pyproject.toml` 的 `[tool.setuptools.package-data]` 里：构建好的界面、引擎清单、模型文件清单和许可全文、F5-TTS 的词表、GPT-SoVITS 文本前端的数据、Whisper 的词表。IndexTTS 的文本规范化 FST 随 `mizuoto-indextts` 发布。
+
+## 冒烟测试：`scripts/smoke_wheels.py`
+
+```bash
+python scripts/dev.py smoke                        # 等同于 python scripts/smoke_wheels.py --dist dist
+python scripts/smoke_wheels.py --dist dist --python 3.13 --torch torch==2.8.0
+```
+
+它像用户那样试用构建出的发行包。在源码目录之外的临时文件夹里，uv 新建一个环境（`--python`，默认 3.11），先从 `--torch-index` 装 torch（默认 CPU 构建；`--torch` 指定版本，默认 `torch>=2.8`），再一次性安装本版本的 `mizuoto` wheel 和放在旁边的需要接受许可的 wheel（其他依赖来自 `--index`），这次安装不得替换已装的 torch。uv 不读取本机配置（`--no-config`，不带 `UV_*`/`PIP_*` 变量）。然后在临时数据目录里：
+
+1. `mizuoto version`、`mizuoto env vars` 和 `mizuoto doctor`：每个引擎都必须可用；
+2. 导入每个引擎的实现和训练器（`get_engine`），导入 `mizuoto` 和需要接受许可的包的每个模块，确认源码里与代码放在一起的每个数据文件都装上了（引擎运行时会读的那些还要真正读一遍）；
+3. 用 dummy 引擎执行一次 `mizuoto speak`；
+4. 服务器：`/api/v1/app/health`、界面，以及经 API 用 dummy 引擎合成一次。
+
+## CI 与发布工作流
+
+`.github/workflows/ci.yml` 在每次推送时运行测试（见[测试](/docs/development-testing#ci)）：`host` 矩阵（Ubuntu、Windows、macOS × Python 3.10–3.13，CPU 版 torch，装上需要接受许可的包）、`torch` 作业（torch 2.8.0 和最新版）、`web` 和 `site`。
+
+`.github/workflows/release.yml` 在推送 `v*` 标签或手动触发时运行：
+
+1. `build`（Ubuntu、Python 3.11、bun）：`pip install uv`，`python scripts/build_wheels.py all`；`dist/` 作为 `dist` 产物上传。
+2. `smoke`（Ubuntu，Python 3.10 和 3.13）：下载产物，运行 `smoke_wheels.py --dist dist --python <版本>`。
+
+产物里有全部 wheel，包括需要接受许可的那些；发布到哪里由发布者决定。
+
+## Docker
+
+仓库根目录的 `Dockerfile` 构建一个镜像：服务器、它的 Web UI 和所有引擎，带 GPT-SoVITS 的日语和韩语前端（`GATED=1` 时还有 IndexTTS-2.5 的日语）。模型放在 `/data` 卷里。
+
+```bash
+docker build -t mizuoto .                                   # torch 的 CUDA 12.8 构建
+docker build -t mizuoto:cpu --build-arg TORCH_INDEX=https://download.pytorch.org/whl/cpu .
+docker build -t mizuoto --build-arg GATED=1 .               # 带 Fish Speech 和 IndexTTS
+docker run --gpus all -p 7869:7869 -v mizuoto-data:/data -e MIZUOTO_SERVER__ACCESS_TOKEN=change-me mizuoto
+```
+
+| 构建参数 | 默认值 | 含义 |
+| --- | --- | --- |
+| `PYTHON` | `3.11` | wheels 阶段和镜像的基础镜像 `python:<版本>-slim` |
+| `TORCH_INDEX` | `https://download.pytorch.org/whl/cu128` | torch 的来源：CUDA（`cu126` … `cu132`）、ROCm（`rocm6.4` … `rocm7.2`）或 `cpu` 索引 |
+| `TORCH` | `torch>=2.8` | 装哪个 torch |
+| `GATED` | `0` | 设为 `1` 时同时构建并安装需要接受许可的引擎（它们的许可仍需接受） |
+
+| 阶段 | 内容 |
+| --- | --- |
+| `web` | `oven/bun:1`：`bun install --frozen-lockfile`、`bun run build` |
+| `wheels` | 带编译器和 CMake 的 `python:<PYTHON>-slim`：构建 `pyopenjtalk==0.4.1` 的 wheel（它只发布源码包）、`build_wheels.py host --skip-web`，`GATED=1` 时再 `build_wheels.py native` |
+| 镜像本身 | `python:<PYTHON>-slim`：先从 `TORCH_INDEX` 装 torch，再装 wheel 及 `mizuoto[gptsovits-ja,gptsovits-ko]`（以及 `mizuoto-indextts[ja]`），其余依赖来自 PyPI；`MIZUOTO_DATA_DIR=/data`，`/data` 卷，端口 7869，对 `/api/v1/app/health` 的健康检查 |
+
+镜像里不装任何系统包：PyAV、torch 和各文本库的原生代码都在它们的 wheel 里。镜像里没有 C 编译器，所以 `compute.compile` 以即时执行方式运行（只警告一次）。镜像的用法见 [Docker](/docs/advanced-docker)。
+
+## 模型镜像：`scripts/mirror_models.py`
+
+`downloads.repository = "mizuoto-model"` 让 Mizuoto 先从它的镜像仓库（`downloads.mirror_repo`，默认 `licyk/mizuoto-model`，Hugging Face 与 ModelScope 同名）下载，镜像缺的文件再从各模型的官方仓库补齐，所以不完整的镜像也能用。镜像里的文件按 Mizuoto 存放的方式排列：模型在 `<engine>/<model>/<path>`，共享资源在 `_assets/<engine>/<asset>/<path>`。
+
+```bash
+python scripts/mirror_models.py build OUT [id…]        # 从模型目录排出镜像
+python scripts/mirror_models.py upload OUT --repo licyk/mizuoto-model [--modelscope]
+python scripts/mirror_models.py check --repo licyk/mizuoto-model
+```
+
+- `build` 把已安装的目录模型和共享资源排到 `OUT` 下（尽量用硬链接），每个文件对照固定的大小和 SHA-256 检查（`--no-verify` 只查大小），并写出 `MIRROR.json`（每个文件的路径、大小、SHA-256 和官方来源）与 README。压缩包部分（`unpack`）解压后不保留，所以只从官方下载。需要接受许可的引擎默认不包含，除非 `--gated`。
+- `upload` 用 `hf upload-large-folder` 发布（需要 `hf auth login`），`--modelscope` 时再用 `modelscope upload`。
+- `check` 用 HEAD 请求列出已发布的镜像缺少哪些目录文件。
+
+发布镜像是镜像维护者的步骤，权重保留各自的许可。
+
+## 文档站
+
+本站在 `site/`，基于 fumadocs（TanStack Start + Vite），用 bun 构建为静态文件（`.output/public`）；`site/vercel.json` 可直接用于 Vercel 部署。
+
+```bash
+python scripts/dev.py site-install   # 在 site/ 中 bun install
+python scripts/dev.py site-dev       # 本地预览，热更新
+python scripts/dev.py site           # vite build，再运行 scripts/prepare-static-output.mjs
+python scripts/dev.py test-site      # vitest，然后 tsc --noEmit
+```
+
+CI 的 `site` 作业在 `site/` 中依次运行 `bun install --frozen-lockfile`、`bun run check`、`bun run test` 和 `bun run build`。
+
+- 页面在 `site/content/docs/`：`<slug>.mdx` 是简体中文（默认语言 `zh-CN`），`<slug>.en.mdx` 是英文，两者结构相同。侧边栏是 `meta.json` 与 `meta.en.json`，以 `---标题---` 分组。
+- 页首的 frontmatter 有 `title`、`description` 和 `icon`（Lucide 图标名）。可用的 MDX 组件见 `site/src/components/mdx.tsx`：`Cards`/`Card`、`Callout`、`Tabs`/`Tab`、`Steps`/`Step`、`Accordions`/`Accordion` 和 `Mermaid`（`chart` 属性，在浏览器中从 CDN 加载 Mermaid 渲染，随站点的明暗主题）。
+- `prepare-static-output.mjs` 确认 `meta.json` 中的每个页面都生成了 `docs/<slug>/index.html`，并把 `_shell.html` 复制为 `404.html`。
+- `src/lib/i18n-content.test.ts` 要求每个中文页面都有英文版，两个侧边栏的页面顺序一致。

@@ -1,0 +1,92 @@
+---
+title: "GPT-SoVITS"
+description: "The GPT-SoVITS engine as implemented in Mizuoto: v2, v2Pro, v2ProPlus, v4 and v5 Turbo, the text front end with its ported converters and models, the T2S model, SoVITS and the flow, what reproduces upstream exactly, GPU decoding, the speaker fine-tune that writes upstream's files, and its parity results."
+icon: MicVocal
+---
+
+Few-shot cloning and voice fine-tuning ([RVC-Boss/GPT-SoVITS](https://github.com/RVC-Boss/GPT-SoVITS), MIT). Code: `mizuoto/engines/gptsovits`. On the CPU in fp32 with the same seed it is identical to Mizuoto 0.1 (upstream's `TTS_infer_pack.TTS` behind its adapter) in all 15 parity cases, and its trainer writes upstream's preparation files and weights identically. User-facing details: [Engines in depth](/docs/advanced-engines#gpt-sovits).
+
+## Variants and files
+
+| Variant | Catalogue model | Rate | Second stage |
+| --- | --- | --- | --- |
+| `v2` | `gptsovits/v2-base` | 32 kHz | SoVITS: a VITS decoder (coupling flow, HiFi-GAN) |
+| `v2pro` | `gptsovits/v2pro-base` | 32 kHz | as v2, plus a speaker-verification embedding (ERes2NetV2) |
+| `v2proplus` | `gptsovits/v2proplus-base` | 32 kHz | a larger v2Pro SoVITS |
+| `v4` | `gptsovits/v4-base` | 48 kHz | `SynthesizerTrnV3`, a CFM with a DiT, a 48 kHz HiFi-GAN vocoder |
+| `v5turbo` | `gptsovits/v5turbo-base` | 48 kHz | as v4 with `CFMV5` in four steps |
+
+The variant comes from the base GPT and SoVITS pair in the model folder, laid out as upstream lays it out: `gsv-v2final-pretrained/…`, `s1v3.ckpt`, `v2Pro/s2Gv2Pro.pth` / `s2Gv2ProPlus.pth`, `gsv-v4-pretrained/{s2Gv4,vocoder}.pth`, `gsv-v5-pretrained/{s2Gv5turbo,vocoder}.pth`. A voice's own weights (`Voice.weights["gptsovits"]`: a GPT `.ckpt` and a SoVITS `.pth`, version read from the file) replace the base pair for that voice.
+
+Shared assets: `gptsovits/encoders` (chinese-hubert-base, chinese-roberta-wwm-ext-large, the speaker-verification checkpoint), `gptsovits/g2pw`, `gptsovits/nltk-data`, `gptsovits/open-jtalk`; for training v2, v2Pro and v2ProPlus also the pretrained discriminators `gptsovits/s2d-v2`, `s2d-v2pro`, `s2d-v2proplus`.
+
+Precision: fp16 on a CUDA GPU when `engines.gptsovits.dtype` is `auto` or `fp16`, fp32 otherwise.
+
+## How it works
+
+1. **Text front end**: language segmentation, then each language's grapheme-to-phoneme conversion into phone ids; Chinese also gets BERT features (chinese-roberta's third-last layer, repeated per phone).
+2. **Reference**: the clip at 16 kHz with 0.3 s of silence appended; HuBERT's features quantised by SoVITS into the prompt's semantic tokens; the linear spectrogram for the style encoder; for v2Pro the speaker-verification embedding. v4/v5 also take the mel of the last clip read at 32 kHz as the flow's prompt.
+3. **GPT (T2S)**: a 24-layer autoregressive transformer predicts 25 Hz semantic tokens from the prompt's phones and tokens plus the target's phones, batched with left padding, or row by row when streaming.
+4. **SoVITS** (v2 family) decodes tokens, phones and the style into 32 kHz audio; v4/v5 make a mel with the flow, then the vocoder makes 48 kHz audio.
+5. **Post-processing**: each fragment limited to a peak of 1, followed by the fragment pause, and the whole truncated to 16 bits.
+
+| Module | What it is |
+| --- | --- |
+| `engine.py` | `TTS.run` as 0.1's adapter drove it: reference, text, length buckets, T2S, SoVITS or flow and vocoder, fragments, streaming |
+| `audio.py` | Reference reading; resampling with torchaudio's kernel or upstream's port of resampy's `kaiser_best` |
+| `checkpoints.py` | `.pth` reading (the version tag written over the zip magic, the MD5 and size rules), a restricted unpickler for `HParams` |
+| `t2s.py` | The text-to-semantic model: batched and row-by-row decoding, upstream's sampler |
+| `sovits.py` | `SynthesizerTrn` decoding for v2/v2Pro/v2ProPlus (the posterior encoder `enc_q` is not built) |
+| `sovits_v3.py` | `SynthesizerTrnV3`, `CFM`/`CFMV5`, GPT-SoVITS's DiT variant, the vocoder paths, LoRA merging |
+| `vocoder.py`, `sv.py` | The v4/v5 48 kHz HiFi-GAN; the ERes2NetV2 speaker-verification embedding |
+| `text/` | The front end: `frontend.py` (cleaner, `TextPreprocessor`), segmentation, language detection (split-lang, fast-langdetect), Chinese (tone sandhi, normalisation, G2PW), English (normalisation, tagger, g2p_en), Japanese, Korean (g2pk2), Cantonese, symbols and data |
+| `train.py`, `train_s1.py`, `train_s2.py`, `s2_modules.py`, `s2_lora.py` | `GptSovitsTrainer` (method `speaker`) |
+
+Shared: `nn/ssl/hubert.py`, `nn/transformer/` (`bert`, `vits`, `dit`), `nn/flow/coupling.py`, `nn/speaker/melstyle.py`, `nn/vocoders/hifigan.py`, `nn/dsp/` (`kaldi`, `mel`, `resample`, `swresample`, `wav`, `flac`), `runtime/convert/onnx.py` (G2PW), `runtime/graphs.py`, `runtime/compile.py`.
+
+## What reproduces upstream
+
+- **Draws.** One generator, reseeded per segment, draws the T2S sampling and then the SoVITS (or flow) noise, as upstream's `set_seed` and the global stream did. Preparing the reference draws nothing (HuBERT's layer drop is not replayed; 0.1 prepared the reference before seeding for the same reason).
+- **Pauses and output.** The pause after each fragment is counted at 32 kHz whatever the output rate, and the audio is truncated to 16 bits (`(x × 32768).astype(int16)`), as upstream returns it.
+- **The text front end owns everything it uses**, built from asset paths: no `nltk.data.path`, fastText globals or `logging.basicConfig`.
+  - jieba replaces jieba_fast (the same dictionary; identical on 20 446 texts);
+  - OpenCC is the C++ `opencc==1.4.2` (the pure-Python port differs on 321 of 182 814 conversions, which feed G2PW);
+  - G2PW runs in torch from its ONNX weights (identical pinyin);
+  - NLTK's tagger and tokenizer, g2p_en, g2pk2, split-lang and fast-langdetect are ported, their data shipped;
+  - Japanese needs `pyopenjtalk==0.4.1` (extra `mizuoto[gptsovits-ja]`): pyopenjtalk-plus changes OpenJTalk's rules, and 18 % of Japanese sentences came out differently with it. Korean needs MeCab-ko and jamo (extra `mizuoto[gptsovits-ko]`). The Japanese user dictionary is compiled once into the `gptsovits/open-jtalk` asset's `.mizuoto/` folder.
+- **HuBERT's float16 checkpoint** is loaded into float32 parameters and its weight norm folded in float32, as transformers computes it (folded in float16 the features differed by 1e-4). BERT is transformers' SDPA path, which transformers 4.57 picks for chinese-roberta.
+- **Fine-tunes.** SoVITS checkpoints that pickle upstream's `utils.HParams` are read by a restricted unpickler (tensors, `OrderedDict`, `HParams` as a dict). v4/v5 LoRA files are merged without peft (W += B·A·α/r in float32, identical to peft's merge).
+
+## Deviations
+
+- **v4/v5's flow prompt** is always the last auxiliary clip; upstream's depends on the requests before.
+- **Streaming speaks every text.** In streaming mode upstream speaks only the first text of each `batch_size` group.
+- **Errors raise** instead of upstream's one second of 16 kHz silence.
+- **Not ported**: upstream's CUDA-graph T2S (`t2s_accel`, which changes results), `set_seed`'s process-wide TF32 switch, and super-sampling (v3 only, not in the catalogue). On CPUs with bf16 matrix units upstream's `set_float32_matmul_precision("medium")` may use them; Mizuoto stays in fp32.
+
+## Memory and speed
+
+Phases: BERT around each text front-end call, HuBERT with SoVITS for the reference's semantic codes, the speaker-verification model (v2Pro), the GPT, then SoVITS (and the v4/v5 vocoder). The GPT is placed whole (its blocks read their fused projections directly; it is small, about 150 MB). A voice's own weights are switched in with `ModelHandle.replace`. The GPT's working memory is sized by the batch's longest row (its phones, the reference's codes and 16 codes a phone, within upstream's 1500 steps). With `compute.oom_fallback`, a batch that runs out of memory is spoken one text at a time.
+
+The GPT is small and launch-bound: a step is about 360 small kernels and used to wait for the device twice (upstream's two end-of-sequence checks), plus a Python boolean copied to the device by top-p. Now the two checks are read together (the same boolean) and the copy is a `fill_`: one wait per step. With `compute.cuda_graphs` (NVIDIA, the GPT wholly on its device) its one-token steps run as graphs around each layer's attention, one set per number of rows (rows drop as they finish); the cache, grown by concatenation, and the sampling stay eager on the request's generator. A voice's own GPT gets its own graphs. The real v2, v2Pro and v4 models give the same audio with and without graphs, 1.3–2.0 times faster per request.
+
+`compute.compile` wraps v4/v5's CFM estimator (each SoVITS loaded, a voice's own too): 7 % faster warm on the CPU, within 3.1e-5 of eager (87 dB).
+
+## Training
+
+Method `speaker` (stages `text`, `speech`, `semantic`, `sovits`, `gpt`, `export`): upstream's own recipe, without Lightning, torchmetrics, transformers, pandas or the ffmpeg program. The export is the voice's own pair of weights.
+
+- **Upstream's files, identically.** Each stage writes upstream's files in upstream's layout, identical to those of its four preparation scripts: `inputs.list`, `2-name2text.txt`, `3-bert/`, `4-cnhubert/`, `5-wav32k/` (byte for byte), `7-sv_cn/`, `6-name2semantic.tsv`. Upstream's `load_audio` read clips through the ffmpeg program; `nn/dsp/swresample.py` is libswresample's default resampler, identical to ffmpeg 7.0.2 on every rate tried (soxr gave 43 dB).
+- **GPT** (`train_s1.py`): the losses, accuracies, learning rates, the CPU generator's state at every step and the saved `<exp>-e<N>.ckpt` equal `s1_train.py`'s seeded alike (one and two epochs, batches of 1 and 4, DPO). Upstream draws while it builds the GPT (one encoder layer deep-copied 24 times, then the head) and once for the loader's base seed; `replay_construction_draws` repeats them. The bucket sampler's reseeding of the global `random` is a private `Random(epoch)`. `training_step` steps ScaledAdam at batch indices above 0 divisible by 4, so gradients pile up over five batches first and across an epoch's end; the schedule locks the rate to 0.002 after its first step, which runs at ScaledAdam's own 0.01. All kept.
+- **SoVITS** (`train_s2.py`): `s2_train.py`'s and `s2_train_v3_lora.py`'s losses at every step and their saved weights tensor for tensor (half precision, version tag, no `enc_q`) on the CPU seeded alike, for v2, v2Pro, v2ProPlus, v4 and v5 Turbo (accumulation, gradient checkpointing, two epochs). v4 and v5 train SoVITS as a LoRA. Upstream lists clips from a `set`, whose order changes per process; they are sorted here. The WaveNet gate is TorchScript-compiled as upstream's (its gradients differ from eager ones in the last bits). Without the `s2d-*` asset the SoVITS stage refuses, as 0.1 did.
+- Lightning's resumable checkpoint (930 MB) is not written. Compare runs with the same thread count: CPU kernels split their sums by it.
+- `training.memory`: the speech stage frees HuBERT before the speaker model; the semantic stage puts only SoVITS's SSL projection and quantiser on the device.
+
+## Parity
+
+Identical sample for sample to 0.1 on the CPU through the stack in all 15 cases: cloning (Chinese, English), without a transcript, two references with a speed, batches cut at every punctuation mark, serial decoding, streamed v2 (token chunks, SOLA) and v4 (fragments), v4/v5's batched and serial flow, and a voice with its own v2Pro weights. At module level also the text front end (476 texts in 11 language modes), HuBERT, BERT, the speaker-verification model, LoRA merging and every decoder path. Four more cases load each implementation's trained voice in the other; identical too. The contract suite passes (24 tests).
+
+## Limitations
+
+- Japanese and Korean text need their extras; without them such text fails with `capability_not_supported` and the install command in the hint. pyopenjtalk 0.4.1 is a source package that needs CMake and a C++ compiler.
+- A streamed middle chunk too short for the SOLA overlap leaves an empty piece, on which upstream's post-processing raises an error; kept as upstream behaves. It has been seen with a `min_chunk_length` of 4.

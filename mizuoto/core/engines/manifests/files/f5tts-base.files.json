@@ -1,0 +1,16 @@
+{
+ "repo": "SWivid/F5-TTS",
+ "revision": "84e5a410d9cead4de2f847e7c9369a6440bdfaca",
+ "files": [
+  {
+   "path": "F5TTS_Base/model_1200000.safetensors",
+   "size": 1348645281,
+   "sha256": "4180310f91d592cee4bc14998cd37c781f779cf105e8ca8744d9bd48ca7046ae"
+  },
+  {
+   "path": "F5TTS_Base/vocab.txt",
+   "size": 13800,
+   "sha256": "2a05f992e00af9b0bd3800a8d23e78d520dbd705284ed2eedb5f4bd29398fa3c"
+  }
+ ]
+}

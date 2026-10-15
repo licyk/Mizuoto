@@ -1,0 +1,50 @@
+# The distributions: the mizuoto wheel and sdist, with the web UI built in, and the
+# licence-gated engines' wheels (mizuoto-fishspeech, mizuoto-indextts), tried in a new environment with a CPU torch and
+# attached to the run. Publishing them is the release owner's step.
+name: Release build
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - uses: oven-sh/setup-bun@v2
+      - name: Build
+        # build_wheels.py needs only the standard library, uv and bun.
+        run: |
+          python -m pip install uv
+          python scripts/build_wheels.py all
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+  smoke:
+    needs: build
+    name: smoke · Python ${{ matrix.python }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.10", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+      - name: Install the wheels in a new environment (torch, then one install of the wheels) and try them
+        run: |
+          python -m pip install uv
+          python scripts/smoke_wheels.py --dist dist --python ${{ matrix.python }}

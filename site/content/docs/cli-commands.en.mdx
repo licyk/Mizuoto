@@ -1,0 +1,576 @@
+---
+title: "Command reference"
+description: "Every mizuoto command group and command, grouped by purpose: what it does, its main arguments and options, and an example, taken from each command's --help."
+icon: SquareTerminal
+---
+
+This page groups the commands by purpose; `mizuoto --help` and each group's help list them alphabetically. Conventions and exit codes are in the [Overview](/docs/cli), settings in [Configuration and environment variables](/docs/cli-config).
+
+Every command takes these options; the tables leave them out:
+
+| Option | Meaning |
+| --- | --- |
+| `--debug` | Print debug logs |
+| `--help` | Show the help and exit |
+
+Many commands also take `--json`, which prints JSON in the shape the HTTP API returns; the tables list it. Arguments written `{name}` are required, `[name]` optional. Repeatable options (`--ref`, `-p`…) may be given several times. `key=value` values are parsed as JSON (numbers, `true`/`false`), else taken as text.
+
+## Speech
+
+### `speak`
+
+Speak text with a model and a voice. The result is kept in the outputs folder; `-o` also copies it.
+
+```text
+mizuoto speak [OPTIONS] {text}
+```
+
+| Argument / option | Meaning |
+| --- | --- |
+| `{text}` | The text; `-` reads it from standard input |
+| `-m, --model <str>` | Model id, e.g. `qwen3tts/1.7b-base` (default: `tts.default_model`) |
+| `-o, --output <path>` | Also copy the result here; its extension picks the format |
+| `-v, --voice <str>` | A library voice (id or slug) |
+| `--ref <path>` | A reference clip to clone (repeatable) |
+| `--ref-text <str>` | What is said in each `--ref`, in order |
+| `--preset <str>` | A preset speaker of the model |
+| `--describe <str>` | Design a voice from this description |
+| `--attr <str>` | A voice attribute `key=value` (repeatable), such as OmniVoice's `gender=female` |
+| `-l, --lang <str>` | Language code (`zh`, `en`, `ja`…) or `auto` |
+| `--instruct <str>` | How to say it (a style instruction) |
+| `--emotion <str>` | An emotion weight `name=value` (repeatable) |
+| `--emotion-audio <path>` | A clip whose emotion to borrow |
+| `--emotion-text <str>` | The emotion, described |
+| `-p, --param <str>` | A common parameter `name=value` (repeatable) |
+| `-O, --option <str>` | An engine option `name=value` (repeatable) |
+| `--seed <int>` | Random seed |
+| `--speed <float>` | 1.0 is natural |
+| `-f, --format <str>` | `wav`, `flac`, `mp3`, `ogg` or `m4a` |
+| `--sample-rate <int>` | Resample the result |
+| `--batch` | One output per line of the text |
+| `--split` | Let Mizuoto split long text, not the engine |
+| `--lenient` | Drop parameters the model does not take, with a warning (default: refuse) |
+| `-P, --use-preset <str>` | A parameter preset (`mizuoto preset list`); `--param` and `--option` win over it |
+| `--stream` | Write a WAV to standard output as the audio is made (e.g. `\| ffplay -`) |
+| `--plan` | Show what would happen and stop |
+| `--json` | Print JSON |
+
+Choose the voice one way: `-v`, `--ref`, `--preset` or `--describe`/`--attr`; with none, the model's own voice is used (when it has one).
+
+```bash
+mizuoto speak "Hello." -m qwen3tts/1.7b-custom-voice --preset vivian --instruct "gently"
+mizuoto speak - -m cosyvoice/cosyvoice2-0.5b -v my-voice -o out.flac < chapter.txt
+```
+
+### `design`
+
+Speak with a voice made from a description; `--save-as` keeps the voice in the library.
+
+| Argument / option | Meaning |
+| --- | --- |
+| `{text}` | What the designed voice says |
+| `-m, --model <str>` | A voice design model (required) |
+| `-d, --description <str>` | The voice, described |
+| `--attr <str>` | A voice attribute `key=value` (repeatable) |
+| `-l, --lang <str>` | Language |
+| `--seed <int>` | Random seed |
+| `-o, --output <path>` | Also copy the result here |
+| `--save-as <str>` | Keep the voice in the library under this name |
+| `--json` | Print JSON |
+
+```bash
+mizuoto design "Welcome back." -m qwen3tts/1.7b-voice-design -d "a young, bright female voice, a little fast" --save-as Host
+mizuoto design "Hello." -m omnivoice/omnivoice --attr gender=male --attr age=elderly
+```
+
+### `convert`
+
+Say what a recording says in another voice (voice conversion).
+
+| Argument / option | Meaning |
+| --- | --- |
+| `{source}` | The recording to convert |
+| `-m, --model <str>` | A model with voice conversion, e.g. `cosyvoice/cosyvoice2-0.5b` (required) |
+| `-v, --voice <str>` | The target voice (a library voice) |
+| `--ref <path>` | Or a clip of the target voice |
+| `-o, --output <path>` | Also copy the result here |
+| `--seed <int>` | Random seed |
+| `--json` | Print JSON |
+
+```bash
+mizuoto convert line.wav -m cosyvoice/cosyvoice2-0.5b -v my-voice -o line-converted.wav
+```
+
+### `edit`
+
+Replace parts of a recording with new speech in the same voice (speech editing).
+
+| Argument / option | Meaning |
+| --- | --- |
+| `{source}` | The recording to edit |
+| `-m, --model <str>` | A model with speech editing, e.g. `f5tts/v1-base` (required) |
+| `-t, --text <str>` | The recording's whole text after the edit (required) |
+| `--span <str>` | `START:END[:SECONDS]` of a part to replace, in seconds (repeatable, required); `SECONDS` is the new part's length |
+| `-o, --output <path>` | Also copy the result here |
+| `--seed <int>` | Random seed |
+| `--json` | Print JSON |
+
+```bash
+mizuoto edit take.wav -m f5tts/v1-base -t "See you tomorrow at ten." --span 2.10:2.60
+```
+
+### `asr`
+
+Transcribe a clip with the speech recognition engine.
+
+| Argument / option | Meaning |
+| --- | --- |
+| `{audio}` | An audio file |
+| `-l, --lang <str>` | Language code; default: detect |
+| `-m, --model <str>` | ASR model (default: `tts.asr_model`) |
+| `--json` | Print JSON |
+
+```bash
+mizuoto asr clip.wav -l en
+```
+
+## Voices
+
+### `voice list` · `voice info`
+
+`voice list` lists the voice library (slug, name, kind, language, clips, seconds); `voice info {voice}` shows a voice and its reference clips.
+
+| Option | Meaning |
+| --- | --- |
+| `-q, --search <str>` | Text to look for in names, descriptions and tags (`list`) |
+| `--kind <str>` | `reference`, `designed`, `preset` or `trained` (`list`) |
+| `-l, --lang <str>` | Only voices in this language (`list`) |
+| `--json` | Print JSON |
+
+```bash
+mizuoto voice list --kind designed
+```
+
+### `voice add`
+
+Add a voice from reference clips; missing transcripts come from speech recognition.
+
+| Argument / option | Meaning |
+| --- | --- |
+| `{name}` | The voice's name |
+| `--ref <path>` | A reference clip (repeatable, required) |
+| `--text <str>` | What is said in each `--ref`, in order |
+| `-l, --lang <str>` | The voice's language |
+| `--consent <str>` | Whose voice it is and how you may use it: an optional note, stored with the voice, never required |
+| `--description <str>` | A note about the voice |
+| `--tag <str>` | A tag (repeatable) |
+| `--no-transcribe` | Do not fill missing transcripts with speech recognition |
+| `--json` | Print JSON |
+
+```bash
+mizuoto voice add "My voice" --ref a.wav --ref b.wav --text "First clip" --text "Second clip" -l en
+```
+
+### `voice design`
+
+Design a voice from a description and keep it; its sample clip lets every cloning model use it.
+
+| Argument / option | Meaning |
+| --- | --- |
+| `{name}` | The voice's name |
+| `-m, --model <str>` | A voice design model (required) |
+| `-d, --description <str>` | The voice, described |
+| `--attr <str>` | A voice attribute `key=value` (repeatable) |
+| `--sample-text <str>` | What the voice says in its reference clip (default: `Hello! This is how I sound when I read a few sentences aloud.`) |
+| `-l, --lang <str>` | Language of the sample text |
+| `--seed <int>` | Random seed |
+| `--json` | Print JSON |
+
+```bash
+mizuoto voice design Narrator -m qwen3tts/1.7b-voice-design -d "a calm, middle-aged male voice"
+```
+
+### `voice from-preset` · `voice from-output`
+
+| Command | Purpose | Options |
+| --- | --- | --- |
+| `voice from-preset {model} {speaker}` | Add a model's preset speaker to the library | `--name <str>`; `--json` |
+| `voice from-output {output_id} {name}` | Keep a synthesized clip as a voice (a designed voice when it came from a design) | `--consent <str>`; `--json` |
+
+```bash
+mizuoto voice from-preset qwen3tts/1.7b-custom-voice vivian --name Vivian
+```
+
+### `voice edit` · `voice remove`
+
+| Command | Purpose | Options |
+| --- | --- | --- |
+| `voice edit {voice}` | Change the name, language, description, tags or consent note | `--name`, `-l, --lang`, `--description`, `--tag` (repeatable; replaces the tags), `--consent` |
+| `voice remove {voices}...` | Move voices to the trash | — |
+
+### Reference clips
+
+| Command | Purpose | Options |
+| --- | --- | --- |
+| `voice add-ref {voice} {clip}` | Add a reference clip | `--text <str>`, `-l, --lang <str>`, `--primary` (make it the main clip) |
+| `voice remove-ref {voice} {sha}` | Remove a reference clip (its SHA-256; a prefix will do) | — |
+| `voice set-transcript {voice} {sha} {text}` | Correct a clip's transcript | — |
+| `voice retranscribe {voice} [sha]` | Transcribe the clips (or this one) again with speech recognition | — |
+
+```bash
+mizuoto voice set-transcript my-voice 3fa2 "The corrected text"
+```
+
+### `voice add-weights` · `voice remove-weights`
+
+Give a voice its own fine-tuned weights for an engine, or remove them (used with that engine's models of the same version, such as GPT-SoVITS).
+
+| Option | Meaning |
+| --- | --- |
+| `-e, --engine <str>` | The engine the weights are for, e.g. `gptsovits` (required) |
+| `-f, --file <str>` | `role=path`, once per file (GPT-SoVITS: `gpt=x.ckpt sovits=y.pth`; required by `add-weights`) |
+| `--move` | Move the files instead of copying them (`add-weights`) |
+| `--json` | Print JSON (`add-weights`) |
+
+```bash
+mizuoto voice add-weights alice -e gptsovits -f gpt=alice-e15.ckpt -f sovits=alice_e8_s200.pth
+```
+
+### `voice fit` · `voice prepare`
+
+| Command | Purpose | Options |
+| --- | --- | --- |
+| `voice fit {voice}` | Say whether and how a model can use a voice (clone, clone without a transcript, preset speaker, design, trained) and what happens first (transcribe, trim) | `-m, --model` (required); `--json` |
+| `voice prepare {voice}` | Prepare a voice for a model ahead of time (reference prompt, embedding and the like, cached) | `-m, --model` (required) |
+
+```bash
+mizuoto voice fit my-voice -m f5tts/v1-base
+```
+
+### `voice export` · `voice import`
+
+| Command | Purpose | Options |
+| --- | --- | --- |
+| `voice export {voice}` | Write a voice (its clips and settings) to a zip | `-o, --output <path>` (required) |
+| `voice import {archive}` | Add a voice from a zip written by `voice export` | `--name <str>` another name |
+
+```bash
+mizuoto voice export my-voice -o my-voice.zip
+```
+
+## Models and shared assets
+
+### `model list` · `model info` · `model spec` · `model speakers`
+
+| Command | Purpose | Options |
+| --- | --- | --- |
+| `model list` | The models Mizuoto knows, and their states | `-e, --engine <str>`; `--installed / --missing`; `--json` |
+| `model info {model_id}` | Show a model | `--json` |
+| `model spec {model_id}` | What a model takes: voice modes, languages, parameters and options | `--json` |
+| `model speakers {model_id}` | A model's preset speakers | `--json` |
+
+```bash
+mizuoto model list -e cosyvoice --installed
+mizuoto model spec indextts/v2
+```
+
+### `model download` · `model verify` · `model delete`
+
+| Command | Purpose | Options |
+| --- | --- | --- |
+| `model download {model_ids}...` | Download catalogue models (resumes an interrupted download, verifies every file, fetches the shared assets they need) | `--json` |
+| `model verify {model_id}` | Check every file of an installed model against its SHA-256 | `--json` |
+| `model delete {model_ids}...` | Delete downloaded or imported models | — |
+
+```bash
+mizuoto model download qwen3tts/1.7b-base gptsovits/v2pro-base
+```
+
+Where files come from: [Model downloads and mirrors](/docs/advanced-downloads).
+
+### `model import`
+
+Add a model folder from elsewhere (an earlier download, a fine-tune). When its file sizes match a catalogue model, it is checked by SHA-256 and imported as that model; otherwise it becomes a user model `<engine>/<name>`.
+
+| Argument / option | Meaning |
+| --- | --- |
+| `{path}` | A folder holding a model |
+| `--name <str>` | Import as `<engine>/<name>` rather than as the catalogue model it matches |
+| `--move` | Move the folder instead of copying it |
+| `--json` | Print JSON |
+
+```bash
+mizuoto model import ~/Downloads/CosyVoice2-0.5B
+```
+
+### `asset list` · `asset download` · `asset delete`
+
+Shared assets: files several models of an engine share.
+
+| Command | Purpose | Options |
+| --- | --- | --- |
+| `asset list` | The shared assets and the models that need them | `-e, --engine <str>`; `--json` |
+| `asset download {asset_ids}...` | Download shared assets (a model's come with it) | `--json` |
+| `asset delete {asset_id}` | Delete a shared asset (models that need it stop working until it is downloaded again) | `-y, --yes` do not ask |
+
+```bash
+mizuoto asset download gptsovits/s2d-v2pro
+```
+
+## Engines and the runtime
+
+### `doctor`
+
+List the GPUs found (NVIDIA, AMD, Intel, Apple) and how they were found; check torch against them and print the command that installs the right build; list each engine as available or missing (with what it lacks: torch, `mizuoto-fishspeech`, `mizuoto-indextts`) and the optional extras not installed. Exits with code 1 when a check fails.
+
+| Argument / option | Meaning |
+| --- | --- |
+| `[engine_id]` | Only this engine (default: all) |
+| `--json` | Print JSON |
+
+```bash
+mizuoto doctor
+mizuoto doctor gptsovits
+```
+
+### `runtime`
+
+List the loaded models (device, memory, last use, busy or idle), and unload them. The models live in the server's process: with a server running (`mizuoto webui`), the command asks it (through `server.json` in the data folder); otherwise its own process has nothing loaded.
+
+| Argument / option | Meaning |
+| --- | --- |
+| `[model]` | With `--unload`: the model to unload (default: every model not in use) |
+| `--unload` | Unload a model, or every model not in use |
+| `--json` | Print JSON |
+
+```bash
+mizuoto runtime
+mizuoto runtime --unload qwen3tts/1.7b-base
+```
+
+### `engine list` · `engine info`
+
+| Command | Purpose | Options |
+| --- | --- | --- |
+| `engine list` | The engines, whether each is available, its licence, whether it is enabled, its model count | `--json` |
+| `engine info {engine_id}` | An engine's variants, capabilities, parameters and models | `--json` |
+
+### `engine licence` · `engine accept-licence`
+
+| Command | Purpose | Options |
+| --- | --- | --- |
+| `engine licence {engine_id}` | Print an engine's licence | `--json` |
+| `engine accept-licence {engine_id}` | Show a licence-gated engine's licence and accept it after you confirm | `--yes` accept without asking |
+
+```bash
+mizuoto engine licence fishspeech
+mizuoto engine accept-licence fishspeech
+```
+
+### `engine enable` · `engine disable`
+
+Enable or disable an engine (`engine disable {engine_id}` keeps its models installed).
+
+### `engine op`
+
+Run an operation the engine declares (GPT-SoVITS `switch_weights`, Fish Speech `codec_encode`…).
+
+| Argument / option | Meaning |
+| --- | --- |
+| `{model}` | The model to load, e.g. `gptsovits/v2pro-base` |
+| `{op}` | An operation the engine declares (`mizuoto engine info <engine>`) |
+| `-s, --set <str>` | A payload value `key=value` (repeatable) |
+| `--json` | Print JSON |
+
+## Presets
+
+### `preset list` · `preset save` · `preset delete` · `preset default`
+
+Parameter presets: a named set of parameters for one model, or common parameters only when no model is named.
+
+| Command | Purpose | Options |
+| --- | --- | --- |
+| `preset list` | List presets | `-m, --model <str>` only those this model can use; `--json` |
+| `preset save {name}` | Save a set of parameters | `-m, --model` (none: common parameters for any model); `-p, --param`, `-O, --option` (repeatable); `-v, --voice` the voice its default status is for; `--default` apply it whenever the model is picked in the web UI; `--json` |
+| `preset delete {preset}` | Delete a preset (id or name) | — |
+| `preset default {preset}` | Make a preset its model's default | `--off` stop it being the default |
+
+```bash
+mizuoto preset save expressive -m qwen3tts/1.7b-custom-voice -p temperature=1.1 -O subtalker_temperature=1.0 --default
+mizuoto speak "…" -m qwen3tts/1.7b-custom-voice --preset vivian -P expressive
+```
+
+## Projects
+
+A project is a book, script or dialogue read line by line by a cast of voices. A script is plain text: `#` starts a chapter, `Name: text` is a line of that speaker, a blank line ends a paragraph.
+
+| Command | Purpose | Main options |
+| --- | --- | --- |
+| `project list` | List projects | `--json` |
+| `project new {name}` | Create a project, with a narrator and optionally a script | `-m, --model` for speakers that name none; `-v, --voice` / `--preset` the narrator's voice; `-l, --lang`; `-s, --script <path>`; `--split line\|sentence` (default `line`); `--json` |
+| `project show {project}` | The cast and every line with its state | `--json` |
+| `project import {project} {script}` | Add chapters and lines from a script; new speaker names join the cast | `--split line\|sentence`; `--replace` replace the chapters; `--chapter <str>` append to this chapter; `--json` |
+| `project script {project}` | Print the project as a plain-text script | — |
+| `project cast {project} {speaker}` | Add, change or remove a speaker (a new id adds one) | `--name`; `-m, --model`; `-v, --voice`; `--preset`; `-l, --lang`; `--instruct` (`''` clears it or falls back to the project's); `-p, --param`, `-O, --option` (repeatable; replace them); `--remove` (its lines go to the narrator); `--json` |
+| `project set {project}` | Change a project's settings | `--name`; `-m, --model`; `-l, --lang`; `--line-pause`, `--paragraph-pause`, `--chapter-pause` (ms); `-f, --format`; `--sample-rate`; `--normalize none\|peak\|loudness`; `--json` |
+| `project render {project}` | Render the lines without a current take | `-c, --chapter`, `--line` (repeatable); `--force` render current lines too; `--json` |
+| `project export {project}` | Join the takes into one file | `-o, --output`; `-c, --chapter` (repeatable); `-f, --format`; `--srt <path>` (`.srt` or `.vtt`); `--allow-missing` leave out lines without a take; `--json` |
+| `project delete {project}` | Move a project and its takes to the trash | `-y, --yes` |
+
+```bash
+mizuoto project new radio-play -m qwen3tts/1.7b-custom-voice --preset ryan -l en -s play.txt
+mizuoto project show radio-play               # chapter and line ids
+mizuoto project render radio-play
+mizuoto project export radio-play -o radio-play.m4a --srt radio-play.srt
+```
+
+## Datasets and training
+
+### `dataset`
+
+| Command | Purpose | Main options |
+| --- | --- | --- |
+| `dataset list` | List datasets | `--json` |
+| `dataset create {name}` | Create an empty dataset | `-l, --lang`; `--consent`; `--description`; `--json` |
+| `dataset info {dataset}` | Show a dataset | `--json` |
+| `dataset import {dataset} {path}` | Add a folder of clips in a known layout | `--layout auto\|plain\|gptsovits_list\|ljspeech\|csv` (default `auto`); `--json` |
+| `dataset add {dataset} [files]...` | Add audio files or folders (a `.lab` or `.txt` beside a clip is its text), a voice's references or outputs | `--voice <str>`; `--output <str>` (repeatable); `--speaker`; `-l, --lang`; `--json` |
+| `dataset prepare {dataset}` | Slice, transcribe and normalise | `--slice / --no-slice`; `--max-seconds` (default 12.0); `--min-seconds` (default 1.0); `--threshold` (silence level in dB, default -34.0); `--transcribe / --no-transcribe`; `--normalize / --no-normalize` (peak to -1 dBFS); `-l, --lang`; `--json` |
+| `dataset check {dataset}` | Report what training would see: durations, empty texts, clipping, rates, speakers | `--json` |
+| `dataset rows {dataset}` | List the clips and their texts | `-q, --search`; `--offset` (default 0); `--limit` (default 50); `--json` |
+| `dataset edit-row {dataset} {row}` | Correct, exclude or delete a clip | `--text`; `--speaker`; `-l, --lang`; `--exclude / --include`; `--remove` |
+| `dataset delete {dataset}` | Move a dataset to the trash | `-y, --yes` |
+
+```bash
+mizuoto dataset import alice ./GPT-SoVITS/output/asr_opt --layout gptsovits_list
+mizuoto dataset prepare alice --max-seconds 10 -l en
+```
+
+### `train`
+
+An experiment is named `<engine>/<name>`, or just its name when that is unique.
+
+| Command | Purpose | Main options |
+| --- | --- | --- |
+| `train methods {model}` | The ways a model can be fine-tuned, with their stages and hyperparameters | `--json` |
+| `train new {name}` | Create an experiment | `-m, --base` (required); `-d, --dataset` (required); `--method` (default: the first for the model); `--hp key=value` (repeatable); `--voice` export voice weights to this voice (default: a new one); `-l, --lang`; `--json` |
+| `train list` | List experiments | `--json` |
+| `train status {experiment}` | The stages and exports | `--json` |
+| `train run {experiment}` | Run the stages: by default every stage from the first not done | `-s, --stage` (repeatable; the earlier ones must be done); `--restart` run every stage again from the first; `--json` |
+| `train metrics {experiment}` | The losses the stages reported (first, last and lowest of each) | `-s, --stage`; `--json` |
+| `train edit {experiment}` | Change hyperparameters (the stages that read them become stale) | `--hp key=value` (`key=` resets it); `--voice`; `-l, --lang` |
+| `train export {experiment}` | Run the export again: register the weights as a voice's or as a model | `--json` |
+| `train delete {experiment}` | Move an experiment and its work files to the trash (exports stay) | `-y, --yes` |
+
+```bash
+mizuoto train new alice-v1 -m gptsovits/v2pro-base -d alice --hp sovits_epochs=8
+mizuoto train run alice-v1 -s gpt
+```
+
+Hyperparameter names depend on the method; `mizuoto train methods <model>` lists them.
+
+## Outputs and jobs
+
+### `output`
+
+| Command | Purpose | Options |
+| --- | --- | --- |
+| `output list` | List outputs, newest first | `--voice`; `-m, --model`; `-s, --search` (text contains); `--limit` (default 30, `[1, 500]`); `--json` |
+| `output info {output_id}` | Show an output and how it was made | `--json` |
+| `output delete {ids}...` | Delete outputs (their files go to the trash) | `-y, --yes` |
+
+### `job`
+
+| Command | Purpose | Options |
+| --- | --- | --- |
+| `job list` | List jobs, newest first | `--state <str>` (a state, or `active`, `finished`); `--kind <str>` (`speak`, `design`, `train`…); `--limit` (default 30, `[1, 200]`); `--json` |
+| `job show {job_id}` | Show a job | `--json` |
+| `job log {job_id}` | Print a job's log | — |
+| `job cancel {job_id}` | Cancel a job (only this process's jobs; see the [Overview](/docs/cli#using-it-while-a-server-runs)) | — |
+| `job retry {job_id}` | Run a failed, cancelled or interrupted job again, in the foreground | `--json` |
+
+```bash
+mizuoto job list --state failed
+mizuoto job log j_abc123
+```
+
+## Remote hosts
+
+See [Remote hosts](/docs/advanced-remote).
+
+### `agent`
+
+Serve this machine's engines to another Mizuoto (run it on the GPU machine).
+
+| Option | Meaning |
+| --- | --- |
+| `--host <str>` | Address to listen on (default from settings: `127.0.0.1`; `0.0.0.0` for every interface) |
+| `--port <int>` | Port (default from settings: `7870`) |
+| `--token <str>` | The token hosts must give (default from settings; made and saved when there is none) |
+| `--ssl-certfile <file>` | PEM certificate: serve TLS (default from settings: `remote.agent.ssl_certfile`) |
+| `--ssl-keyfile <file>` | The certificate's private key |
+
+```bash
+mizuoto agent --host 0.0.0.0
+```
+
+### `remote`
+
+| Command | Purpose | Options |
+| --- | --- | --- |
+| `remote list` | The remote hosts: address, state, version, devices, engines, the engines using it | `--json` |
+| `remote add {name} {address}` | Add or change a remote host and check that it answers; `address` is `host` or `host:port` (port 7870 by default) | `--token` (kept when changing a host); `--tls`; `--ca-file <file>` (a CA bundle, or the agent's self-signed certificate); `--json` |
+| `remote remove {name}` | Remove a remote host; engines that used it run on this machine again | — |
+| `remote use {engine} [name]` | Run an engine on a remote host | `-d, --device` (the device on that host: `auto`, `cuda:0`, `cpu`…; default `auto`); `--local` run it on this machine again |
+
+```bash
+mizuoto remote add gpu-box 192.168.1.20 --token <token>
+mizuoto remote use qwen3tts gpu-box -d cuda:0
+```
+
+## Settings and system
+
+### `config`
+
+| Command | Purpose | Options |
+| --- | --- | --- |
+| `config show` | The effective settings (the access token only as set or not) | `--json` |
+| `config get {key}` | Print one setting; the key is dotted, e.g. `server.port` | — |
+| `config set {key} {value}` | Change one setting and save it; the value is parsed as JSON, `null` clears | — |
+| `config path` | Print the path of the settings file | — |
+
+```bash
+mizuoto config set downloads.source hf-mirror
+mizuoto config set engines.cosyvoice.device cuda:1
+```
+
+### `version`
+
+The versions of Mizuoto, Python and the main components (torch, fastapi, uvicorn, pydantic, typer, httpx, numpy, av, `mizuoto-fishspeech`, `mizuoto-indextts`; a component that is not installed has no version). Option: `--json`.
+
+### `env vars`
+
+The environment variables Mizuoto reads, and the `MIZUOTO_*` variables set now (values of names containing `TOKEN` show as `***`). Option: `--json`.
+
+### `webui`
+
+Start the server and open the web UI.
+
+| Option | Meaning | Default |
+| --- | --- | --- |
+| `--host <str>` | Address to bind | setting `server.host` (`127.0.0.1`) |
+| `--port <int>` | First port to try, `[0, 65535]`; `0` picks any | setting `server.port` (`7869`) |
+| `--strict-port / --no-strict-port` | Fail instead of trying the next port | setting `server.strict_port` (off) |
+| `--open / --no-open` | Open the web UI in a browser | setting `server.open_browser` (on) |
+| `--data-dir <directory>` | Data folder (settings, database, models, outputs) | `MIZUOTO_DATA_DIR` or the platform's default |
+| `--config-dir <directory>` | Folder for `settings.toml` | the data folder |
+| `--api-prefix <str>` | Serve the API, the socket and the web UI under this path, e.g. `/voice` | none |
+| `--ssl-certfile <file>` | PEM certificate: serve HTTPS | setting `server.ssl_certfile` |
+| `--ssl-keyfile <file>` | The certificate's private key | setting `server.ssl_keyfile` |
+
+A port in use makes it try the next ones (up to 20); when all fail it exits with code 3, and with code 4 when a certificate file does not exist. Binding to an address other than loopback logs a warning that other machines can reach the server. Once started, it prints `SERVER_READY url=http://...` on standard output.
+
+```bash
+mizuoto webui
+mizuoto webui --host 0.0.0.0 --port 8000 --no-open
+```

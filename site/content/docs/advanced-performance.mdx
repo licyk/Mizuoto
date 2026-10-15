@@ -1,0 +1,147 @@
+---
+title: "性能与加速"
+description: "模型在哪里运行、保留多久，显存（比 GPU 大的模型、显存不足），精度，注意力后端，torch.compile，以及合并等待中的请求。"
+icon: Gauge
+---
+
+每个引擎都运行在服务器自己的进程里，基于 Mizuoto 的运行时（torch）。默认设置在任何机器上都能运行。本页介绍决定模型放在哪里、保留多久的设置，可以额外开启的加速项（注意力后端、`compute.fast`、`compute.compile`），以及等待中的请求如何合并。默认设置让每个结果都与各引擎的原始实现完全相同；会改变结果的选项都会注明。各引擎的基本情况见 [引擎详解](/docs/advanced-engines)，全部设置项见 [配置](/docs/cli-config)。
+
+## 设备与精度
+
+| 设置 | 默认值 | 说明 |
+| --- | --- | --- |
+| `engines.<id>.device` | `auto` | 引擎使用的设备：`auto`、`cpu`、`cuda:N`（NVIDIA，或 ROCm 下的 AMD）、`xpu:N`（Intel）、`mps`（Apple 芯片）；`<主机名>/<设备>` 表示在远程主机上运行（见 [远程主机](/docs/advanced-remote)）。界面：引擎卡片的 **设备** |
+| `compute.default_device` | `auto` | 引擎设为 `auto` 时使用的设备；`auto` 选空闲显存最多的 GPU，没有 GPU 时用 CPU。界面：**设置** › **计算** › **默认设备** |
+| `compute.devices` | 空 | Mizuoto 可以使用的设备，如 `["cuda:0"]`；空为全部 |
+| `engines.<id>.dtype` | `auto` | 精度：`auto`、`fp32`、`fp16`、`bf16`。界面：引擎卡片的 **精度** |
+
+### Mizuoto 能找到哪些 GPU
+
+Mizuoto 查找 GPU 时不加载 torch：NVIDIA 显卡用 `nvidia-smi`；AMD 显卡用 `rocm-smi`（或 `amd-smi`），torch 的 ROCm 构建与 NVIDIA 一样把它们命名为 `cuda:0`、`cuda:1`……；Apple 芯片按平台识别（`mps`）。这些都找不到 GPU、而已安装的 torch 是能使用 GPU 的构建时（Intel 显卡的 XPU 构建、没有 `rocm-smi` 的 ROCm 构建、容器里没有 `nvidia-smi` 的 CUDA 构建），Mizuoto 会在单独的进程里询问一次 torch（一两秒）；CPU 构建的 torch 不会被询问。Mizuoto 为运行模型加载了 torch 之后，改用 torch 自己的数据。`mizuoto doctor` 会列出找到的 GPU 及查找方式，**设置** › **计算** 中也会显示。
+
+所有引擎都能在 NVIDIA（CUDA）、AMD（ROCm）、Intel（XPU）和 Apple（MPS）的 GPU 以及 CPU 上运行。在不支持双精度的 GPU 上（Apple 芯片、Intel Arc 显卡），唯一以双精度计算的模型部件——CosyVoice 3 的音高预测器——在 CPU 上运行，模型的其余部分仍在 GPU 上。在 Apple 芯片上 `compute.compile` 不生效，且 torch 的 MPS 后端可能缺少某个引擎需要的运算；以 `PYTORCH_ENABLE_MPS_FALLBACK=1` 启动 Mizuoto 可让这些运算在 CPU 上执行。ROCm、XPU 和 MPS 路径尚未在真实硬件上测试，遇到问题请反馈。
+
+`auto` 精度即各引擎的上游在该设备上使用的精度：GPU 上用半精度（显卡支持时为 bf16 或 fp16），CPU 上用 fp32。例如 Fish Speech 在 GPU 上用 bf16、在 CPU 上用 fp32；CosyVoice 保持 fp32，除非打开它的加载选项 `fp16`。各引擎在 CPU 上以 fp32 运行时输出与上游代码一致；其他精度和设备的结果会有细微差别。
+
+## 已加载的模型与内存
+
+模型在第一次使用时加载到服务器进程中、引擎所在的设备上，之后保留给下一个请求：
+
+| 设置 | 默认值 | 说明 |
+| --- | --- | --- |
+| `compute.max_resident_models` | `3` | 所有引擎合计同时保持加载的模型数，超出时先卸载最久未用的空闲模型。界面：**设置** › **计算** › **保留在内存中的模型数** |
+| `compute.unload_after_minutes` | `20` | 模型空闲这么久后卸载；`0` 为一直保留。界面：**空闲多少分钟后卸载模型（0：从不）** |
+| `engines.<id>.idle_minutes` | 空 | 为单个引擎覆盖上一项 |
+| `engines.<id>.pinned_models` | `[]` | 这些模型不会被卸载，既不会因空闲，也不会为其他模型腾位置；需要让出显存时最后让出 |
+| `compute.gpu_jobs` | `1` | 同一块 GPU 上同时运行的 GPU 任务数。界面：**同时运行的 GPU 任务数** |
+| `compute.inference_jobs` | `1` | 跨所有引擎和设备同时运行的合成任务数（合成、音色转换、语音编辑）；合并为一个微批次（`tts.micro_batch`）运行的请求算一个。界面：**同时运行的合成任务** |
+
+- 同时运行的合成任务最多 `compute.inference_jobs` 个（默认 1 个），不论它们用哪个引擎和设备；其余任务在队列中按顺序等待（**等待其他合成任务**）。每块 GPU 上的任务数仍受 `compute.gpu_jobs` 限制。
+- 一个引擎在一个设备上同时只处理一个请求，下一个请求等待（**等待引擎**）。GPU 被另一个任务占用时，新任务显示 **等待 GPU**；如果显存足够两个任务同时运行，可以在 **任务** 中点 **仍然运行**，或把 `compute.gpu_jobs` 调大。微调任务无论 `compute.gpu_jobs` 是多少都独占整块 GPU，开始前先把这块 GPU 上的空闲模型移到内存。
+- 空闲卸载只在服务器中进行。命令（`mizuoto speak` 等）在自己的进程里加载需要的模型，命令结束时模型随之释放。
+- `mizuoto runtime` 列出正在运行的服务器已加载的模型（设备、内存、有多少在设备上、上次使用、忙碌或空闲）；`mizuoto runtime --unload [MODEL]` 卸载一个模型，或所有未在使用的模型。网页界面的 **内存中的模型** 面板做同样的事，并用进度条显示每个模型有多少在 GPU 上，其中的 **释放显存** 释放空闲模型占用的显存。对应接口为 `GET /api/v1/runtime` 和 `POST /api/v1/runtime/unload`。
+- 修改任意 `engines.<id>.*` 设置会卸载该引擎的模型，下次使用时按新设置加载。
+
+## 显存
+
+Mizuoto 像 ComfyUI 一样管理显存。一个请求的每一步只放上它需要的模型部分（先是参考音频的编码器，然后是语言模型，再是声码器），不需要的部分在别处需要显存时先让出。模型完全放不下时，**部分加载**：放得下的层留在 GPU 上，其余权重留在内存中，每层运行时再复制到 GPU。这样更慢，但能运行而不是失败。
+
+| 设置 | 默认值 | 说明 |
+| --- | --- | --- |
+| `compute.vram_mode` | `auto` | `auto`/`normal`：放得下时整体加载，否则部分加载；`high`：只整体加载；`low`：权重最多占用 GPU 显存的一半，给其他模型留空间；`none`：几乎所有权重都从内存流式加载（最省显存，最慢）。Apple 芯片上模型总是整体加载（其内存与系统共用）。界面：**设置** › **计算** › **内存** |
+| `engines.<id>.vram_mode` | `auto` | 为单个引擎的模型设置（`auto`：使用全局设置）。界面：引擎卡片上的 **此引擎的显存使用** |
+| `compute.vram_reserve_mb` | `1024` | 在请求所需之外保留的空闲显存（MB） |
+| `compute.vram_limit_mb` | `0` | 每块 GPU 最多使用这么多（MB；`0`：全部），用于与其他程序共用 GPU |
+| `compute.ram_reserve_mb` | 空 | 保留的空闲内存（MB；空：2 GB 与内存十分之一中较大者）：低于它时丢弃内存中的副本、卸载空闲模型 |
+| `compute.host_copies` | `auto` | 为 GPU 上模型的权重在内存中保留一份副本，把模型移出 GPU 时不需要复制（`auto`：内存充足时） |
+| `compute.max_pinned_mb` | `0` | 流式加载到 GPU 的权重使用的锁页内存（复制更快；`0`：Windows 上最多内存的 40 %，Linux 上更多） |
+| `compute.async_offload` | `-1` | 在 GPU 计算时复制流式权重的复制流数量（`-1`：NVIDIA 和 AMD 上两个，其他为零） |
+| `compute.oom_retry` | 开 | 某一步显存不足时，把更多权重留在内存中重新运行这一步：结果相同，速度较慢 |
+| `compute.oom_fallback` | 关 | 之后允许这一步用更省显存的方式（分块解码、更小的批次）：占用更少显存，输出略有不同并会注明 |
+| `compute.kv_cache` | `dynamic` | `static`：Qwen3-TTS 与 CosyVoice 的语言模型把缓存写入预先分配的缓冲区（复制和碎片更少）。在 CPU 上结果相同；在 GPU 上结果的最后几位可能不同，因此需主动开启 |
+| `compute.cuda_graphs` | `true` | 在 NVIDIA 显卡上把 Qwen3-TTS、Fish Speech、CosyVoice 2/3、VoxCPM、GPT-SoVITS 与 IndexTTS 每一帧（每个 token、每个 patch）的解码作为 CUDA Graph 一次启动，生成快数倍，结果完全一致；部分权重从内存流式加载的模型不使用 CUDA Graph；`false` 逐个启动算子 |
+| `engines.qwen3tts.load_options.fused_projections` | `false` | 快速模式：Qwen3-TTS 的 q/k/v 与 gate/up 投影各合并为一次矩阵乘法（与 qwen-tts-webui 相同），在 GPU 上再快几个百分点；GPU 上结果不再逐位一致 |
+| `compute.cuda_allocator` | `auto` | torch 的 CUDA 显存分配器：`native`、`async`（cudaMallocAsync）、`expandable`（可扩展段）；下次启动时生效 |
+
+- 模型如何放置记录在每个结果的详情中（`meta.memory`：从内存流式加载的 MB、在设备上的 MB）；部分从内存运行、或显存不足后重试过的结果带有一条警告。部件只部分加载时，`meta.memory.partial` 逐个说明原因：当时权衡的空闲显存、预留的工作显存和保留量，或它为哪个部件让出了显存。日志中也有同样的信息。
+- 每一步预留的工作显存随请求而定：语言模型的缓存按文本长度估算，而不是按 `max_new_tokens` 允许的最长生成估算。生成远超其文本长度、超出显存时，这一步会以更多权重流式加载的方式重新运行，结果相同。
+- 部分加载的模型每次运行都要把那些层的权重从内存复制过来：语言模型每生成一帧都要付出这个代价，所以放得下的部分越多越快。在 NVIDIA 和 AMD GPU 上复制与计算重叠；在 Intel GPU 上同步进行。
+- `mizuoto doctor` 打印当前生效的内存设置。
+- 内部如何工作（阶段、单元、流式加载、预算、估算）：见[显存与内存](/docs/development-memory)。
+
+### 只整体加载（`high`）
+
+`compute.vram_mode` 为 `high`（**只整体加载**）时，Mizuoto 总是尝试整体加载模型，不看模型目录中的显存估计和显卡的空闲显存，与 ComfyUI 相同。它先把这块 GPU 上空闲的模型移走腾出空间，再复制权重。只有显存分配真正失败时请求才失败：错误码 `compute_unavailable`（`detail.reason` 为 `out_of_memory`，命令行退出码 9），随后所有 GPU 上未在使用的模型都会被卸载（见下文）。`compute.gpu_jobs` 大于 1 时，如果另一个请求占着这块 GPU 导致空间不够，请求先等待它结束（最多 10 分钟），然后再尝试加载。
+
+其他模式下，放不下的模型部分加载，最少到最小工作集（从不流式加载的部分和正在复制的副本）。即使估算认为连这也放不下，Mizuoto 也会尝试：在所有模式下，只有显存分配真正失败才算错误。
+
+### 显存不足
+
+请求的某一步仍然显存不足时（估计偏小，或其他程序占用了显存），Mizuoto 把这块 GPU 上其他空闲模型移走，把这一步自己的一半权重留在内存中，并用相同的随机数重新运行这一步，所以结果相同，只是更慢；最多重试两次。仍然不够且开启了 `compute.oom_fallback` 时，有更省显存方式的引擎会使用它（语音识别逐个 30 秒窗口，GPT-SoVITS 逐句，F5-TTS、IndexTTS 和 VoxCPM 的解码器分块）。否则请求以 `compute_unavailable` 失败（`detail.reason` 为 `out_of_memory`），并且与 ComfyUI 一样，Mizuoto 会卸载所有 GPU 上未在使用的模型，让下一次尝试从空的设备开始（CPU 上的模型保留）。如果再次失败，把引擎换到另一个设备，把 `compute.vram_mode` 设为 `low` 或 `none`，或调小 `compute.max_resident_models`。Mizuoto 还会记住每一步实际用了多少显存，下次预留相应的量。
+
+## 编译模型（`compute.compile`）
+
+`compute.compile`（默认关，界面为 **设置** › **计算** › **编译模型（torch.compile）**）用 `torch.compile` 编译部分引擎最耗时的模块：
+
+| 引擎 | 编译的模块 |
+| --- | --- |
+| F5-TTS | DiT（E2 为 UNetT） |
+| CosyVoice | flow 估计器 |
+| GPT-SoVITS v4、v5 Turbo | CFM 估计器 |
+| IndexTTS-2 / 2.5 | s2mel DiT 和 BigVGAN（加载选项 `use_torch_compile` 也会开启） |
+| VoxCPM | 局部 DiT |
+
+- 对修改之后加载的模型生效；已加载的模型保持原样。
+- 最初的请求要付出编译时间：在 CPU 上多 30 秒到 160 秒。
+- 在 CPU 上（fp32，8 线程），被编译模块的耗时：F5-TTS 减少 23%（整个请求从 60 秒降到 45 秒），IndexTTS 的 DiT 减少 7%、BigVGAN 减少 20%，GPT-SoVITS v4 减少 7%，CosyVoice 和（bf16 的）VoxCPM 没有变化。音频与不编译时略有差别；VoxCPM 的语音结束位置可能因此改变。
+- 需要可用的 C++ 编译器。没有编译器，或某个模型的代码无法编译时，Mizuoto 记录一条警告，该模型照常不编译运行。Docker 镜像中没有编译器，所以在那里它不起作用。
+
+更多测量数据，以及提速工作怎样确保结果不变：见[性能记录](/docs/development-performance)。
+
+## 注意力后端
+
+所有引擎和训练器的注意力计算都经过同一个开关 `compute.attention`（**设置** › **计算** › **注意力**），参照 ComfyUI 的注意力后端：
+
+| 取值 | 由谁计算注意力 |
+| --- | --- |
+| `auto`（默认） | 按各模型原本实现的方式，结果与之完全相同 |
+| `fast` | 本设备上最快的后端：NVIDIA GPU 上的 fp16/bf16 模型依次使用已安装的 SageAttention、FlashAttention、xFormers，否则使用 PyTorch 的 SDPA；其他设备使用 SDPA |
+| `sdpa`、`math`、`sdpa_flash`、`sdpa_efficient`、`sdpa_cudnn` | PyTorch 的 SDPA（由它自己选择内核）、它的精确 math 内核，或它的某个融合内核 |
+| `flash`、`xformers`、`sage`、`sage3` | FlashAttention、xFormers、SageAttention 2（或 1）、SageAttention 3（Blackwell） |
+
+- 除 `auto` 以外的取值都会使结果略有不同（SageAttention 会量化注意力分数）。输出会记录计算各部分所用的后端（`params.attention`：各后端的调用次数以及回退的原因），`mizuoto runtime` 会显示每个已加载模型的后端。
+- 某个后端无法处理的调用会回退到下一个后端，最后回退到模型自己的计算方式。原因包括：未安装、GPU 不匹配、不支持的掩码、头维度、fp32、缺少反向传播，或内核出错。每种原因只记录一次日志。显存不足不算回退，由显存重试机制处理。开启 `compute.attention_strict` 时，请求会直接失败。
+- 有些注意力无论如何设置都保持自己的计算方式，因为没有融合内核能计算它们：在分数中加入相对位置的注意力（wenet、w2v-BERT、GPT-SoVITS 的 VITS），以及少数手写的编码器。
+- `engines.<id>.attention`（引擎卡片上的 **此引擎的注意力**）可以按引擎设置。
+- 训练有自己的设置 `training.attention`（**设置** › **训练** › **注意力**）。它只提供带反向传播的后端，因此不包括 SageAttention。
+- 修改对之后加载的模型生效。
+- 后端怎样选择和检查：见[加速](/docs/development-acceleration#注意力)。
+
+这些包都不是依赖。每个包都绑定特定的 torch 版本、CUDA 或 ROCm 运行时和 GPU 架构，需要自行安装，并且不能让它们替换已装好的 torch。`mizuoto doctor` 会列出已安装的包、每个包能否在每块 GPU 上运行（一次小的自检），并给出适合本机的安装命令。例如：torch 2.8.0 用 `pip install "xformers==0.0.32.post2" --no-deps`；`pip install flash-attn --no-build-isolation --no-deps`（需要编译）；`pip install sageattention==2.2.0 --no-build-isolation --no-deps`（需要 `nvcc`）。
+
+`compute.fast`（**设置** › **计算** › **加速**）为整个进程开启 GPU 提速开关，参照 ComfyUI 的 `--fast`：`tf32`、`fp16_accumulation`、`cudnn_benchmark` 和 `sdpa_reduced_precision`。每一项都会使结果略有不同。它们在下次启动 Mizuoto 时生效，输出会记录它们（`params.fast`）。
+
+## 合并等待中的请求（micro-batching）
+
+`tts.micro_batch`（默认开，Web UI 为 **设置** › **语音** › **合并等待中的请求**）：服务器队列里等待同一模型的请求，如果只是文本不同，就合并成一批交给引擎，每个请求仍得到自己的结果和任务。
+
+满足下列全部条件的请求才会合并：
+
+- 模型变体支持 **批量** 且每批上限至少为 2：Qwen3-TTS（8）、GPT-SoVITS（20）、OmniVoice（8）；
+- 文本只有一段（没有被切分成多段，也不是批量请求）；
+- 没有指定种子（批处理中的随机数与单独运行不同）；
+- 不是流式文本输入；
+- 模型、设备、音色、风格、语言、参数、引擎选项和参考音频全部相同。
+
+正在运行的请求在调用引擎前取走队列里同组的请求；整批失败时，这些请求回到队列各自运行。命令行每次只在前台运行一个任务，所以只有服务器（Web UI、HTTP 接口）会合并。
+
+## 在 CPU 上运行
+
+所有引擎和训练都能在 CPU 上运行，适合试用和短句，但比 GPU 慢很多，长文本和训练尤其如此（GPT-SoVITS 的训练在 GPU 上是几分钟，在 CPU 上是几小时）。选择较小的模型（如 Qwen3-TTS 0.6B、GPT-SoVITS）能明显缩短等待；`compute.compile` 对 F5-TTS 帮助最大。
+
+两项设置能让 CPU 上的运算更快，且不改变任何结果（Linux；其他系统上不起作用）：
+
+| 设置 | 默认值 | 说明 |
+| --- | --- | --- |
+| `compute.cpu_allocator` | `auto` | CPU 内存分配：`tuned`（Linux 上 `auto` 即此）复用大块内存并把大张量放在大页上，CPU 上快 10–20%，结果完全相同；`system` 保持 C 库默认；下次启动时生效 |
+| `compute.cpu_threads` | `auto` | `cores`（Linux 上 `auto` 即此）把 torch 的 CPU 线程绑定到不同的物理核心；`off` 交给系统调度（有其他繁忙程序共用 CPU 时更好）；下次启动时生效 |

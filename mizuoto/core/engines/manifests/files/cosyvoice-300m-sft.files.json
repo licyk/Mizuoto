@@ -1,0 +1,51 @@
+{
+ "repo": "FunAudioLLM/CosyVoice-300M-SFT",
+ "revision": "fbb71de2afe387ed854eebd80b9f3d078c6b9869",
+ "files": [
+  {
+   "path": "campplus.onnx",
+   "size": 28303423,
+   "sha256": "a6ac6a63997761ae2997373e2ee1c47040854b4b759ea41ec48e4e42df0f4d73"
+  },
+  {
+   "path": "config.json",
+   "size": 2,
+   "sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a"
+  },
+  {
+   "path": "configuration.json",
+   "size": 47,
+   "sha256": "c502b6328c67638b401df8dd05de89e9e8d1cff9cd0ada10dfbdbe13556c20de"
+  },
+  {
+   "path": "cosyvoice.yaml",
+   "size": 6421,
+   "sha256": "5475b9b2f788f3ddd3798898041197e076d20cb2ea783ef9638e6eed36ba16db"
+  },
+  {
+   "path": "flow.pt",
+   "size": 419900943,
+   "sha256": "21eae78c105b5e1c6c337b04f667843377651b4bcfb2d43247ed3ad7fd0a3470"
+  },
+  {
+   "path": "hift.pt",
+   "size": 81896716,
+   "sha256": "91e679b6ca1eff71187ffb4f3ab0444935594cdcc20a9bd12afad111ef8d6012"
+  },
+  {
+   "path": "llm.pt",
+   "size": 1242994835,
+   "sha256": "d198ce56636e1eb1c9d0cb0d6e3529de8fdfd3fd45075c346296b0d6dcfc54ea"
+  },
+  {
+   "path": "speech_tokenizer_v1.onnx",
+   "size": 522624269,
+   "sha256": "23b5a723ed9143aebfd9ffda14ac4c21231f31c35ef837b6a13bb9e5488abb1e"
+  },
+  {
+   "path": "spk2info.pt",
+   "size": 7772,
+   "sha256": "e3b1d62ca87cdcb25a9003fa0c8f2cba5c94f55b0d5f80f0b63ef8c22d919cfc"
+  }
+ ]
+}

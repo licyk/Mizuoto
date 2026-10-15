@@ -1,0 +1,22 @@
+# What the image build does not need: local environments, caches, builds, the documentation and the upstream
+# checkouts some developers keep at the root. The Dockerfile copies only pyproject.toml, README.md, LICENSE, mizuoto/,
+# packages/native/ and scripts/build_wheels.py; this keeps the build context small.
+.git
+.venv
+**/__pycache__
+**/*.pyc
+**/node_modules
+**/*.egg-info
+mizuoto/webui/dist
+dist
+build
+packages/native/*/build
+site
+tests
+/CosyVoice
+/F5-TTS
+/fish-speech
+/GPT-SoVITS
+/index-tts
+/OmniVoice
+/Qwen3-TTS

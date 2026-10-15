@@ -1,0 +1,143 @@
+---
+title: "Development setup"
+description: "The environment and tasks needed to go from a fresh clone to the dev server, every check and a real engine."
+icon: Wrench
+---
+
+A Mizuoto development setup has two parts: one Python environment (`.venv`) with torch, Mizuoto installed editable and the development tools, and bun for the web UI and this site. Every engine runs in that one environment; there is nothing else to build. Everyday tasks run through `scripts/dev.py`, which uses only the standard library, behaves the same on Linux, macOS and Windows, and runs the same tools CI runs.
+
+## The Python environment
+
+<Steps>
+<Step>
+
+### Create `.venv`
+
+An isolated virtual environment with Python 3.11 (Mizuoto supports 3.10–3.13 and CI tests all four; development uses 3.11):
+
+```bash
+uv venv .venv --python 3.11
+```
+
+</Step>
+<Step>
+
+### Install torch first
+
+torch is a dependency of Mizuoto, but its build (CUDA, ROCm, XPU, CPU) is your choice, so install it first from the index that matches the machine. The CPU build is enough for development and for every test CI runs:
+
+```bash
+uv pip install --python .venv/bin/python "torch>=2.8" --index-url https://download.pytorch.org/whl/cpu
+```
+
+For a GPU, take the build `mizuoto doctor` names instead (for example `…/whl/cu128`); [Installation](/docs/installation) lists them. Installing Mizuoto afterwards keeps that build.
+
+</Step>
+<Step>
+
+### Install Mizuoto editable, with the development tools
+
+```bash
+uv pip install --python .venv/bin/python -e .
+uv pip install --python .venv/bin/python -e packages/native/fishspeech -e packages/native/indextts   # optional: the licence-gated engines
+uv pip install --python .venv/bin/python pytest pytest-cov ruff ty tomli httpx
+```
+
+The development tools are also listed in `[dependency-groups] dev` of `pyproject.toml`. Without the two gated packages their tests skip and their engines show as missing.
+
+</Step>
+<Step>
+
+### Use that interpreter from then on
+
+```bash
+.venv/bin/python scripts/dev.py check
+.venv/bin/python -m mizuoto version
+.venv/bin/mizuoto doctor
+```
+
+`dev.py` runs ruff, ty and pytest with the interpreter running it (`sys.executable`), not whichever is on `PATH`.
+
+</Step>
+</Steps>
+
+### Optional extras
+
+Some front ends need packages that are not in the default install. Without them those languages fail with `capability_not_supported` and the install command in the hint, and `mizuoto doctor` lists them as warnings:
+
+| Extra | Packages | For |
+| --- | --- | --- |
+| `mizuoto[gptsovits-ja]` | `pyopenjtalk==0.4.1` (an sdist: needs CMake and a C++ compiler) | GPT-SoVITS's Japanese |
+| `mizuoto[gptsovits-ko]` | `python-mecab-ko`, `jamo` | GPT-SoVITS's Korean |
+| `mizuoto-indextts[ja]` | `fugashi`, `unidic-lite` | IndexTTS-2.5's Japanese |
+
+From a checkout: `uv pip install --python .venv/bin/python -e ".[gptsovits-ja,gptsovits-ko]"`.
+
+<Callout type="info" title="ty and editable installs">
+ty does not follow an editable install's path hook, so `pyproject.toml` sets `tool.ty.environment.extra-paths` to `packages/native/fishspeech` and `packages/native/indextts`, which resolves `mizuoto_fishspeech` and `mizuoto_indextts` from source. torch and the optional extras' packages are listed in `tool.ty.analysis.allowed-unresolved-imports`.
+</Callout>
+
+## The web UI: bun
+
+The web UI (`mizuoto/webui/`) and the docs site (`site/`) use [bun](https://bun.sh) to install, build and test. `dev.py` looks for `bun` on `PATH`, then in the installer's default `~/.bun/bin`, and gives a clear error, not a traceback, when neither has it.
+
+```bash
+python scripts/dev.py web-install   # bun install (mizuoto/webui)
+python scripts/dev.py web           # build into mizuoto/webui/dist
+```
+
+The built `dist/` ships in the wheel as package data; `mizuoto webui` from a checkout without `dist/` serves the API but no UI.
+
+## `scripts/dev.py` tasks
+
+`python scripts/dev.py` with no arguments lists every task. Options after the task name are passed on to the underlying script; a task that takes none fails when given some.
+
+| Task | What it does |
+| --- | --- |
+| `check` | Everything CI runs: `lint`, `typecheck-py`, `test-py`, `test-web`, `typegen-check` |
+| `lint` | `ruff check .` and `ruff format --check .` |
+| `format` | `ruff check --fix .` and `ruff format .` |
+| `typecheck-py` | ty over `mizuoto`, the gated engines, `tests` and `scripts` |
+| `test-py [pytest options…]` | pytest; the `live`, `engine`, `weights` and `e2e` markers are deselected by default |
+| `test-engines [engine…] [-- pytest options]` | The contract suite against the installed models (`MIZUOTO_TEST_DEVICE=cpu\|cuda:N`) |
+| `model-manifests [engine…]` | Pin the catalogue models' files (sizes, SHA-256) (`scripts/model_manifests.py`) |
+| `wheels [all\|host\|native] [engine…]` | Build `mizuoto` (with the UI) and the gated engines' wheels into `dist/` (`scripts/build_wheels.py`) |
+| `smoke` | Install the built wheels over a CPU torch in a new environment and try them (`scripts/smoke_wheels.py`) |
+| `dev [--api-port] [--web-port] [--data-dir]` | The API server (7869) and the Vite dev server (5173) together; Ctrl+C stops both |
+| `web-install` / `web` / `web-dev` | Install the UI's dependencies / build the UI / Vite only (expects a running API) |
+| `test-web` | `bun run test` (vitest) and `bun run typecheck` (vue-tsc) |
+| `openapi` | Print the OpenAPI schema on standard output (`scripts/generate_openapi.py`) |
+| `typegen` | Regenerate `mizuoto/webui/src/api/schema.d.ts` from the schema (commit the result) |
+| `typegen-check` | Regenerate, then `git diff --exit-code`: fails when the types are stale |
+
+The docs site has its own tasks: `site-install`, `site-dev`, `site` and `test-site` (see [Release](/docs/development-release#the-docs-site)). The parity harness is not a `dev.py` task; it lives in `scripts/parity/` (see [Testing](/docs/development-testing#parity-with-the-references)).
+
+### `dev`: edit and watch
+
+```bash
+python scripts/dev.py dev --data-dir /tmp/mizuoto-dev
+```
+
+It starts the API as `python -m mizuoto webui --no-open --port 7869 --strict-port` (with the repository root on `PYTHONPATH`) and Vite as `bun run dev`, passing `MIZUOTO_BACKEND=http://127.0.0.1:7869` to Vite. Vite proxies `/api` and `/ws` to the API, so the browser only opens `http://localhost:5173`. UI changes reload in place; Python changes, an engine's included, need the task restarted (models load into the server's process). While the API is down, Vite's proxy prints one short line every few seconds instead of a flood of connection errors.
+
+`--data-dir` keeps the development settings, database, models and outputs apart from your everyday data folder (`MIZUOTO_DATA_DIR` does the same).
+
+## A real engine on your machine
+
+Every engine is already installed with Mizuoto; a real one needs only its models:
+
+```bash
+.venv/bin/mizuoto doctor qwen3tts                      # torch against the hardware, the engine, its extras
+.venv/bin/mizuoto model download qwen3tts/1.7b-base
+.venv/bin/mizuoto speak "Hello" -m qwen3tts/1.7b-base --ref a.wav --ref-text "…"
+```
+
+- The model loads into the process that runs the command (or into the server's, for requests through the API). `mizuoto runtime` lists what the running server has loaded; `mizuoto runtime --unload` frees it.
+- A change to an engine's code takes effect in a new process: restart the server, or run the command again.
+- Licence-gated engines (Fish Speech, IndexTTS) need their package installed and `mizuoto engine accept-licence <id>` before their models download.
+
+<Callout type="warn" title="When the GPUs are taken">
+A development machine's GPUs may be full with another process's work. Put the engine on the CPU then: `mizuoto config set engines.qwen3tts.device cpu`, or `MIZUOTO_TEST_DEVICE=cpu` for the contract suite. A model always tries to load; when the GPU's memory runs out, the job fails with `compute_unavailable` (exit 9) and every model not in use is unloaded from the GPUs.
+</Callout>
+
+How to verify an engine completely (tiny random models, the contract suite, parity with 0.1) is in [Testing](/docs/development-testing).

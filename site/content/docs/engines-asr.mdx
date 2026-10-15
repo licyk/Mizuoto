@@ -1,0 +1,59 @@
+---
+title: "语音识别（Whisper）"
+description: "内部的语音识别引擎：由 Mizuoto 自己实现的 Whisper large-v3-turbo，复现 Mizuoto 0.1 所用的 transformers 流水线，包括 5 束的束搜索、重叠窗口、seek 循环与合并；以及显存说明和对照结果。"
+icon: Captions
+---
+
+Mizuoto 自己的语音识别：Whisper large-v3-turbo（[openai/whisper](https://github.com/openai/whisper)；权重 MIT），用于转写参考音频和音色、准备数据集，以及计算契约套件的词错误率。代码：`mizuoto/engines/asr`。它不作为合成模型提供。它完全复现 Mizuoto 0.1 运行的东西，即 transformers 4.57.3 的 `pipeline("automatic-speech-recognition")`，给出与 0.1 逐 token 相同的转写结果，在 CPU 上用时约为一半。面向用户的说明见[引擎详解](/docs/advanced-engines)。
+
+## 变体与文件
+
+只有一个变体 `whisper`（目录模型 `asr/whisper-large-v3-turbo`）；模型按 `config.json` 构建，所以同样格式的其他 Whisper 尺寸也能加载。模型目录包含 `config.json`、`generation_config.json`、`model.safetensors`（或 `pytorch_model.bin`）、`preprocessor_config.json`、`tokenizer.json` 和 `tokenizer_config.json`。
+
+引擎只响应一个操作 `call("transcribe", {"path", "language", "options"})`，返回 `{text, language, segments, duration}`。`AsrService` 为它持有一把锁，并按音频的 SHA-256 和模型缓存转写结果。
+
+精度：在支持 bf16 的 CUDA GPU 上用 bf16（否则 fp16），其他设备用 fp32；`engines.asr.dtype` 可覆盖。
+
+## 工作原理
+
+0.1 调用流水线时传入 `chunk_length_s=30, batch_size=4, return_timestamps=True`，任务和语言作为生成参数。引擎的做法相同：
+
+1. 按 soundfile 的方式读取 WAV（各声道取平均），用 soxr（其默认的 HQ）重采样到 16 kHz。
+2. 没有指定语言时，在前 30 秒上识别语言（解码器在语言 token 上走一步）。
+3. 音频切成 30 秒的窗口，两侧各重叠 5 秒；每个窗口的特征按 `WhisperFeatureExtractor` 的方式计算；每次 `generate` 调用处理四个窗口。
+4. `generate` 带时间戳解码每个窗口，用 5 束的束搜索，并在窗口内运行 Whisper 的 seek 循环。
+5. 流水线的 `_decode_asr` 把各窗口的 token 合并成文本和带时间戳的分段。
+
+| 模块 | 内容 |
+| --- | --- |
+| `engine.py` | 0.1 的流水线：读取、重采样、语言识别、窗口、`generate`、合并 |
+| `model.py` | 按 transformers 4.57.3 的计算方式实现的 `WhisperForConditionalGeneration`（SDPA 路径、编码器的数值截断、交叉注意力缓存） |
+| `decoding.py` | 生成设置、按 transformers 顺序排列的 logits 处理器、向量化的束搜索、贪心解码、seek 循环 |
+| `text.py` | 按 `WhisperTokenizerFast` 的方式解码、语言 id、窗口边界、`decode_asr` |
+
+共享模块：`nn/dsp/mel.py`（`hf_whisper_filters`、`hf_whisper_log_mel`）、`nn/dsp/wav.py`。
+
+## 与上游一致的做法
+
+- **5 束。** 流水线的默认生成配置（`num_beams=5`）优先于模型的贪心默认值，所以无论 `beam_size` 怎么设，0.1 总是用 5 束解码；选项 `beam_size` 为 1 时保持这 5 束，更大的值则设定束数。束搜索是 transformers 4.57 向量化的 `_beam_search`（先 log-softmax，再经处理器，`2 × beams` 个候选）。
+- **每个窗口内的 seek 循环。** 每个窗口都补齐到 30 秒；以一对时间戳结束的解码会从该时间戳重新解码（特征平移，后面补零），时间戳对之后的 token 被丢弃。`_decode_asr` 为重新开始的时间戳重新定基，并合并重叠的窗口。
+- **特征**来自 transformers 的 `WhisperFeatureExtractor`，使用它自己的 float64 slaney 滤波器组和转置后的乘法，而不是 openai-whisper 的 log-mel。Turbo 的 `tokenizer_config.json` 设置了 `clean_up_tokenization_spaces`（" ." 变成 "."），按分段应用。
+- **注意力**：先投影查询再乘以 `head_dim ** -0.5`，SDPA 使用 `scale=1`，q、k、v 都是连续张量；解码器在多 token 提示上为无掩码的因果注意力，每个新 token 不加掩码，缓存按拼接增长。
+
+## 有意的差异
+
+- **模型独立实现。** CosyVoice 的语音分词器里也有一个 Whisper 编码器，但那里用的是 openai 的注意力（q 和 k 各乘以 d^-¼，带掩码），是另一种计算，所以两者不共用。
+- **精确的捷径**：只有一个窗口时复用语言识别时的编码器输出；所有束的行逐位相同时不重排交叉注意力缓存。两者都不改变任何 token。
+
+## 显存
+
+每次转写一个阶段：整个模型，解码器标为 `hot`（它按 token 和束运行），`kind="sequence"`。开启 `compute.oom_fallback` 时，显存不足的转写改为一次解码一个 30 秒窗口而不是四个；这是另一种批形状，所以在罕见的并列情况下转写结果可能不同。
+
+## 对照结果
+
+在 CPU 上以 fp32 运行，转写结果与 0.1 完全相同：在 57 段语料音频（自动识别或指定语言）和 6 段 50–124 秒的音频上，文本、分段、语言以及每个窗口的 token 都相同；模块层面还包括特征和 `_decode_asr`（3000 个随机生成的窗口）。完整链路中需要转写参考音频的对照用例（一个 Qwen3-TTS 克隆和一个 CosyVoice 2 克隆）也完全相同，所以契约套件的词错误率不变。
+
+## 限制
+
+- 模型目录中只有一个模型；语音识别在 Mizuoto 内部使用，不作为合成模型提供，也不出现在 `GET /v1/models` 中。
+- 显存不足时的回退方式在罕见的并列情况下可能改变转写结果。

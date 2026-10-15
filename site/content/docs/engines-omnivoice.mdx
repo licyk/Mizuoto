@@ -1,0 +1,73 @@
+---
+title: "OmniVoice"
+description: "Mizuoto 中实现的 OmniVoice 引擎：迭代解掩码的双向 Qwen3，HiggsAudio v2 分词器（DAC 与 HuBERT），不依赖 pydub 的 pydub 算术，哪些做法与上游完全一致，全量与 LoRA 微调，以及对照结果。"
+icon: Languages
+---
+
+小米的扩散语言模型语音合成，支持 600 多种语言（[k2-fsa/OmniVoice](https://github.com/k2-fsa/OmniVoice)，Apache-2.0）。代码：`mizuoto/engines/omnivoice`。在 CPU 上以 fp32、同一种子运行时，它在每个对照用例中都与 Mizuoto 0.1（运行在 transformers 5.3 上的上游）完全相同，两个训练器也逐字节给出 0.1 的适配器和导出权重。面向用户的说明见[引擎详解](/docs/advanced-engines#omnivoice)。
+
+## 变体与文件
+
+一个变体 `v0`（目录中的模型 `omnivoice/omnivoice`）：克隆（必须有参考文本；缺少时 Mizuoto 用语音识别补全，所以引擎自己从不加载 Whisper）、按封闭的属性词表设计音色、模型自带音色，以及 13 个行内非语言标签。
+
+模型目录包含 `config.json`、`model.safetensors`、BPE 分词器文件和 `audio_tokenizer/`（`config.json`、`model.safetensors`、`preprocessor_config.json`）。音色缓存是 `prompt.pt`，与上游的音色克隆提示相同。
+
+精度：支持 bf16 的 CUDA GPU 上用 bf16（否则 fp16），其他设备用 fp32；`engines.omnivoice.dtype` 可以覆盖。
+
+## 工作原理
+
+音频是 HiggsAudio v2 分词器的 8 个码本。语言模型是**双向**运行的 Qwen3-0.6B，它看到风格 token、文本、参考音频的编码，以及作为掩码位置的目标；在固定的步数里（默认 32 步）逐步解开最有把握的编码，采用对数概率空间里的无分类器引导、按码本的惩罚，以及位置上的 Gumbel 噪声。每一步都是对整个序列的完整前向（没有 KV 缓存）。目标长度来自基于规则的估计（按文字系统的字符权重，再按参考音频的语速缩放），或者来自 `speed` 和 `duration`。
+
+| 模块 | 是什么 |
+| --- | --- |
+| `engine.py` | `create_voice_clone_prompt`、时长、`_generate_iterative`、长文本分块、后处理 |
+| `model.py` | 网络：在文本和音频编码上运行的双向 Qwen3（`audio_embeddings`、`audio_heads`） |
+| `audio_tokenizer.py` | 按 transformers 5.3 的计算方式实现的 HiggsAudio v2 分词器：DAC 声学编码器 + HuBERT 语义分支、欧氏残差码本；`fc2` + DAC 解码器 |
+| `audio.py` | 不依赖 pydub 的后处理（`Segment`：在 int16 数组上做 pydub 的毫秒算术、`audioop.rms`） |
+| `duration.py` | 基于规则的时长估计，上游的表格 |
+| `text.py` | 在标点处分块、`add_punctuation`、`combine_text`、识别标签的分词 |
+| `voice_design.py` | 封闭的设计词表和 `_resolve_instruct` |
+| `lang_map.py` | 语言名称到 OmniVoice id 的映射 |
+| `train.py` | `OmniVoiceTrainer`（方法 `full`、`lora`） |
+
+共享：`runtime/lm/qwen.py`、`nn/codecs/dac.py`、`nn/ssl/hubert.py`、`text/tokenize/bpe.py`、`nn/dsp/resample.py`、`nn/dsp/wav.py`、`nn/dsp/flac.py`。
+
+## 与上游一致的做法
+
+- **注意力掩码。** 语言模型是 `runtime/lm/qwen` 的解码器，使用完整的四维布尔掩码：transformers 原样返回四维掩码，SDPA 收到的是重复了 KV 头的掩码，不是因果的。条件行和无条件行在一个批次里运行，与上游的批处理方式相同。
+- **抽样。** 位置上（以及设了 `class_temperature` 时类别上）的 Gumbel 噪声来自请求的生成器，按步、按条抽取，与上游相同；批次的组成会改变抽样，上游也是如此。
+- **分词器**由 DAC（奇数步幅加输出填充，没有最后的 tanh）、HuBERT（位置卷积的权重归一化沿第 2 维折叠）和欧氏残差码本组成。语义解码器和 `fc1` 只在训练中使用，不加载。
+- **HuBERT 的抽样。** HuBERT 即使在 eval 模式下，每层也从 CPU 生成器抽取一次 `torch.rand([])`；`HubertModel` 在 `ctx.generator_for("cpu")` 上做同样的抽样。因此没有缓存音色提示的克隆，与有缓存的克隆得到的噪声不同，0.1 和 Mizuoto 都是如此；Mizuoto 总在请求之前先准备好提示，所以这一点从不显现。
+- **不依赖 pydub 的 pydub。** 对提示和输出的静音去除，在 int16 数组上按 pydub 的算术复现：毫秒长度四舍五入、位置截断、`audioop.rms` 向下取整。Python 3.13 已经没有 `audioop`，本来就需要移植。
+- **响度与长文本。** 参考音频的响度调到 RMS 0.1，输出再调回去；长输出按文本分块生成，以参考音频（或第一块）为条件，并交叉淡化。
+- **文本分词器**是 `mizuoto.text` 的 BPE，不加 transformers 的 “Mistral fix”（模型声明的是 transformers 5.3，那里不适用）。
+
+## 有意的差异
+
+- **没有自由文本设计。** 模型是在封闭的属性词表上训练的；自由文本会被拒绝，与 0.1 相同。
+- **没有 FlashInfer 和 CUDA 图。** 0.1 中它们的加载选项已经去掉；SDPA 适用于所有平台。
+- **上游的文本规范化**（`normalize_text`、WeTextProcessing）Mizuoto 的请求用不到，没有移植。
+
+## 显存
+
+两个阶段：音频分词器（音色提示，然后解码）和语言模型。语言模型每一步都在整个序列上重新运行，所以在权重流式加载中它是一个 `oneshot` 模型（最大的单元留在设备上）。训练：对模型的层做梯度检查点，结果相同，LoRA dropout 也包括在内；`lowest` 把 AdamW 的状态放在内存里（CPU 上相同）。
+
+## 训练
+
+方法 `full` 和 `lora`（阶段 `tokens`、`train`、`export`；上游的 `extract_audio_tokens` 和使用其 SDPA 微调配置的 `OmniTrainer`；不需要 transformers、peft、accelerate 或 webdataset）。两边用同样的种子时，两者都在 CPU 上逐字节给出 0.1 的编码、批次、损失、学习率、LoRA 适配器和导出的 `model.safetensors`，在梯度累积、多个分片和多个加载 worker 下也是如此。LoRA 会合并进导出的模型。
+
+- **上游在构建模型之后用配置中的 42 重新播种**，所以阶段的种子只通过 peft 的 LoRA 初始化起作用，这一初始化首先按模块顺序从进程级生成器抽取（`A` 和 `B` 先作为 `nn.Linear` 创建，`A` 再抽取一次）。
+- **重新播种之后的抽样来自私有生成器**：每个 epoch 加载器的基础种子和 LoRA dropout 掩码共用一个以 42 播种的生成器；第 *w* 个 worker 的 `Random` 和 `Generator` 以 `(base + w) mod 2**32` 播种。在每个 worker 里，webdataset 先花掉一次 `randint(0, 1000000)` 生成一个从不使用的种子，然后处理器才开始抽样。分片列表用 `Random(epoch)` 打乱，样本经过以 epoch 播种的 webdataset 20 000 样本缓冲区；各 worker 的批次轮流到来。
+- **按长度分批**（`StreamLengthGroupDataset`、`PaddingDataCollator` 的四维掩码），与 SDPA 配置相同，而不是 FlexAttention 的打包。
+- **梯度裁剪**按上游的参数顺序（token 嵌入在先）累加各张量的范数。
+- **token 顺序**遵循 `JsonlDatasetReader` 以 42 为种子的顺序。
+- 检查点不保存优化器状态。加载 worker 多于分片时 0.1 会失败；这里多出的 worker 空闲。预览带种子。
+
+## 对照结果
+
+全部 4 个完整链路用例在 CPU 上以 fp32 与 0.1 逐采样相同：克隆、按属性设计、自带音色和微调后的模型。模块层面还包括音色提示的编码、分词器的解码、logits、`class_temperature`、`speed`、`duration`、批量以及长文本分块路径。另有两个用例让一种实现加载另一种实现导出的 LoRA，结果相同。契约套件通过（12 项）。
+
+## 限制
+
+- 每一步都是条件行和无条件行在整个序列上的完整前向；这个引擎没有 CUDA 图路径。
+- 不能用自由文本设计音色（模型只接受属性）。

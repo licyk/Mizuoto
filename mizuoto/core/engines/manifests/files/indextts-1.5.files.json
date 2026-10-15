@@ -1,0 +1,26 @@
+{
+ "repo": "IndexTeam/IndexTTS-1.5",
+ "revision": "25851a6036dfd3095bb70fb3c8f49217104672c3",
+ "files": [
+  {
+   "path": "bigvgan_generator.pth",
+   "size": 536176992,
+   "sha256": "a2458834d8277e76eb8614c9751b5e8eaa0474eab706f0ecfafcb600023133ed"
+  },
+  {
+   "path": "bpe.model",
+   "size": 475997,
+   "sha256": "b2a5ce8090d32da3642cc4f81fdc996376bc6dd3f4cd5e3d165f71120d9f2bc8"
+  },
+  {
+   "path": "config.yaml",
+   "size": 2494,
+   "sha256": "864280aeb82a722ce561078c7f7f16a63b0c6cb270e9b9566a8ce5bffef38954"
+  },
+  {
+   "path": "gpt.pth",
+   "size": 1171228980,
+   "sha256": "44460b820a8afd58f68f3d3e69113e7900c8730bf519ecf158c081f2b8991240"
+  }
+ ]
+}

@@ -1,0 +1,63 @@
+---
+title: "Development"
+description: "The entry point for contributors: what Mizuoto is made of, what is authoritative, and what each development page covers."
+icon: Code
+---
+
+This section is for people who want to change Mizuoto: fix a bug, add an engine, a training method, a screen or an API route. It describes what the code **is** now, the rules it keeps and why, not how to use it (for that, see the [guides](/docs/guide) and the [command line](/docs/cli)).
+
+## What is authoritative
+
+- **The code** and its tests: when anything else disagrees with them, they win.
+- **This site's development pages**: the design as built, the rules and why, one page per area, and one page per
+  engine in the [engine reference](/docs/engines) (the upstream behaviour each engine reproduces, its deviations, its
+  trainer and its parity result). Read the page for the area you change; a change of design updates it, in both
+  languages.
+- **`AGENTS.md`** (repository root; `CLAUDE.md` points to it): the short working record for contributors and coding
+  agents: a map of the code, the rules that must not break, the workflow, and which page covers what.
+
+## One environment, one process
+
+Mizuoto 0.2 is one Python distribution installed into one environment. Every engine (Qwen3-TTS, F5-TTS, OmniVoice, CosyVoice, GPT-SoVITS, VoxCPM, Fish Speech, IndexTTS and the internal Whisper ASR) is implemented in Mizuoto on its own runtime and runs **in the server's own process**. There is no upstream code, no transformers, no environment per engine and no worker process.
+
+| Distribution | Where | What |
+| --- | --- | --- |
+| `mizuoto` | `mizuoto/` | The core, the API, the command line, the web UI (its built `dist/` ships in the wheel), the runtime, the building blocks and every engine under a permissive licence |
+| `mizuoto-fishspeech` | `packages/native/fishspeech/` | Fish Speech, under the Fish Audio Research License |
+| `mizuoto-indextts` | `packages/native/indextts/` | IndexTTS, under the bilibili Model Use License |
+
+The two licence-gated engines are separate distributions only because of their licences. They install into the same environment and register themselves under the Python entry-point group `mizuoto.engines`.
+
+The boundary that decides where code goes is now inside the package: **`mizuoto/core` never imports torch at module level**, and `mizuoto/core/inference` is its only door to model code (`mizuoto.runtime`, `mizuoto.nn`, `mizuoto.engines`, `mizuoto.training`), always imported inside functions. So `mizuoto version`, `mizuoto --help` and the core's own tests load no torch, and a command that never loads a model never imports the runtime. [Architecture](/docs/development-architecture) starts from that rule.
+
+## Pages
+
+<Cards>
+  <Card title="Development setup" href="/docs/development-setup" description="The .venv with a CPU torch, the gated engines, bun, every scripts/dev.py task." />
+  <Card title="Conventions" href="/docs/development-conventions" description="Code style, the layer rules, the rules for native code, exactness, tests, documentation and commits." />
+  <Card title="Architecture" href="/docs/development-architecture" description="Layout and the layer rules, how Services are built, one synthesis request end to end, settings, events, jobs, errors." />
+  <Card title="Design references and decisions" href="/docs/development-design" description="Where the design comes from (ComfyUI, InvokeAI, SD Model Hub, Material Design 3) and the decisions taken, with their reasons." />
+  <Card title="Runtime" href="/docs/development-runtime" description="Devices, the model manager and handles, the request context, global-state rules, LocalEngine, cancel, streams, remote engines." />
+  <Card title="Memory" href="/docs/development-memory" description="Phases, the budget, partial loading and weight streaming, the exact out-of-memory retry, estimates and calibration." />
+  <Card title="Acceleration" href="/docs/development-acceleration" description="Attention backends, CUDA graphs, sync-free sampling, torch.compile and the CPU settings, and what stays exact." />
+  <Card title="Performance record" href="/docs/development-performance" description="How speed is measured without changing results, and the measured record." />
+  <Card title="Adding an engine" href="/docs/development-engine" description="The manifest and files manifest, the Engine and LoadedEngine contract, registration, tests and parity, with OmniVoice as the example." />
+  <Card title="Trainers" href="/docs/development-training" description="Trainer and StageContext, stages as child processes, fingerprints and stale stages, exports." />
+  <Card title="API and CLI" href="/docs/development-api" description="The FastAPI app, security middleware, errors to HTTP, OpenAPI with events, typegen, adding a route and a command." />
+  <Card title="Web UI" href="/docs/development-webui" description="Vue 3 + Material 3: the ui/ layer and its rule tests, queries, socket events, availability gates, i18n, and adding a screen." />
+  <Card title="Testing" href="/docs/development-testing" description="Test layout, the dummy engine, tiny random models, the contract suite, the parity harness, web tests and CI." />
+  <Card title="Release" href="/docs/development-release" description="Versions in lockstep, wheels, the smoke test, CI and the release workflow, Docker, the model mirror and this site." />
+  <Card title="Engine reference" href="/docs/engines" description="One page per engine: what it reproduces from upstream, its deviations, memory and speed, training and parity." />
+</Cards>
+
+## Conventions that hold everywhere
+
+In short (the full list is [Conventions](/docs/development-conventions)):
+
+
+- Python ≥ 3.10; ruff and ty unpinned, with `lint.select` written out; line length 180; every function annotated (tests and scripts exempt).
+- Models that cross the API boundary derive from `Record` in `mizuoto/core/record.py` (pydantic v2, `json_schema_serialization_defaults_required`).
+- Heavy imports go inside functions; a class that annotates with `list[...]` has no method named `list`.
+- Native code changes no process-wide state: randomness comes from the request's generators (see [Runtime](/docs/development-runtime#global-state)).
+- A new CLI command is also added to `EXPECTED_TREE` in `tests/cli/test_cli.py`.
+- Commit and open PRs only when asked.

@@ -1,0 +1,71 @@
+/*
+ * Homepage highlights: a two-column list of short claims, lighter than the
+ * feature cards above it so the two sections do not repeat one layout.
+ */
+
+.home-highlight-list {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: clamp(0.6rem, 2vh, 1.1rem) clamp(1rem, 3vw, 2.25rem);
+  margin: clamp(1.5rem, 5vh, 3rem) 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.home-highlight-list > li {
+  min-width: 0;
+}
+
+.home-highlight {
+  display: flex;
+  gap: 0.9rem;
+  align-items: flex-start;
+  padding: clamp(0.8rem, 2vh, 1.1rem);
+  border: 1px solid transparent;
+  border-radius: 1rem;
+}
+
+@media (any-hover: hover) {
+  .home-highlight:hover {
+    border-color: var(--color-fd-border);
+    background: var(--page-surface);
+  }
+}
+
+.home-highlight-icon {
+  display: inline-flex;
+  width: 2.4rem;
+  height: 2.4rem;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  border-radius: 0.75rem;
+  background: var(--page-accent-soft);
+  color: var(--page-accent-strong);
+}
+
+.home-highlight-icon svg {
+  width: 1.15rem;
+  height: 1.15rem;
+}
+
+.home-highlight h3 {
+  color: var(--page-ink);
+  font-size: calc(var(--page-body) * 1.12);
+  font-weight: 680;
+  line-height: 1.35;
+}
+
+.home-highlight p {
+  margin-top: 0.35rem;
+  color: var(--color-fd-muted-foreground);
+  font-size: var(--page-body);
+  line-height: 1.7;
+  text-wrap: pretty;
+}
+
+@container page-section (max-width: 46rem) {
+  .home-highlight-list {
+    grid-template-columns: 1fr;
+  }
+}

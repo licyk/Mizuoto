@@ -1,0 +1,212 @@
+---
+title: "Overview"
+description: "The mizuoto command line calls the same core as the web UI and the HTTP API: this page covers its shared conventions, foreground jobs, exit codes, and using it while a server runs."
+icon: Terminal
+---
+
+The `mizuoto` command line does what the web UI does: speak, clone and design voices, convert and edit recordings, transcribe, check torch and the engines, manage models, presets, projects, datasets and training, remote hosts, jobs and settings. It is a thin wrapper: each command parses its arguments, calls the **one** core method for that operation and prints the result. The HTTP API behind the web UI calls the same methods, so both behave alike, and the records `--json` prints have the same shape as the API's JSON.
+
+This page covers the shared conventions and common workflows; every command's options are in the [Command reference](/docs/cli-commands), settings and environment variables in [Configuration and environment variables](/docs/cli-config).
+
+## The commands
+
+```text
+mizuoto
+├── webui                     start the server and open the web UI
+├── version
+├── speak | design | convert | edit | asr
+├── voice    list | info | add | design | from-preset | from-output | edit | remove
+│            add-ref | remove-ref | set-transcript | retranscribe
+│            add-weights | remove-weights | fit | prepare | export | import
+├── model    list | info | spec | speakers | download | verify | delete | import
+├── asset    list | download | delete
+├── engine   list | info | licence | accept-licence | enable | disable | op
+├── doctor                    check torch, the engines and their extras
+├── runtime                   list the loaded models, and unload them
+├── env      vars
+├── preset   list | save | delete | default
+├── project  list | new | show | import | script | cast | set | render | export | delete
+├── dataset  list | create | info | import | add | prepare | check | rows | edit-row | delete
+├── train    methods | new | list | status | run | metrics | edit | export | delete
+├── output   list | info | delete
+├── job      list | show | log | cancel | retry
+├── agent                     serve this machine's engines to another Mizuoto
+├── remote   list | add | remove | use
+└── config   show | get | set | path
+```
+
+Add `--help` at any level; a group name alone (such as `mizuoto model`) shows that group's help too. Every level accepts `--debug`.
+
+## How it differs from the web UI
+
+- **Jobs run in the foreground.** `speak`, `design`, `model download`, `train run`, `project render` and the like create a job and run it in the terminal until it ends; a progress bar goes to stderr (only when stderr is a terminal, and not with `--json`), with bytes, speed and time left for downloads.
+- **<kbd>Ctrl</kbd>+<kbd>C</kbd> cancels the job.** The job is marked **Cancelled**, the engine stops at its next check (the next token or step), a training stage's process is stopped, and the command exits with code 130.
+- **No server needed.** Each command opens the data folder (settings, database, models) itself and closes it when done; the engines run in the command's own process and the models it loaded go with it, so every `speak` loads its model again. For many sentences in a row, a server (the web UI or the [HTTP API](/docs/advanced-api)) is faster: it keeps models loaded.
+- **Any path works.** The web UI reads server files only inside **Folders the browser may open** (`paths.browse_roots`); `--ref`, `model import`, `dataset import` and the like take any path on this machine.
+
+## Output and `--json`
+
+List and info commands print tables; with `--json` they print JSON in the shape of the matching API record, for scripts:
+
+```bash
+mizuoto model list --installed --json | jq -r '.[].id'
+mizuoto job show j_abc123 --json
+```
+
+A few details:
+
+- `speak` prints each result's path, duration and sample rate. Results are always kept in the outputs folder (and appear in **History**); `-o` also copies one to the path you give, whose extension picks the format.
+- `speak --json` prints `{"job": …, "outputs": […]}`: the finished job and the output records it made.
+- `speak --plan` checks the request and prints the plan (model, device, voice mode, segments, parameters) without running anything.
+- Warnings (such as parameters `--lenient` dropped) go to stderr, starting with `warning:`, never into stdout.
+
+## Exit codes
+
+A failing command prints the error and, when the error names a fix, the command to run on the next line; the exit code tells the kind of error. The codes are defined in `mizuoto/core/codes.py`, each error class's exit code in `mizuoto/core/errors.py`:
+
+| Exit code | Error code | Typical cause |
+| --- | --- | --- |
+| 0 | | Success |
+| 1 | `internal_error` | An unclassified internal error; answering "no" to a confirmation |
+| 2 | `not_found` | Unknown model, voice, job, output or engine. Click also exits with 2 for command-line mistakes (unknown option, value out of range) |
+| 3 | `conflict`, `busy` | A name exists already; a stage is running; `webui` finds no free port |
+| 4 | `invalid_input`, `invalid_path`, `capability_not_supported`, `parameter_not_supported`, `parameter_out_of_range`, `reference_invalid`, `language_not_supported` | An invalid request: the model lacks that voice mode or parameter, a reference clip is too short or too long, an unsupported language; `webui`'s certificate file is missing |
+| 5 | `licence_not_accepted` | A licence-gated engine (Fish Speech, IndexTTS) whose licence is not accepted yet |
+| 7 | `model_missing`, `engine_not_installed`, `asset_missing` | A model not downloaded; a package the engine needs is not installed (torch, or a licence-gated engine's `mizuoto-fishspeech` / `mizuoto-indextts`); a shared asset missing |
+| 8 | `device_unavailable` | A device that does not exist or cannot be used, such as a device naming an unknown remote host |
+| 9 | `compute_unavailable` | No usable device, or not enough free GPU memory (`detail.reason` is `out_of_memory` or `no_device`) |
+| 10 | `worker_failed`, `engine_error` | A training stage's process or a remote agent died or stopped answering; the engine raised an exception |
+| 11 | `timeout` | An operation took too long |
+| 12 | `download_failed` | A file could not be downloaded from any source |
+| 14 | `remote_unavailable` | A remote host cannot be reached, refused the token, or speaks another protocol version |
+| 130 | `cancelled` | <kbd>Ctrl</kbd>+<kbd>C</kbd>, or the job was cancelled |
+
+A missing package looks like this:
+
+```text
+IndexTTS needs mizuoto-indextts, which is not installed
+mizuoto doctor indextts
+```
+
+## Debugging and logs
+
+```bash
+mizuoto --debug speak "Hello." -m qwen3tts/1.7b-custom-voice --preset vivian
+mizuoto speak "Hello." -m qwen3tts/1.7b-custom-voice --preset vivian --debug   # after the command works too
+```
+
+`MIZUOTO_LOG_LEVEL` sets the log level as well (`DEBUG`, `INFO`, `WARNING`, `ERROR`; default `INFO`). Each job's full log is `jobs/<job id>.log` in the data folder (`mizuoto job log <job id>`); a training stage's output goes into its job's log too.
+
+## Using it while a server runs
+
+The command line and a server can open the same data folder at the same time. They are separate processes sharing the settings file, the database and the folders:
+
+- **Settings**: `mizuoto config set` writes `settings.toml`; a running server reads the change within about a second and the web UI refreshes. The server's address and port take effect the next time it starts.
+- **Jobs**: the command line's jobs are in the database too, so `mizuoto job list` shows the server's jobs and the web UI's **Jobs** panel shows the command line's. Each job records the process that runs it; a process opening the data folder marks unfinished jobs **Interrupted** only when their process has ended, never those of another process still running.
+- **No shared GPU queue**: a command-line job runs at once in its own process, outside the server's GPU queue, and loads its own copy of the model. If the server has the same model loaded on the same GPU, it is in GPU memory twice; when memory runs short, the job fails with `compute_unavailable` (exit code 9).
+- **Loaded models**: `mizuoto runtime` lists the models the running server holds (it finds the server through `server.json` in the data folder) and `mizuoto runtime --unload [MODEL]` unloads them there.
+- **Cancelling**: `mizuoto job cancel` reaches only jobs of its own process and reports `Job … is not running` for a job the server runs. Cancel those with **Cancel** in the web UI's **Jobs** panel, or `POST /api/v1/jobs/{job_id}/cancel`.
+- `mizuoto job retry` runs a failed, cancelled or interrupted job again in the foreground (its stored request is planned again).
+
+## Common workflows
+
+### Check the engines, download a model, speak
+
+```bash
+mizuoto doctor                                        # torch against the hardware, each engine available or not
+mizuoto engine list                                   # engines, availability, licences
+mizuoto model list -e qwen3tts                        # the catalogue
+mizuoto model download qwen3tts/1.7b-custom-voice
+mizuoto model speakers qwen3tts/1.7b-custom-voice     # preset speakers
+mizuoto speak "What a lovely day." -m qwen3tts/1.7b-custom-voice --preset vivian \
+    --instruct "cheerful" -o hello.mp3
+```
+
+Without `-m`, `tts.default_model` is used. `mizuoto model spec <model>` lists the voice modes, languages, common parameters and engine options a model takes.
+
+### Clone and design voices
+
+```bash
+# Clone from a reference clip (--ref-text is what it says; left out, speech recognition fills it in,
+# or the model clones without a transcript)
+mizuoto speak "This is the cloned voice." -m cosyvoice/cosyvoice2-0.5b --ref me.wav --ref-text "What the clip says"
+
+# Keep it in the voice library and use it with -v
+mizuoto voice add "My voice" --ref me.wav --text "What the clip says" --consent "My own recording"
+mizuoto speak "Hello." -m qwen3tts/1.7b-base -v my-voice
+
+# Design a voice from a description and keep it
+mizuoto design "Hello, nice to meet you." -m qwen3tts/1.7b-voice-design \
+    -d "a warm, low male voice, slightly hoarse" --save-as "Low voice"
+```
+
+`-v` takes a voice's id or slug (the first column of `mizuoto voice list`).
+
+### Hear it as it is made
+
+`--stream` writes a WAV to stdout as the model makes it, for a player:
+
+```bash
+mizuoto speak "A longer passage…" -m cosyvoice/cosyvoice2-0.5b -v my-voice --stream | ffplay -nodisp -autoexit -
+```
+
+`--stream` refuses to write to a terminal; the whole result is still kept, and its path goes to stderr.
+
+### Batches and parameters
+
+```bash
+mizuoto speak - --batch -m qwen3tts/1.7b-custom-voice --preset serena < lines.txt   # one result per line
+mizuoto speak "…" -m f5tts/v1-base -v my-voice -p num_steps=48 --speed 0.9 --seed 42
+mizuoto speak "…" -m indextts/v2 -v my-voice --emotion happy=0.8 --emotion surprised=0.3
+mizuoto preset save slow -m f5tts/v1-base -p speed=0.85 -p num_steps=48
+mizuoto speak "…" -m f5tts/v1-base -v my-voice -P slow
+```
+
+`-p` sets common parameters (`temperature`, `top_p`, `top_k`, `repetition_penalty`, `max_new_tokens`, `num_steps`, `guidance_scale`, `speed`, `duration`, `seed`, `text_normalization`, `segment_silence_ms`), `-O` the engine's own options; values are parsed as JSON. A parameter the model does not take is refused (exit code 4) unless `--lenient` drops it with a warning.
+
+### Transcribe, convert and edit
+
+```bash
+mizuoto asr clip.wav -l en
+mizuoto convert source.wav -m cosyvoice/cosyvoice2-0.5b -v my-voice -o converted.wav
+mizuoto edit take.wav -m f5tts/v1-base -t "The whole sentence after the edit" --span 1.20:1.85
+```
+
+### Training
+
+```bash
+mizuoto dataset create alice -l en --consent "Alice agreed"
+mizuoto dataset add alice ./recordings
+mizuoto dataset prepare alice              # cut at silences, transcribe, peak-normalise
+mizuoto dataset check alice
+mizuoto train methods gptsovits/v2pro-base
+mizuoto train new alice-v1 -m gptsovits/v2pro-base -d alice
+mizuoto train run alice-v1
+mizuoto train status alice-v1
+```
+
+Every trainer runs in Mizuoto's own environment; each stage runs as a child process of the same Python.
+
+### Projects
+
+```bash
+mizuoto project new little-prince -m qwen3tts/1.7b-custom-voice --preset vivian -l en -s script.txt
+mizuoto project cast little-prince fox -v fox-voice -m cosyvoice/cosyvoice2-0.5b
+mizuoto project render little-prince
+mizuoto project export little-prince -o little-prince.mp3 --srt little-prince.srt
+```
+
+## Shell completion
+
+```bash
+mizuoto --install-completion   # install completion for the current shell
+mizuoto --show-completion      # print the completion script only
+```
+
+Open a new terminal afterwards to complete commands, subcommands and options.
+
+## Next
+
+- [Command reference](/docs/cli-commands): every command's arguments and options.
+- [Configuration and environment variables](/docs/cli-config): settings, environment variables and the data folder.
+- [FAQ](/docs/advanced-faq)

@@ -1,0 +1,11 @@
+{
+ "repo": "XXXXRT/GPT-SoVITS-Pretrained",
+ "revision": "0c47645e02a7bc3688d7b263b0042c81e3cd82cd",
+ "files": [
+  {
+   "path": "open_jtalk_dic_utf_8-1.11.tar.gz",
+   "size": 23646843,
+   "sha256": "fe6ba0e43542cef98339abdffd903e062008ea170b04e7e2a35da805902f382a"
+  }
+ ]
+}

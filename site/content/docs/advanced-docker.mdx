@@ -1,0 +1,155 @@
+---
+title: "Docker"
+description: "用仓库中的 Dockerfile 构建 Mizuoto 镜像：各构建阶段与参数、GPU、数据卷、访问令牌与环境变量，以及在容器里使用命令行和运行 agent。"
+icon: Container
+---
+
+仓库根目录的 `Dockerfile` 构建一个镜像，包含 Mizuoto 服务器、网页界面和所有引擎（连同 torch）；模型下载到数据卷。
+
+## 构建阶段
+
+| 阶段 | 基础镜像 | 内容 |
+| --- | --- | --- |
+| `web` | `oven/bun:1` | 用 bun 构建网页界面（`mizuoto/webui/dist`） |
+| `wheels` | `python:<PYTHON>-slim` | 由 `scripts/build_wheels.py` 构建的 Mizuoto wheel，`GATED=1` 时还有 Fish Speech 和 IndexTTS 的 wheel，以及为 GPT-SoVITS 日语前端编译的 pyopenjtalk wheel |
+| （最终镜像） | `python:<PYTHON>-slim` | 先从 `TORCH_INDEX` 安装 torch，再安装这些 wheel 及所有可选前端；运行 `mizuoto webui` |
+
+### 构建参数
+
+| 参数 | 默认值 | 作用 |
+| --- | --- | --- |
+| `TORCH_INDEX` | `https://download.pytorch.org/whl/cu128` | torch 的来源，也就决定了它的构建：download.pytorch.org 上其他 CUDA（`cu126` … `cu132`）、ROCm（`rocm6.4` … `rocm7.2`）或 `cpu` 的索引 |
+| `TORCH` | `torch>=2.8` | torch 的版本要求，例如 `torch==2.8.0` |
+| `GATED` | `0` | `1`：加入 Fish Speech 和 IndexTTS（含 IndexTTS-2.5 的日语支持） |
+| `PYTHON` | `3.11` | 镜像中的 Python（`python:<版本>-slim`） |
+
+构建镜像时看不到 GPU，所以 torch 的构建由索引指定，而不是按驱动自动选择。默认的 CUDA 12.8 构建需要 NVIDIA 驱动 570 或更新。
+
+```bash
+docker build -t mizuoto .                                                          # CUDA 12.8
+docker build -t mizuoto:cpu --build-arg TORCH_INDEX=https://download.pytorch.org/whl/cpu .
+docker build -t mizuoto --build-arg GATED=1 .                                      # 带 Fish Speech 和 IndexTTS
+```
+
+### 镜像里有什么
+
+- 没有额外的系统软件包：torch、PyAV 和文本处理库的原生代码都在各自的 wheel 里。
+- torch，然后是 Mizuoto 及 `mizuoto[gptsovits-ja,gptsovits-ko]`（`GATED=1` 时还有 `mizuoto-indextts[ja]`）；其余依赖在构建镜像时从 PyPI 安装。
+- 没有 C 编译器，所以 **编译模型（torch.compile）** 不起作用：引擎照常运行，并给出一次警告。
+- 环境变量：
+
+| 变量 | 值 | 作用 |
+| --- | --- | --- |
+| `MIZUOTO_DATA_DIR` | `/data` | 数据文件夹 |
+| `MIZUOTO_SERVER__OPEN_BROWSER` | `false` | 不打开浏览器 |
+| `PYTHONUNBUFFERED` | `1` | 日志立即出现在 `docker logs` 中 |
+
+- `VOLUME /data`、`EXPOSE 7869`。
+- 健康检查：每 30 秒请求 `http://127.0.0.1:7869/api/v1/app/health`（这个地址不需要令牌）。
+- 启动命令：`mizuoto webui --host 0.0.0.0 --port 7869 --no-open`。
+
+## 运行
+
+```bash
+docker run -d --name mizuoto --gpus all -p 7869:7869 \
+  -v mizuoto-data:/data \
+  -e MIZUOTO_SERVER__ACCESS_TOKEN=换成你自己的长随机字符串 \
+  mizuoto
+```
+
+然后在浏览器打开 `http://<主机地址>:7869`，网页界面会要求输入一次 **访问令牌**。
+
+- `--gpus all` 需要宿主机安装 NVIDIA 驱动和 NVIDIA Container Toolkit。不加 `--gpus` 时引擎在 CPU 上运行。
+- 只想用某一块 GPU：`--gpus '"device=1"'`。
+- `docker exec -it mizuoto mizuoto doctor` 检查镜像里的 torch 是否适合容器能看到的 GPU。
+
+<Callout type="warn" title="设置访问令牌">
+容器里的服务器绑定在 `0.0.0.0`，这时 Mizuoto 不再检查 `Host` 头，任何能连到端口的人都能使用全部功能（下载模型、删除文件）。请用 `MIZUOTO_SERVER__ACCESS_TOKEN` 设置令牌，或只把端口映射到本机：`-p 127.0.0.1:7869:7869`。
+</Callout>
+
+### 数据卷
+
+Mizuoto 写入的一切都在 `/data` 中：`settings.toml`、数据库、模型、共享文件、音色、结果、数据集、实验、项目、缓存和日志。镜像本身不保存状态，重新构建的镜像可以继续使用同一个数据卷。
+
+### 设置与环境变量
+
+任何设置都可以用 `MIZUOTO_<分组>__<字段>` 环境变量给出（见 [配置与环境变量](/docs/cli-config)）。环境变量的值只在内存中生效，不写入 `/data/settings.toml`，在网页界面中显示为 **由环境变量设置**：
+
+```bash
+docker run ... \
+  -e MIZUOTO_DOWNLOADS__SOURCE=hf-mirror \
+  -e MIZUOTO_COMPUTE__UNLOAD_AFTER_MINUTES=60 \
+  -e HF_TOKEN=hf_xxx \
+  mizuoto
+```
+
+`HF_TOKEN` 只会发送给 huggingface.co（见 [模型下载](/docs/advanced-downloads)）。
+
+## 在容器里使用命令行
+
+镜像的环境变量对 `docker exec` 同样有效，所以命令行直接作用于同一个数据文件夹：
+
+```bash
+docker exec -it mizuoto mizuoto engine list
+docker exec -it mizuoto mizuoto model download omnivoice/omnivoice
+docker exec -it mizuoto mizuoto speak "你好" -m omnivoice/omnivoice -o /data/hello.wav
+```
+
+### 需要接受许可的引擎
+
+只有用 `--build-arg GATED=1` 构建的镜像才包含 Fish Speech 和 IndexTTS；否则它们的卡片显示 **不可用**（缺少 `mizuoto-fishspeech` 或 `mizuoto-indextts`）。即使包含了，下载它们的模型和合成之前仍要接受许可：
+
+```bash
+docker exec -it mizuoto mizuoto engine licence fishspeech          # 阅读许可全文
+docker exec -it mizuoto mizuoto engine accept-licence fishspeech
+```
+
+或在网页界面 **模型** › **引擎** 中点击 **接受许可**。
+
+## Docker Compose
+
+```yaml
+services:
+  mizuoto:
+    build: .
+    image: mizuoto
+    ports:
+      - "7869:7869"
+    volumes:
+      - mizuoto-data:/data
+    environment:
+      MIZUOTO_SERVER__ACCESS_TOKEN: 换成你自己的长随机字符串
+      MIZUOTO_DOWNLOADS__SOURCE: hf-mirror
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    restart: unless-stopped
+
+volumes:
+  mizuoto-data:
+```
+
+## 在容器里运行 agent
+
+GPU 机器可以用同一个镜像作为 [远程主机](/docs/advanced-remote)，运行 `mizuoto agent` 而不是网页界面：
+
+```bash
+docker run -d --name mizuoto-agent --gpus all -p 7870:7870 \
+  -v mizuoto-agent:/data --no-healthcheck \
+  mizuoto mizuoto agent --host 0.0.0.0
+docker logs mizuoto-agent        # 第一次启动时打印生成的令牌（同时保存为 remote.agent.token）
+docker exec -it mizuoto-agent mizuoto model download qwen3tts/1.7b-base
+```
+
+agent 有自己的数据卷和模型；它的镜像与主机的镜像构建方式相同（相同的 Mizuoto 版本，要提供需许可的引擎时用 `GATED=1`）。镜像的健康检查请求的是网页界面的 7869 端口，agent 不提供它，所以这里用 `--no-healthcheck` 关掉。agent 没有 TLS 时请求和音频以明文传输，请只在可信的网络中使用，或用 `--ssl-certfile` / `--ssl-keyfile` 提供证书（把证书文件挂载进容器）。
+
+然后在主机一侧：
+
+```bash
+mizuoto remote add gpu-box 192.168.1.20 --token <agent 打印的令牌>
+mizuoto remote use qwen3tts gpu-box --device cuda:0
+```

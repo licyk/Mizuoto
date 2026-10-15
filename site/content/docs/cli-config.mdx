@@ -1,0 +1,309 @@
+---
+title: "配置与环境变量"
+description: "Mizuoto 的设置保存在 settings.toml 中，网页界面的设置页、mizuoto config 命令和 MIZUOTO_ 环境变量改的是同一份设置；本页列出全部设置项、环境变量和数据文件夹的结构。"
+icon: FileCog
+---
+
+## 设置的来源与优先级
+
+生效的设置由四层合并而成，后面的覆盖前面的：
+
+1. 内置默认值；
+2. `settings.toml`（默认在数据文件夹中）；
+3. 环境变量 `MIZUOTO_<GROUP>__<FIELD>`；
+4. 嵌入方固定的值（Mizuoto 在另一个程序里运行时才有，见 [在 Python 中使用](/docs/advanced-embed)）。
+
+环境变量和固定值只在内存中生效，**不会写回** `settings.toml`，也不能在网页界面或接口中修改。网页界面中被环境变量覆盖的设置标注 **由环境变量设置**，被嵌入方固定的标注 **由运行 Mizuoto 的应用程序设置**；`mizuoto config set` 修改一个被环境变量覆盖的设置时会提示 `An environment variable overrides this setting.`。
+
+## 数据文件夹与设置文件
+
+数据文件夹存放设置、数据库、模型、音色和结果。默认位置：
+
+| 系统 | 位置 |
+| --- | --- |
+| Linux | `$XDG_DATA_HOME/mizuoto`，未设置时为 `~/.local/share/mizuoto` |
+| macOS | `~/Library/Application Support/mizuoto` |
+| Windows | `%APPDATA%\mizuoto` |
+
+用环境变量 `MIZUOTO_DATA_DIR` 或 `mizuoto webui --data-dir <路径>` 换到别处。`settings.toml` 默认在数据文件夹里；`MIZUOTO_CONFIG_DIR` 或 `webui --config-dir` 可以把它放到另一个文件夹（数据仍在数据文件夹中）。网页界面 **设置** › **关于** 显示 **数据文件夹** 和 **设置文件**。
+
+想让 `mizuoto config`、`mizuoto speak` 等命令与服务器使用同一个数据文件夹，用环境变量最方便：`--data-dir` 只是 `webui` 的选项。
+
+### 文件夹结构
+
+```text
+<数据文件夹>/
+├── settings.toml        设置
+├── mizuoto.db            数据库：任务、结果、参考音频、转写缓存、预设……
+├── server.json          正在运行的服务器的地址和进程号（服务器退出时删除）
+├── models/              模型，<引擎>/<模型>/；共享文件在 models/_assets/<引擎>/<名称>/
+├── voices/              音色库，每个音色一个文件夹
+├── outputs/             合成结果，按月份分文件夹 outputs/<yyyy-mm>/
+├── datasets/            数据集
+├── experiments/         训练实验，<引擎>/<名称>/
+├── projects/            项目
+├── cache/               参考音频、音色缓存、各引擎的临时文件、远程文件缓存
+├── uploads/             上传的文件
+├── jobs/                任务日志 <任务 id>.log
+└── trash/               系统没有回收站时，删除的音色、结果等移到这里
+```
+
+`paths.*` 设置可以把模型、音色、结果、数据集、实验、项目和缓存分别放到别处；留空表示在数据文件夹里。
+
+## 用命令行查看和修改
+
+```bash
+mizuoto config path                              # settings.toml 的路径
+mizuoto config show                              # 生效的全部设置（JSON）
+mizuoto config get tts.default_model
+mizuoto config set tts.default_model qwen3tts/1.7b-custom-voice
+mizuoto config set compute.unload_after_minutes 0
+mizuoto config set paths.browse_roots '["/srv/audio", "/mnt/datasets"]'
+mizuoto config set engines.qwen3tts.device cuda:1
+mizuoto config set engines.cosyvoice.load_options.fp16 true
+mizuoto config set tts.model_aliases.tts-1 qwen3tts/1.7b-custom-voice
+mizuoto config set server.access_token "一个足够长的随机字符串"
+mizuoto config set server.access_token null      # 清除令牌
+```
+
+- 键用点分隔，值按 JSON 解析（数字、`true`/`false`、列表、对象），解析不了时作为字符串；`null` 清除可以为空的设置。写入前整体校验，取值超出范围、类型不对或键不存在时报错（退出码 4），文件不变。
+- 字典类的设置可以添加新键：`engines.<引擎 id>.<字段>`、`engines.<引擎 id>.load_options.<选项>`、`tts.model_aliases.<别名>`。`mizuoto config set` 不检查加载选项的名称和取值；网页界面和接口会按引擎清单检查。
+- `config show` 和 `config get` 不显示令牌，只显示 `access_token_configured`、`token_configured` 是否已设置；`config set` 修改令牌后显示 `(hidden)`。`config show` 还列出 `resolved_paths`（留空的文件夹实际使用的路径）、`env_overrides`（生效的环境变量）和 `pinned`（嵌入方固定的设置）。
+- 正在运行的服务器约 1 秒内读到文件的改动，打开的网页界面随之刷新；之后在网页界面保存设置时，会在文件当前内容的基础上合并，不会冲掉命令行的改动。文件写坏时服务器日志会警告 `Ignored a change to … settings.toml`，继续使用原来的设置。`server.host`、`server.port` 和证书要在下次启动服务器时生效；修改 `engines.<id>.*` 会卸载该引擎的模型，下次使用时按新设置加载。
+- 读取 `settings.toml` 时，Mizuoto 不认识的键会被忽略。
+
+## 环境变量
+
+`mizuoto env vars` 列出 Mizuoto 读取的环境变量，以及当前已设置的 `MIZUOTO_*` 变量：
+
+| 变量 | 含义 |
+| --- | --- |
+| `MIZUOTO_DATA_DIR` | 数据文件夹 |
+| `MIZUOTO_CONFIG_DIR` | 存放 `settings.toml` 的文件夹，不想放在数据文件夹时使用 |
+| `MIZUOTO_LOG_LEVEL` | 日志级别：`DEBUG`、`INFO`、`WARNING` 或 `ERROR`（默认 `INFO`） |
+| `MIZUOTO_<GROUP>__<FIELD>` | 覆盖一个设置，例如 `MIZUOTO_SERVER__PORT=8000` 或 `MIZUOTO_DOWNLOADS__SOURCE=hf-mirror` |
+| `HF_TOKEN` | Hugging Face 访问令牌，下载模型时只发给 huggingface.co，不发给镜像 |
+
+覆盖设置的规则：
+
+- 去掉前缀 `MIZUOTO_` 后转为小写，`__`（两个下划线）表示下一级：`MIZUOTO_COMPUTE__GPU_JOBS` 对应 `compute.gpu_jobs`，`MIZUOTO_ENGINES__QWEN3TTS__DEVICE` 对应 `engines.qwen3tts.device`，`MIZUOTO_REMOTE__AGENT__PORT` 对应 `remote.agent.port`。
+- 值能按 JSON 解析就按 JSON 解析（数字、`true`/`false`、列表、对象），否则作为字符串；`null` 或 `none` 表示空值。
+- 只有名称中含 `__` 的 `MIZUOTO_*` 变量才是设置覆盖。
+
+<Tabs items={["Linux / macOS", "Windows (PowerShell)", "Windows (cmd)"]}>
+<Tab value="Linux / macOS">
+
+```bash
+export MIZUOTO_DATA_DIR=/data/mizuoto
+export MIZUOTO_DOWNLOADS__SOURCE=hf-mirror
+MIZUOTO_SERVER__PORT=8000 mizuoto webui
+```
+
+</Tab>
+<Tab value="Windows (PowerShell)">
+
+```powershell
+$env:MIZUOTO_DATA_DIR = "D:\mizuoto-data"
+$env:MIZUOTO_DOWNLOADS__SOURCE = "hf-mirror"
+mizuoto webui
+```
+
+</Tab>
+<Tab value="Windows (cmd)">
+
+```bat
+set MIZUOTO_DATA_DIR=D:\mizuoto-data
+set MIZUOTO_DOWNLOADS__SOURCE=hf-mirror
+mizuoto webui
+```
+
+</Tab>
+</Tabs>
+
+## 全部设置
+
+下表的"界面"一栏是网页界面 **设置** 中对应的位置；引擎相关的设置在 **模型** › **引擎** 的引擎卡片上。
+
+### `server`：服务器
+
+| 键 | 默认值 | 说明 | 界面 |
+| --- | --- | --- | --- |
+| `server.host` | `127.0.0.1` | 绑定的地址；`0.0.0.0` 监听所有网卡 | **常规** › **服务器地址** |
+| `server.port` | `7869` | 第一个尝试的端口（1–65535） | **常规** › **端口** |
+| `server.strict_port` | `false` | 端口被占用时直接失败，不尝试后面的端口 | — |
+| `server.open_browser` | `true` | `mizuoto webui` 启动后打开浏览器 | **常规** › **服务器启动时打开浏览器** |
+| `server.access_token` | 无 | 访问令牌：设置后每个接口和 socket 请求都要带上它 | **常规** › **访问令牌** |
+| `server.allowed_origins` | `[]` | 允许发出修改请求的其他来源（也会开启这些来源的 CORS） | — |
+| `server.ssl_certfile` | 无 | PEM 证书（链）：以 HTTPS 提供服务。其他电脑上的浏览器只在 HTTPS 下允许页面录音 | — |
+| `server.ssl_keyfile` | 无 | 证书的私钥，证书文件不含私钥时填写 | — |
+
+访问令牌、来源检查和 Host 检查见 [HTTP 接口](/docs/advanced-api)。
+
+### `paths`：文件夹
+
+| 键 | 默认值 | 说明 | 界面 |
+| --- | --- | --- | --- |
+| `paths.models_dir` | 空（`models/`） | 模型和共享文件 | **存储** › **模型** |
+| `paths.voices_dir` | 空（`voices/`） | 音色库 | **存储** › **音色** |
+| `paths.outputs_dir` | 空（`outputs/`） | 合成结果 | **存储** › **结果** |
+| `paths.datasets_dir` | 空（`datasets/`） | 数据集 | — |
+| `paths.experiments_dir` | 空（`experiments/`） | 训练实验 | — |
+| `paths.projects_dir` | 空（`projects/`） | 项目 | — |
+| `paths.cache_dir` | 空（`cache/`） | 缓存 | **存储** › **缓存** |
+| `paths.browse_roots` | `[]` | 网页界面可以读取的服务器文件夹；为空时是主文件夹、数据文件夹和所有驱动器或卷。只对服务器本机的浏览器生效 | **存储** › **浏览器可以打开的文件夹** |
+
+### `compute`：计算
+
+| 键 | 默认值 | 说明 | 界面 |
+| --- | --- | --- | --- |
+| `compute.devices` | `[]` | Mizuoto 可以使用的设备，如 `["cuda:0"]`；为空时使用找到的全部设备 | — |
+| `compute.default_device` | `auto` | 引擎的默认设备：`auto`、`cpu`、`cuda:N`（NVIDIA，或 ROCm 上的 AMD）、`xpu:N`（Intel）或 `mps` | **计算** › **默认设备** |
+| `compute.unload_after_minutes` | `20` | 模型空闲这么久后卸载；`0` 表示一直保留 | **计算** › **空闲多少分钟后卸载模型（0：从不）** |
+| `compute.max_resident_models` | `3` | 所有引擎合计同时保持加载的模型数（1–32），超出时先卸载最久没用的空闲模型 | **计算** › **保留在内存中的模型数** |
+| `compute.vram_reserve_mb` | `1024` | 在请求所需之外保留的空闲显存（MB）：不够时空闲模型（逐部分）让出显存，直到放得下 | **计算** › **保留的空闲显存（MB）** |
+| `compute.vram_mode` | `auto` | 模型如何使用显存：`auto`/`normal`（放得下时整体加载，否则部分加载，其余从内存流式加载）、`high`（只整体加载）、`low`（最多一半空闲显存）、`none`（几乎全部流式加载） | **计算** › **模型如何使用显存** |
+| `compute.vram_limit_mb` | `0` | 每块 GPU 最多使用（MB；0：全部） | **计算** › **每块 GPU 最多使用** |
+| `compute.ram_reserve_mb` | `null` | 保留的空闲内存（MB）；低于它时丢弃内存中的权重副本、卸载空闲模型。`null`：2 GB 与内存十分之一中较大者 | **计算** › **保留的空闲内存** |
+| `compute.host_copies` | `auto` | 为 GPU 上模型的权重在内存中保留副本：`auto`（内存充足时）、`on`、`off` | **计算** › **在内存中保留显存权重的副本** |
+| `compute.max_pinned_mb` | `0` | 流式权重使用的锁页内存（MB；0：自动） | **计算** › **流式权重使用的锁页内存** |
+| `compute.async_offload` | `-1` | 流式权重的复制流数量（-1：NVIDIA 和 AMD 上两个，其他为零；0：关闭） | **计算** › **复制流数量** |
+| `compute.oom_retry` | `true` | 某一步显存不足时，把更多权重留在内存中重新运行（结果相同） | **计算** › **显存不足时重试该步骤** |
+| `compute.oom_fallback` | `false` | 之后允许引擎用更省显存的方式（分块、更小的批次；输出略有不同） | **计算** › **之后允许更省显存的方式** |
+| `compute.kv_cache` | `dynamic` | `static`：Qwen3-TTS 与 CosyVoice 2/3 使用预先分配的键值缓存 | — |
+| `compute.cuda_graphs` | `true` | 在 NVIDIA 显卡上以 CUDA Graph 运行语言模型的解码步骤（Qwen3-TTS、Fish Speech、CosyVoice 2/3、VoxCPM、GPT-SoVITS、IndexTTS），结果完全一致 | — |
+| `compute.cuda_allocator` | `auto` | torch 的 CUDA 显存分配器：`native`、`async`、`expandable`（`auto`：native）；下次启动时生效 | — |
+| `compute.cpu_allocator` | `auto` | CPU 内存分配：`tuned`、`system`（`auto`：Linux + glibc 上为 tuned）；下次启动时生效 | — |
+| `compute.cpu_threads` | `auto` | CPU 线程：`cores`（绑定到物理核心）、`off`（`auto`：Linux 上为 cores）；下次启动时生效 | — |
+| `compute.simulate_vram_mb` | `0` | 用于测试：让 CPU 扮演这么大的一块 GPU | — |
+| `compute.gpu_jobs` | `1` | 一块 GPU 上同时运行的 GPU 任务数（1–16） | **计算** › **同时运行的 GPU 任务数** |
+| `compute.inference_jobs` | `1` | 跨所有引擎和设备同时运行的合成任务数（合成、音色转换、语音编辑；1–16），其余任务在队列中按顺序等待。合并为一个微批次运行的请求算一个任务 | **计算** › **同时运行的合成任务** |
+| `compute.compile` | `false` | 用 `torch.compile` 编译 F5-TTS、CosyVoice、GPT-SoVITS v4/v5 和 IndexTTS 的重型模块；对修改之后加载的模型生效（见 [性能与加速](/docs/advanced-performance)） | **计算** › **编译模型（torch.compile）** |
+| `compute.attention` | `auto` | 引擎如何计算注意力：`auto`（按各模型原本的方式，结果完全相同）、`fast`（可用的最快后端），或指定后端：`sdpa`、`math`、`sdpa_flash`、`sdpa_efficient`、`sdpa_cudnn`、`flash`、`xformers`、`sage`、`sage3`；某个后端无法处理的调用会回退到下一个；对修改之后加载的模型生效（见 [性能与加速](/docs/advanced-performance#注意力后端)） | **计算** › **注意力** |
+| `compute.attention_strict` | `false` | 所选后端无法计算请求的某一部分时让请求失败，而不是回退 | **计算** › **失败而不是回退** |
+| `compute.fast` | `[]` | 作用于整个进程的 GPU 提速开关，每一项都会使结果略有不同：`tf32`、`fp16_accumulation`、`cudnn_benchmark`、`sdpa_reduced_precision`；下次启动时生效 | **计算** › **加速** |
+
+### `downloads`：下载
+
+详见 [模型下载与镜像](/docs/advanced-downloads)。
+
+| 键 | 默认值 | 说明 | 界面 |
+| --- | --- | --- | --- |
+| `downloads.source` | `huggingface` | 模型文件的来源：`huggingface`、`hf-mirror`、`modelscope` 或 `custom`；某个来源没有的文件从下一个来源下载 | **下载** › **下载来源** |
+| `downloads.endpoint` | 空 | `custom` 的地址：一个兼容 Hugging Face 的服务器 | **下载** › **自定义地址** |
+| `downloads.verify_checksums` | `true` | 下载后校验 SHA-256 | **下载** › **校验文件** |
+| `downloads.concurrency` | `2` | 同时下载的文件数（1–8） | **下载** › **同时下载的文件数** |
+| `downloads.repository` | `official` | `official`：各模型自己的仓库；`mizuoto-model`：优先使用 Mizuoto 的镜像仓库，镜像中没有的文件从官方仓库下载 | **下载** › **仓库** |
+| `downloads.mirror_repo` | `licyk/mizuoto-model` | 镜像仓库（Hugging Face 和 ModelScope 上的 id 相同） | — |
+
+### `tts`：语音
+
+| 键 | 默认值 | 说明 | 界面 |
+| --- | --- | --- | --- |
+| `tts.default_model` | 空 | 不指定模型时使用的模型（命令行、OpenAI 兼容接口） | **语音** › **默认模型** |
+| `tts.output_format` | `wav` | 结果格式：`wav`、`flac`、`mp3`、`ogg`、`m4a` | **语音** › **结果格式** |
+| `tts.output_sample_rate` | 无 | 结果采样率（8000–192000）；为空时用模型自己的 | **语音** › **结果采样率** |
+| `tts.normalize` | `peak` | 音量均衡：`none`、`peak` 或 `loudness` | **语音** › **音量均衡** |
+| `tts.auto_transcribe` | `true` | 参考音频没有文本时用语音识别转写（需要下载语音识别模型 `tts.asr_model`） | **语音** › **自动识别没有文本的参考音频** |
+| `tts.asr_model` | `asr/whisper-large-v3-turbo` | 语音识别模型 | **语音** › **语音识别模型** |
+| `tts.reference_policy` | `reject` | 参考音频超出模型的长度范围时：`reject` 拒绝，`trim` 在限制前最安静的位置截断（截断后原文本不再匹配，被丢弃） | **语音** › **参考音频对模型来说过长时** |
+| `tts.max_text_chars` | `20000` | 一次请求的最多字符数（至少 100） | — |
+| `tts.strict_params` | `true` | 拒绝模型不接受的参数；关闭时丢弃并给出警告 | **语音** › **拒绝模型不接受的参数** |
+| `tts.model_aliases` | `{}` | 模型的别名，供 OpenAI 兼容接口使用，如 `{"tts-1": "qwen3tts/1.7b-base"}` | — |
+| `tts.micro_batch` | `true` | 等待同一模型、只有文本不同的请求在支持批处理的引擎上合并为一批运行 | **语音** › **合并等待中的请求** |
+
+微批处理的条件见 [性能与加速](/docs/advanced-performance)。
+
+### `engines.<id>`：每个引擎
+
+`<id>` 是引擎 id：`qwen3tts`、`cosyvoice`、`f5tts`、`gptsovits`、`omnivoice`、`fishspeech`、`indextts`、`asr`。没有出现在文件里的引擎使用默认值。
+
+| 键 | 默认值 | 说明 | 界面（引擎卡片） |
+| --- | --- | --- | --- |
+| `enabled` | `true` | 是否启用 | **启用** / **停用** |
+| `accepted_licence` | 无 | 已接受的许可 id 和版本，如 `fish-audio-research@2026-03-07`（需要接受许可的引擎） | **接受许可** |
+| `device` | `auto` | 引擎运行的设备：`auto`、`cpu`、`cuda:1`……；`<主机名>/<设备>`（如 `gpu-box/cuda:0`）表示在 [远程主机](/docs/advanced-remote) 上运行 | **设备** |
+| `dtype` | `auto` | 精度：`auto`、`fp32`、`fp16`、`bf16` | **精度** |
+| `load_options` | `{}` | 引擎专用的加载选项（CosyVoice 的 `fp16`、IndexTTS 的 `use_qwen_emo`……），见 [引擎详解](/docs/advanced-engines) | **选项** |
+| `idle_minutes` | 无 | 覆盖这个引擎的 `compute.unload_after_minutes` | — |
+| `pinned_models` | `[]` | 这些模型加载后不会因空闲而被卸载，也不会为其他模型腾位置而被卸载；需要让出显存时最后让出 | — |
+| `vram_mode` | `auto` | 为这个引擎的模型覆盖 `compute.vram_mode`（`auto`：使用全局设置） | 引擎卡片上的 **此引擎的显存使用** |
+| `attention` | `inherit` | 为这个引擎的模型覆盖 `compute.attention` | 引擎卡片上的 **此引擎的注意力** |
+
+```toml
+[engines.cosyvoice]
+device = "cuda:1"
+pinned_models = ["cosyvoice/cosyvoice2-0.5b"]
+
+[engines.cosyvoice.load_options]
+fp16 = true
+```
+
+### `training`：训练
+
+| 键 | 默认值 | 说明 | 界面 |
+| --- | --- | --- | --- |
+| `training.devices` | `[]` | 训练使用的设备，取第一个；为空时用引擎自己的设备。训练运行时独占该设备 | **训练** › **训练设备** |
+| `training.precision` | `auto` | 训练精度：`auto`、`fp32`、`fp16`、`bf16` | **训练** › **训练精度** |
+| `training.memory` | `standard` | 微调如何使用显存：`standard`（按各配方）、`low`（梯度检查点等；结果相同）、`lowest`（还把优化器放在内存中、流式加载 LoRA 底座；结果略有不同） | **训练** › **内存** |
+| `training.attention` | `auto` | 训练如何计算注意力：`auto`（完全按各配方）、`fast` 或带反向传播的后端（`sdpa`、`math`、`sdpa_flash`、`sdpa_efficient`、`sdpa_cudnn`、`flash`、`xformers`） | **训练** › **注意力** |
+| `training.keep_checkpoints` | `3` | 每次运行保留的检查点数 | **训练** › **每次运行保留的检查点数** |
+| `training.previews` | `true` | 导出阶段用训练结果合成一段数据集中的句子 | **训练** › **训练后合成试听** |
+
+### `outputs`：结果
+
+| 键 | 默认值 | 说明 | 界面 |
+| --- | --- | --- | --- |
+| `outputs.naming` | `{date}-{voice}-{model}` | 结果文件名模板，可用 `{date}`（`YYYYMMDD-HHMMSS`）、`{voice}`、`{model}`（不含引擎的模型名）、`{engine}`；未知字段为空，同名时加 `-1`、`-2`…… | — |
+| `outputs.keep_days` | `0` | 删除早于这么多天的结果（收藏保留）；`0` 全部保留。当前版本保存这个设置，但没有代码按它删除结果 | **存储** › **多少天后删除结果（0：保留）** |
+
+### `remote`：远程主机
+
+详见 [远程主机](/docs/advanced-remote)。
+
+| 键 | 默认值 | 说明 |
+| --- | --- | --- |
+| `remote.hosts.<名称>.address` | — | agent 的 `host:port`（端口默认 7870） |
+| `remote.hosts.<名称>.token` | 空 | agent 的令牌（那台机器上的 `remote.agent.token`） |
+| `remote.hosts.<名称>.tls` | `false` | 用 TLS 连接 |
+| `remote.hosts.<名称>.ca_file` | 空 | CA 证书，或 agent 自签名的证书；为空时用系统的 CA |
+| `remote.agent.host` | `127.0.0.1` | 本机作为 agent 时的监听地址；`0.0.0.0` 监听所有网卡 |
+| `remote.agent.port` | `7870` | agent 端口 |
+| `remote.agent.token` | 无 | 主机连接时必须给出的令牌；`mizuoto agent` 在没有时生成一个 |
+| `remote.agent.ssl_certfile` | 无 | agent 的 TLS 证书 |
+| `remote.agent.ssl_keyfile` | 无 | 证书的私钥 |
+| `remote.connect_timeout` | `10.0` | 连接 agent 的超时（秒，1–120） |
+| `remote.heartbeat_timeout` | `60.0` | 远程请求期间 agent 沉默这么久即失败（秒，10–3600） |
+
+远程主机在网页界面的 **设置** › **远程主机** 中添加，用 `mizuoto remote add` 更方便：它会检查主机是否响应。
+
+## 示例 `settings.toml`
+
+```toml
+[server]
+host = "0.0.0.0"
+port = 7869
+access_token = "换成你自己的长随机字符串"
+
+[downloads]
+source = "hf-mirror"
+
+[compute]
+unload_after_minutes = 60
+max_resident_models = 2
+
+[tts]
+default_model = "qwen3tts/1.7b-custom-voice"
+
+[tts.model_aliases]
+tts-1 = "qwen3tts/1.7b-custom-voice"
+
+[engines.qwen3tts]
+device = "cuda:0"
+
+[engines.indextts]
+device = "gpu-box/cuda:0"
+
+[remote.hosts.gpu-box]
+address = "192.168.1.20:7870"
+token = "agent 打印出的令牌"
+```

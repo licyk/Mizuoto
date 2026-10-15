@@ -1,0 +1,16 @@
+{
+ "repo": "lj1995/GPT-SoVITS",
+ "revision": "8f8857563c040d542de108a2c18b0425abd6c9c5",
+ "files": [
+  {
+   "path": "s1v3.ckpt",
+   "size": 155284856,
+   "sha256": "87133414860ea14ff6620c483a3db5ed07b44be42e2c3fcdad65523a729a745a"
+  },
+  {
+   "path": "v2Pro/s2Gv2ProPlus.pth",
+   "size": 200125741,
+   "sha256": "d42a22bbbf65fb2bbdd45ad6a66841156977db45c7aabe0a6992ff378d9c7d3b"
+  }
+ ]
+}

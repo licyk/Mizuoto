@@ -1,0 +1,143 @@
+---
+title: "开发环境"
+description: "从克隆仓库到跑起开发服务器、全部检查和一个真实引擎所需的环境与任务。"
+icon: Wrench
+---
+
+Mizuoto 的开发环境只有两部分：一个 Python 环境（`.venv`），里面装着 torch、以可编辑方式安装的 Mizuoto 和开发工具；以及给 Web UI 和文档站用的 bun。所有引擎都在这一个环境里运行，不需要另外构建什么。日常任务都通过 `scripts/dev.py` 运行，它只用标准库，在 Linux、macOS 和 Windows 上行为一致，跑的正是 CI 跑的那些工具。
+
+## Python 环境
+
+<Steps>
+<Step>
+
+### 建立 `.venv`
+
+用 Python 3.11 建一个隔离的虚拟环境（Mizuoto 支持 3.10–3.13，CI 四个版本都测；开发用 3.11）：
+
+```bash
+uv venv .venv --python 3.11
+```
+
+</Step>
+<Step>
+
+### 先装 torch
+
+torch 是 Mizuoto 的依赖，但它的构建（CUDA、ROCm、XPU、CPU）由你来选，所以先从与本机匹配的索引装它。开发和 CI 跑的所有测试用 CPU 版就够了：
+
+```bash
+uv pip install --python .venv/bin/python "torch>=2.8" --index-url https://download.pytorch.org/whl/cpu
+```
+
+要用 GPU，就改装 `mizuoto doctor` 给出的那个构建（例如 `…/whl/cu128`），各平台的命令见[安装](/docs/installation)。之后再装 Mizuoto 不会替换这个构建。
+
+</Step>
+<Step>
+
+### 以可编辑方式安装 Mizuoto 和开发工具
+
+```bash
+uv pip install --python .venv/bin/python -e .
+uv pip install --python .venv/bin/python -e packages/native/fishspeech -e packages/native/indextts   # 可选：需要接受许可的引擎
+uv pip install --python .venv/bin/python pytest pytest-cov ruff ty tomli httpx
+```
+
+开发工具同样列在 `pyproject.toml` 的 `[dependency-groups] dev` 里。不装那两个包，它们的测试会跳过，对应的引擎显示为缺失。
+
+</Step>
+<Step>
+
+### 之后一律用这个解释器
+
+```bash
+.venv/bin/python scripts/dev.py check
+.venv/bin/python -m mizuoto version
+.venv/bin/mizuoto doctor
+```
+
+`dev.py` 用运行它的那个解释器（`sys.executable`）调用 ruff、ty 和 pytest，而不是 `PATH` 上随便哪一个。
+
+</Step>
+</Steps>
+
+### 可选附加依赖
+
+有些文本前端需要默认安装之外的包。缺了它们，相应语言会以 `capability_not_supported` 失败，提示里附带安装命令；`mizuoto doctor` 也会把它们列为警告：
+
+| 附加依赖 | 包 | 用途 |
+| --- | --- | --- |
+| `mizuoto[gptsovits-ja]` | `pyopenjtalk==0.4.1`（只有源码包，需要 CMake 和 C++ 编译器） | GPT-SoVITS 的日语 |
+| `mizuoto[gptsovits-ko]` | `python-mecab-ko`、`jamo` | GPT-SoVITS 的韩语 |
+| `mizuoto-indextts[ja]` | `fugashi`、`unidic-lite` | IndexTTS-2.5 的日语 |
+
+从源码检出安装：`uv pip install --python .venv/bin/python -e ".[gptsovits-ja,gptsovits-ko]"`。
+
+<Callout type="info" title="ty 与可编辑安装">
+ty 不跟随可编辑安装的路径钩子，所以 `pyproject.toml` 把 `tool.ty.environment.extra-paths` 设为 `packages/native/fishspeech` 和 `packages/native/indextts`，从源码解析 `mizuoto_fishspeech` 和 `mizuoto_indextts`。torch 和各可选附加依赖的包列在 `tool.ty.analysis.allowed-unresolved-imports` 里。
+</Callout>
+
+## Web UI：bun
+
+Web UI（`mizuoto/webui/`）和文档站（`site/`）用 [bun](https://bun.sh) 安装依赖、构建和测试。`dev.py` 先在 `PATH` 上找 `bun`，再找安装器默认的 `~/.bun/bin`，两处都没有时给出明确的提示而不是一串回溯。
+
+```bash
+python scripts/dev.py web-install   # bun install（mizuoto/webui）
+python scripts/dev.py web           # 构建到 mizuoto/webui/dist
+```
+
+构建出的 `dist/` 作为包数据随 wheel 发布；在没有 `dist/` 的源码检出里运行 `mizuoto webui`，只有 API，没有界面。
+
+## `scripts/dev.py` 的任务
+
+`python scripts/dev.py` 不带参数会列出全部任务。任务名后面的选项原样传给底层脚本；不接受选项的任务收到选项会报错。
+
+| 任务 | 作用 |
+| --- | --- |
+| `check` | CI 跑的全部：`lint`、`typecheck-py`、`test-py`、`test-web`、`typegen-check` |
+| `lint` | `ruff check .` 和 `ruff format --check .` |
+| `format` | `ruff check --fix .` 和 `ruff format .` |
+| `typecheck-py` | 用 ty 检查 `mizuoto`、需要接受许可的引擎、`tests` 和 `scripts` |
+| `test-py [pytest 选项…]` | pytest；`live`、`engine`、`weights`、`e2e` 标记默认排除 |
+| `test-engines [引擎…] [-- pytest 选项]` | 针对已安装模型的契约套件（`MIZUOTO_TEST_DEVICE=cpu\|cuda:N`） |
+| `model-manifests [引擎…]` | 固定目录中模型的文件（大小、SHA-256）（`scripts/model_manifests.py`） |
+| `wheels [all\|host\|native] [引擎…]` | 把 `mizuoto`（含界面）和需要接受许可的引擎的 wheel 构建到 `dist/`（`scripts/build_wheels.py`） |
+| `smoke` | 在新环境里先装 CPU 版 torch，再装构建好的 wheel 并试用（`scripts/smoke_wheels.py`） |
+| `dev [--api-port] [--web-port] [--data-dir]` | 同时启动 API 服务器（7869）和 Vite 开发服务器（5173）；Ctrl+C 一起停止 |
+| `web-install` / `web` / `web-dev` | 安装界面依赖 / 构建界面 / 只启动 Vite（需要已在运行的 API） |
+| `test-web` | `bun run test`（vitest）和 `bun run typecheck`（vue-tsc） |
+| `openapi` | 把 OpenAPI 模式打印到标准输出（`scripts/generate_openapi.py`） |
+| `typegen` | 由模式重新生成 `mizuoto/webui/src/api/schema.d.ts`（结果要提交） |
+| `typegen-check` | 重新生成后 `git diff --exit-code`：类型过期就失败 |
+
+文档站有自己的任务：`site-install`、`site-dev`、`site` 和 `test-site`（见[发布](/docs/development-release#文档站)）。对照工具不是 `dev.py` 的任务，它在 `scripts/parity/` 里（见[测试](/docs/development-testing#与参照实现对照)）。
+
+### `dev`：一边改一边看
+
+```bash
+python scripts/dev.py dev --data-dir /tmp/mizuoto-dev
+```
+
+它以 `python -m mizuoto webui --no-open --port 7869 --strict-port` 启动 API（把仓库根目录放进 `PYTHONPATH`），以 `bun run dev` 启动 Vite，并把 `MIZUOTO_BACKEND=http://127.0.0.1:7869` 传给 Vite。Vite 把 `/api` 和 `/ws` 代理到 API，所以浏览器只用打开 `http://localhost:5173`。界面改动热更新；Python 改动（包括引擎代码）需要重启这个任务，因为模型加载在服务器进程里。API 没起来时，Vite 的代理只会每隔几秒打印一行提示，而不是刷屏的连接错误。
+
+`--data-dir` 让开发用的设置、数据库、模型和输出与日常数据目录分开（也可以设置 `MIZUOTO_DATA_DIR`）。
+
+## 在本机跑一个真实引擎
+
+所有引擎都随 Mizuoto 一起装好了，真实引擎只差模型：
+
+```bash
+.venv/bin/mizuoto doctor qwen3tts                      # torch 与硬件是否匹配、引擎本身、可选附加依赖
+.venv/bin/mizuoto model download qwen3tts/1.7b-base
+.venv/bin/mizuoto speak "你好" -m qwen3tts/1.7b-base --ref a.wav --ref-text "…"
+```
+
+- 模型加载进运行这条命令的进程（经 API 的请求则加载进服务器进程）。`mizuoto runtime` 列出正在运行的服务器加载了什么，`mizuoto runtime --unload` 释放它们。
+- 改了引擎代码，要在新进程里才生效：重启服务器，或重新运行命令。
+- 需要接受许可的引擎（Fish Speech、IndexTTS）要先装好它们的包，并执行 `mizuoto engine accept-licence <id>`，模型才能下载。
+
+<Callout type="warn" title="GPU 被占用时">
+开发机的 GPU 可能被其他进程占满。此时把引擎设到 CPU：`mizuoto config set engines.qwen3tts.device cpu`，或在契约测试里设 `MIZUOTO_TEST_DEVICE=cpu`。模型总是会尝试加载；显存不足时任务以 `compute_unavailable`（退出码 9）失败，所有 GPU 上未在使用的模型都会被卸载。
+</Callout>
+
+验证一个引擎的完整做法（小型随机模型、契约套件、与 0.1 的对照）见[测试](/docs/development-testing)。

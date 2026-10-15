@@ -1,0 +1,11 @@
+{
+ "repo": "SWivid/E2-TTS",
+ "revision": "851141880b5ca38050025e98dfdee27dc553f86e",
+ "files": [
+  {
+   "path": "E2TTS_Base/model_1200000.safetensors",
+   "size": 1334133985,
+   "sha256": "8a813cd26fd21b298734eece9474bfea842a585adff98d2bb89fd384b1c00ac7"
+  }
+ ]
+}

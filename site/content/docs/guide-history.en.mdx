@@ -1,0 +1,48 @@
+---
+title: "History"
+description: "The History screen: every result, to search, filter by model, mark as favourite, run again, download and delete."
+icon: Clock
+---
+
+**History** lists every result, newest first: from Speak, the tries on voice pages, design candidates, conversions and edits from Tools, training previews, and the files projects export.
+
+The takes of a project's lines are **not** listed here; they are managed on the project's page (see [Projects](/docs/guide-projects#takes)). Files **exported** from a project or a chapter are listed.
+
+## Finding results
+
+Three filters at the top, which combine:
+
+- **Search the text**: the result's text or name;
+- **Model**: **All models**, or one model;
+- **Favourites**: favourites only.
+
+The list loads 50 at a time; at the bottom, **Load more** loads the next.
+
+## Each result
+
+Each shows its text (or name), length, waveform (click to seek), model, time taken, real-time factor (RTF) and seed, with any warnings and licence notices (such as Fish Speech's "Built with Fish Audio"). Its menu:
+
+| Action | What it does |
+| --- | --- |
+| **Favourite** / **Not a favourite** | Mark it, for the **Favourites** filter |
+| **Download** | Download the file |
+| **Show in folder** | Open its folder on the server (only in a browser on the server machine) |
+| **Use as a reference clip** | Open Speak with this result as **A clip**, its text as the transcript |
+| **Keep as a voice** | Type the **Name of the new voice** to put it in the library |
+| **Run again with these settings** | Open Speak with the model, voice, text and parameters that made it (the same seed when one was set); for results of a synthesis |
+| **Delete** | Delete the result and its file |
+
+With more than one result listed, **Download all** downloads them together.
+
+## Where the files are
+
+Result files are in `outputs/` in the data folder (change it under **Settings › Storage › Results**); where each came from (model, parameters, timings, licence tags) is recorded in the database.
+
+## Command line
+
+```bash
+mizuoto output list                       # the latest results
+mizuoto output list -m qwen3tts/1.7b-base -s "hello" --limit 100
+mizuoto output info <output-id>           # a result and how it was made
+mizuoto output delete <output-id>
+```

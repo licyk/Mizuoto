@@ -1,0 +1,132 @@
+---
+title: "Speak"
+description: "The Speak screen: choose a model and a voice, type the text, set the style and parameters, look at the plan, speak or stream, and use the results."
+icon: Speech
+---
+
+**Speak** turns text into speech. From top to bottom the screen has **Model**, **Voice**, **Text**, **Style** (when the model has it), **Parameters** and **Results**; the **Speak** button stays at the bottom of the page. Each part shows only what the chosen model supports, so the screen changes with the model.
+
+## Model
+
+Click **Model** to open the picker; it can be searched. It lists every model of every speech engine (installed or not), each with its engine, variant, size and GPU memory, and badges for what is missing: **demo** (the dummy engine), **Not available** (the engine needs something installed), **Licence** (a licence to accept), the model's state (such as **Not downloaded**) and **recommended**.
+
+Badges under the model list its capabilities, such as **Clone a voice**, **Preset speakers**, **Instructions**, **Streaming** and **Long text**.
+
+The first time, the screen picks **Settings › Speech › Default model**, or else the first model that is ready. Then it remembers your last choice.
+
+### When the model is not ready
+
+A model that is not ready can still be chosen. The **Speak** button at the bottom is then replaced by the **first** thing it needs; click it to start, with its progress:
+
+| Button | Why |
+| --- | --- |
+| **Enable** | The engine is disabled under **Models › Engines** |
+| **Accept the** *engine* **licence** | A licence-gated engine (Fish Speech, IndexTTS): opens the licence dialog |
+| *engine* **needs** *torch*… with the install command | The engine is not available: torch, or a licence-gated engine's package, is not installed. Install it into Mizuoto's Python, then restart Mizuoto |
+| **Download** *model* *(size)* | The model is not downloaded |
+
+When all is done the **Speak** button is back.
+
+## Voice
+
+Models get their voice in different ways; **Voice** offers the ones the model supports:
+
+| Way | Use |
+| --- | --- |
+| **Library voice** | A voice from the [voice library](/docs/guide-voices) |
+| **A clip** | Upload or record a reference clip and clone its voice |
+| **Preset speaker** | One of the model's own speakers (Qwen3-TTS CustomVoice, CosyVoice 300M SFT…) |
+| **Describe** | A description in words (Qwen3-TTS VoiceDesign, VoxCPM2), or choices from fixed attributes (OmniVoice) |
+| **Its own voice** | No voice given: the model speaks in its own voice |
+
+After a model change the screen picks a suitable way: the library voice you had chosen when it suits the new model, else a preset speaker, a description or a clip, in that order.
+
+### Library voice
+
+Every voice in the picker carries badges saying how **this model** can use it: **Clone**, **Clone (no transcript)**, **Preset speaker**, **Designed** and so on; and when more is needed, **transcribed first** (the clip has no transcript, so it is transcribed before speaking) or **trimmed to fit** (the clip is too long and will be cut). Voices the model cannot use are greyed, with the reason. With an empty library, **New voice** is offered.
+
+### A clip
+
+1. Drop audio on **Drop audio files here**, or click it to choose a file (WAV, FLAC, MP3, M4A, OGG…). Or:
+   - **Record** with the microphone. While recording it shows the **Input level** and **A voice reference works best between 3 and 30 seconds of clear speech.**; then **Stop and add** or **Discard**. Browsers allow the microphone only over HTTPS or on this computer (localhost).
+   - **Server files** picks a file on the server (only in a browser on the server machine).
+   - **Earlier results** picks a synthesized result.
+2. Type the clip's text under **What is said in the clip**. **Transcribe** has speech recognition fill it in now, for you to correct.
+
+### Transcripts and speech recognition
+
+Most models need the reference clip's text to clone it. When you leave it empty:
+
+- With **Settings › Speech › Transcribe reference clips without a transcript** on and speech recognition installed, Mizuoto looks in its transcript cache, else transcribes the clip first in the speak job (the plan says **transcribed first**). A library voice keeps the transcript it gets.
+- Without speech recognition, a model that clones without a transcript does so (**Clone (no transcript)**); otherwise you get an error saying how to install speech recognition.
+
+A clip longer than the model allows follows **Settings › Speech › A reference clip too long for a model**: **Refuse it**, or **Cut it to fit** (at the quietest point before the limit; its transcript is then dropped).
+
+## Text
+
+- The **Text** box takes up to 20,000 characters. <kbd>Ctrl</kbd>+<kbd>Enter</kbd> in it speaks.
+- **Language**: **Detect**, or one of the model's languages.
+- **One result per line**: only for models that take batches (Qwen3-TTS, GPT-SoVITS, OmniVoice); each line becomes its own result.
+- A moment after you stop typing, the box shows how Mizuoto will cut long text (**N segments**, one chip each), or **The engine splits long text itself** when the model handles long text. The parameter **Pause between segments (ms)** sets the silence between segments.
+
+## Style
+
+Shown only when the model takes instructions or emotions.
+
+- **How to say it**: a style instruction such as "Cheerfully, a little faster" (Qwen3-TTS 1.7B CustomVoice, CosyVoice 2 and 3, CosyVoice 300M Instruct).
+- Emotion (IndexTTS-2 and 2.5) comes three ways, as the model supports:
+  - **Emotion weights**: a 0–1 slider per emotion (**Happy**, **Angry**, **Sad**, **Afraid**, **Disgusted**, **Melancholic**, **Surprised**, **Calm**).
+  - **From a clip**: an **Emotion clip**; only the clip's emotion is borrowed, not its voice; **Strength** 0–2.
+  - **Described**: write it under **The emotion, described**.
+
+## Parameters
+
+**Parameters** lists only what this model takes; a value you leave alone is not sent, so the engine uses its own default. The engine's own options are under **Engine options**.
+
+- **Seed**: empty means **A new seed each time**; a number means **Keep this seed**, so the same input gives the same result. The dice button is **Roll a seed**; the unlock button goes back to a new seed each time.
+- **Output**: **Format** (WAV, FLAC, MP3, OGG, M4A), **Sample rate** (**The model’s own**, or 16–48 kHz) and **Levelling** (**Peak**, **Loudness**, **None**). The defaults come from **Settings › Speech**.
+
+### Presets
+
+**Presets** opens a menu:
+
+- Click a preset to apply it (marked **default** or **every model**).
+- **Save as a preset…**: a **Preset name**; with **Only for** *model* checked it keeps every parameter, otherwise only the common parameters, for every model (a preset holding engine options is for the current model only). **Apply it whenever this model is picked** makes it the model's default.
+- **Manage presets…**: **Make it the default**, **Stop it being the default**, delete.
+
+When a model is picked, its default preset is applied; the chosen voice's own default preset comes first.
+
+## Plan, Speak and Stream
+
+- **Plan** shows **What will happen** without speaking: the model, the voice mode, language, device, the number of segments, the parameters sent, each reference clip (and whether it is **transcribed first**) and **Notes**. Unsuitable settings fail here already.
+- **Speak** submits a speak job. Its card shows at the bottom of the page; when it is done the result appears under **Results**. Several jobs fold into one line, **… jobs**, saying how many run and how many wait (**… running · … waiting**), with their progress together and a button that cancels them all; open it to see each job's card in a list that scrolls. Synthesis jobs run one at a time by default, across all engines and devices; the others wait in order, showing **Waiting for other synthesis jobs** (**Settings › Compute › Synthesis jobs at once**).
+- **Stream**: with this chip on, **Speak** plays the audio as it is made. Hover over it to see how this model streams: CosyVoice starts within moments of the first words; the other engines play each sentence as soon as it is ready; or Mizuoto splits the text and plays each part as soon as it is ready. The player bar shows **… played · … ready ahead** and offers **Stop**. When the model falls behind, playback pauses and waits rather than dropping speech; the whole result is still kept under **Results**.
+
+## Results
+
+**Results** lists what you spoke on this screen. Each shows its text, duration, waveform (click to seek), model, time taken, real-time factor (RTF) and seed, with any warnings and licence notices. Its menu:
+
+| Action | What it does |
+| --- | --- |
+| **Favourite** / **Not a favourite** | [History](/docs/guide-history) can show favourites only |
+| **Download** | Download the file |
+| **Show in folder** | Only in a browser on the server machine |
+| **Use as a reference clip** | Use this result as **A clip**, with its text as the transcript |
+| **Keep as a voice** | Type the **Name of the new voice** to put it in the library |
+| **Run again with these settings** | Load the model, voice, text and parameters that made it back into Speak |
+| **Delete** | Delete the result |
+
+With more than one result, **Download all** downloads them together.
+
+## Command line
+
+```bash
+mizuoto speak "Hello." -m qwen3tts/1.7b-base --voice narrator -o hello.wav
+mizuoto speak "Hello." -m qwen3tts/1.7b-base --ref me.wav --ref-text "What the clip says" -o me.wav
+mizuoto speak "Hello." -m qwen3tts/1.7b-custom-voice --preset vivian --instruct "cheerfully" --plan
+mizuoto speak "Hear it as it is made." -m cosyvoice/cosyvoice2-0.5b --voice narrator --stream | ffplay -nodisp -
+mizuoto speak "What a day!" -m indextts/v2 --ref me.wav --emotion happy=0.8
+mizuoto preset save Calm -m cosyvoice/cosyvoice2-0.5b -p speed=0.9 --default
+```
+
+`mizuoto speak --help` lists every option (`--describe`, `--attr`, `--emotion-audio`, `--batch`, `--use-preset` and more); see the [command reference](/docs/cli-commands).

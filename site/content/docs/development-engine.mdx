@@ -1,0 +1,305 @@
+---
+title: "接入引擎"
+description: "以 OmniVoice 为例，讲一个引擎怎样编写和接入：清单与模型文件清单、Engine 与 LoadedEngine 契约、模型句柄、任务类型、错误、共享资源、注册，以及让它与上游保持一致的测试。"
+icon: Puzzle
+---
+
+Mizuoto 里的一个引擎由放在两处的两样东西组成，外加它的测试：
+
+| 部分 | 位置 | 由谁读取 |
+| --- | --- | --- |
+| 清单：变体、能力、参数、选项、目录中的模型、共享资源、许可、训练方法 | `mizuoto/core/engines/manifests/<id>.toml`，模型文件清单在 `manifests/files/` | 核心（`EngineRegistry`），不导入引擎 |
+| 实现：一个 `Engine` 子类和它的 `LoadedEngine`，基于 `mizuoto.runtime`、`mizuoto.nn` 和 `mizuoto.text` 构建 | `mizuoto/engines/<id>/`，单独发布的则在 `packages/native/<id>/` | 运行时，在服务器进程里 |
+| 测试 | `tests/engines_native/test_<id>_tiny.py`、契约套件、`scripts/parity/` | CI，以及你自己 |
+
+核心只凭清单规划和校验每个请求，然后经由 `core/inference` 调用实现（见[运行时](/docs/development-runtime)）。本页以 OmniVoice 为例：`mizuoto/core/engines/manifests/omnivoice.toml` 和 `mizuoto/engines/omnivoice/`。
+
+<Mermaid chart={`flowchart LR
+    man["manifests/omnivoice.toml<br/>+ files/omnivoice.files.json"] --> reg["EngineRegistry<br/>校验 · 表单 · 模型目录"]
+    reg --> tts["TtsService.plan"]
+    tts --> rs["RuntimeService.loaded"]
+    rs -- "get_engine('omnivoice')<br/>BUILTIN 或入口点" --> eng["OmniVoiceEngine.load<br/>→ LoadedOmniVoice"]
+    eng --> rt["mizuoto.runtime<br/>ops · loading · 句柄"]
+    eng --> nn["mizuoto.nn · mizuoto.text<br/>HuBERT · DAC · BPE"]`} />
+
+## 1. 清单
+
+`mizuoto/core/engines/manifests/*.toml` 随 `mizuoto` 包发布；`EngineRegistry` 读取目录下的每个文件，按 `EngineManifest`（`mizuoto/core/engines/models.py`）校验。需要接受许可的引擎，其清单也在 `mizuoto` 里，所以在它的发行包装上之前，模型目录和许可全文就已经在了。顶层字段：
+
+```toml
+id = "omnivoice"
+title = "OmniVoice"
+description = "Xiaomi's diffusion language model TTS: …"
+devices = ["cuda", "cpu"]
+languages = ["*"]
+
+[upstream]
+url = "https://github.com/k2-fsa/OmniVoice"
+commit = "08be0b4ccbac3e13e374e86fbfead4b4cac343e2"
+
+[licence]
+id = "apache-2.0"
+name = "Apache License 2.0"
+url = "https://github.com/k2-fsa/OmniVoice/blob/master/LICENSE"
+```
+
+| 字段 | 含义 |
+| --- | --- |
+| `id` | 引擎 id；实现以同一个 id 注册 |
+| `devices` | 引擎能运行的设备类型（`cuda`、`cpu`、`mps`、`xpu`） |
+| `languages` | 规范语言代码；`*` 表示任意 |
+| `[upstream]` | 移植所复现的项目和提交（仅作说明，不是依赖） |
+| `ops`、`internal` | `call` 操作名；内部辅助引擎（ASR），不用于合成 |
+| `[weights]` | 音色自有微调权重的角色和后缀（GPT-SoVITS：`gpt = ".ckpt"`、`sovits = ".pth"`） |
+
+### 变体与能力
+
+一个变体就是一组静态能力；请求在任何任务创建之前就对照它校验：
+
+```toml
+[variants.v0]
+title = "OmniVoice"
+sample_rate = 24000
+capabilities = ["clone", "voice_design", "auto_voice", "inline_tags", "pronunciation", "speed", "duration", "batch", "long_text", "seed"]
+max_batch = 8
+
+[variants.v0.design_attributes]
+gender = ["male", "female"]
+# age、pitch、style、accent、dialect …
+
+[variants.v0.reference]
+min_seconds = 1.0
+max_seconds = 20.0
+min_sample_rate = 16000
+```
+
+完整列表是 `models.py` 里的 `Capability`。有些能力会改变处理流程：没有 `long_text` 时 Mizuoto 自己切分文本；`batch` 且 `max_batch > 1` 时启用微批处理；`stream_audio` 的粒度来自 `stream_granularity`；`stream_text_input` 允许通过 WebSocket 流式输入文本。变体还可以有 `languages`、`speakers`、`emotions`、`inline_tags`、`instruct_requires` 和 `weights_version`。
+
+### 参数、选项与加载选项
+
+| 表 | 模型 | 说明 |
+| --- | --- | --- |
+| `[params.<通用名>]` | `ParamSpec` | 只能用 `CommonParam` 里的名字（`temperature`、`top_p`、`num_steps`、`speed`、`seed` 等）。`target` 是引擎自己的名字；`default` 只是展示引擎的默认值，Mizuoto 从不强加；`approximate = true` 会在结果里加一条警告；`variants` 和 `streaming` 限定适用范围 |
+| `[options.<名字>]` | `OptionSpec` | 引擎专有选项（`engine_options`）；未知的选项一律报错；`group = "hidden"` 不在表单里显示。引擎的 `OPTION_SCHEMA` 必须与它们完全一致 |
+| `[load_options.<名字>]` | `OptionSpec` | 模型加载时应用（`engines.<id>.load_options`，即引擎卡片上的“选项”），如 F5-TTS 的 `ode_method`、IndexTTS 的 `use_torch_compile`。它们通过 `LoadSpec.options` 传给引擎 |
+
+### 模型与模型文件清单
+
+```toml
+[[models]]
+id = "omnivoice/omnivoice"
+variant = "v0"
+title = "OmniVoice"
+vram_mb = 5000
+recommended = true
+files = { hf = "k2-fsa/OmniVoice", modelscope = "k2-fsa/OmniVoice", manifest = "omnivoice.files.json" }
+```
+
+`files`（`ModelFiles`）还可以有 `subdir`、`into`、`include`、`exclude` 和 `unpack`；`extra` 列出更多仓库；`assets` 指明共享资源；`vram_mb` 是随模型显示的目录显存数字（加载从不因它而拒绝）。
+
+增改模型后运行 `python scripts/dev.py model-manifests omnivoice`。`scripts/model_manifests.py` 把 Hugging Face 修订版本固定到当前提交，并把每个文件的大小和 SHA-256（LFS 文件取自元数据，小文件下载后计算）写进 `manifests/files/<manifest>`。下载时据此校验；`test_catalogue_models_have_files_manifests` 检查目录里的每个模型都有文件清单。
+
+### 共享资源、许可与训练
+
+- **`[[assets]]`**：一个引擎的多个模型共用的文件（GPT-SoVITS 的编码器和文本前端数据、IndexTTS-2 的 w2v-BERT 等），写法同模型，安装在 `<models>/_assets/<engine>/<name>/`。模型在 `assets` 里写明需要哪些；引擎通过 `spec.options["assets"]`（资源 id → 目录）拿到它们的目录。
+- **`[licence]`**：`gated = true` 时，下载权重和共享资源、合成都要求 `engines.<id>.accepted_licence == id@version`；`file` 指向 `manifests/licences/` 里的全文；`trains_others = false` 拒绝把它的输出用作其他引擎的训练数据；`notice` 显示在结果下方；`commercial` 用于给输出打标签。
+- **`[training.<id>]`**：训练方法，由引擎的 `TRAINER` 运行；见[训练器](/docs/development-training)。
+
+### 识别模型文件夹
+
+`mizuoto model import` 只凭文件内容判断引擎和变体：`mizuoto/core/models/detect.py` 读取配置文件（OmniVoice：`config.json` 里 `model_type == "omnivoice"`），引擎的 `detect_variant` 必须与它一致。
+
+## 2. 实现
+
+一个引擎是 `mizuoto/engines/<id>/` 下的一个包，`__init__.py` 导出 `Engine` 子类，各模块只导入[分层规则](/docs/development-architecture#分层规则及其测试)允许的东西：`mizuoto.runtime`、`mizuoto.nn`、`mizuoto.text`、`mizuoto.training`、`mizuoto.core.codes`、`mizuoto.core.inference.tasks`、自己的包，以及 numpy、torch 和文本库；绝不导入另一个引擎。它的模块顶层不导入 torch（`test_engine_contract_import_is_light` 和 `test_manifest_options_match_the_engines` 会在没有 torch 的情况下导入引擎模块）：torch 在方法内部导入，类型注解放在 `if TYPE_CHECKING:` 下。
+
+### `Engine`
+
+```python
+class OmniVoiceEngine(Engine):
+    id = "omnivoice"
+    VERSION = "1"
+    TRAINER = "mizuoto.engines.omnivoice.train:OmniVoiceTrainer"
+    OPTION_SCHEMA = {
+        "t_shift": OptionSpec("float", 0.1, 0.0, 1.0),
+        "denoise": OptionSpec("bool", True),
+        # … 清单里每个 [options.<name>] 一项
+    }
+
+    def detect_variant(self, model_dir: Path) -> str | None:
+        config = json.loads((model_dir / "config.json").read_text(encoding="utf-8"))
+        return "v0" if config.get("model_type") == "omnivoice" else None
+
+    def load(self, spec: LoadSpec, runtime: Runtime, ctx: RequestContext) -> LoadedEngine:
+        return LoadedOmniVoice(spec, ctx)
+```
+
+| 成员 | 用途 |
+| --- | --- |
+| `id` | 引擎 id（与清单和注册表一致） |
+| `VERSION` | 实现自己的版本字符串（默认 `"1"`）。音色缓存按 Mizuoto 的版本区分，而不是这个 |
+| `OPTION_SCHEMA` | 与清单的 `[options]` 完全对应的 `OptionSpec`：类型、默认值、最小值、最大值和可选值都相同（`test_manifest_options_match_the_engines`） |
+| `TRAINER` | 引擎的 `mizuoto.training.Trainer` 的 `"模块:类"`，可训练时才有 |
+| `EXTRAS` | 可选功能：安装说明 → 它提供的模块，如 GPT-SoVITS 的 `{"mizuoto[gptsovits-ja]": ("pyopenjtalk",), "mizuoto[gptsovits-ko]": ("mecab", "jamo")}`；`mizuoto doctor` 列出导入不了的那些 |
+| `detect_variant(model_dir)` | 只凭文件夹里的文件判断变体，不用 torch |
+| `load(spec, runtime, ctx)` | 依据 `spec`（`model_id`、`model_dir`、`variant`、`device`、`dtype`、`options`）构建模型，返回一个 `LoadedEngine`；用 `ctx.progress("loading:<部分>")` 汇报，各部分之间调用 `ctx.check_cancel()` |
+| `call(op, payload, ctx)` | 不需要已加载模型的操作 |
+
+### `LoadedEngine`
+
+一个已加载的模型。它不可重入：任务调度器一次只给它一个请求（`engine:<引擎>:<设备>` 资源）。
+
+| 方法 | 必需 | 用途 |
+| --- | --- | --- |
+| `describe()` | 是 | 返回 `Description`：采样率、能力、说话人、语言、显存、`ignored_params` |
+| `synthesize(task, ctx)` | 是 | 生成器：每准备好一段就 `yield AudioChunk(samples, sample_rate, segment, final)`，每一步都调用 `ctx.check_cancel()`；把实际使用的值记进 `ctx.applied`，警告用 `ctx.warn()` |
+| `prepare_voice(voice, cache_dir, ctx)` | | 把派生的音色状态（提示码、嵌入）写进 `cache_dir`，以 `VoiceCache(files, meta)` 返回；之后的请求在 `VoiceSpec.cache` 里拿到这些文件 |
+| `convert(task, ctx)`、`edit(task, ctx)` | | 音色转换和语音编辑，同样是生成器；默认抛出 `Unsupported` |
+| `call(op, payload, ctx)` | | 清单 `ops` 里列出的操作（ASR 的 `transcribe`、Fish Speech 的 `codec_encode` / `codec_decode`） |
+| `memory_required(task)` | | 一个请求在权重之外需要的设备内存字节数；模型管理器会为它腾地方 |
+| `close()` | | 丢弃权重（管理器已经把句柄从设备上移走了） |
+
+引擎返回模型自身采样率下、范围在 `[-1, 1]` 的 float32 单声道音频，从不编码：拼接、归一化、重采样和编码都是核心的事。它收到的是解析好的、确实存在的绝对路径（参考音频是 `cache/refs/` 里的 16 位 WAV），从不下载。核心已经对照清单校验过请求，所以引擎只做映射，不做检查。
+
+### 任务类型
+
+请求和结果都是 `mizuoto/core/inference/tasks.py` 里的标准库数据类，由 `mizuoto.runtime.engine` 重新导出：
+
+| 类型 | 字段 |
+| --- | --- |
+| `SynthesisTask` | `text`、`language`、`voice`、`style`（`instruct`、`emotion`）、`params`（按 Mizuoto 名称的通用参数）、`options`（引擎选项）、`texts`（批处理）、`segment` / `segments`、`stream`、`text_stream` |
+| `VoiceSpec` | `references`（`Reference`：`audio_path`、`transcript`、`language`、`sample_rate`、`duration`）、`preset`、`description`、`attributes`、`weights`、`cache`、`voice_id` |
+| `VoiceConversionTask`、`SpeechEditTask` | 源音频和音色；音频、其文本和若干 `EditSpan` |
+| `LoadSpec`、`Description`、`AudioChunk`、`VoiceCache`、`OptionSpec` | `load` 收到的、`describe` 返回的、音频、音色缓存、选项 |
+
+### 模型句柄
+
+每个带权重的模块都包进一个 `ModelHandle`，列在 `self.handles` 里，模型管理器才能安放它、移走它并报告它的大小：
+
+```python
+self.handles = [
+    ModelHandle(model, name=f"{spec.model_id}:model", load_device=spec.device),
+    ModelHandle(tokenizer, name=f"{spec.model_id}:audio tokenizer", load_device=spec.device),
+]
+```
+
+用 `ops.default` 搭建模块（不做随机初始化），用 `mizuoto.runtime.loading`（`load_state_dict`、严格的 `load_into`）加载权重，参数保持 `nn.Module` 创建时的样子。每个随机数都从 `ctx.generator_for(device)` 或 `ctx.rng` 取，并按上游的顺序抽取（见[运行时](/docs/development-runtime#全局状态)）。
+
+用 `mizuoto.runtime.accel.attention(q, k, v, site=SITE, …)` 计算注意力，不要直接调用 `F.scaled_dot_product_attention`（架构测试会禁止）：每个调用点声明一次 `SITE = accel.Site("<id>.<部分>")`，并传入上游传给 SDPA 的参数（`causal` 就是它的 `is_causal`）。上游手写注意力的调用点把那段代码作为 `reference`；只能由参照计算的调用点设为 `swappable=False`（在分数中加入相对位置的注意力根本不是调用点，仍是手写代码）。调用点按某种结构（单侧填充、因果、窗口）构建掩码时，同时传入 `mask_info`，让更快的内核也能处理这次调用（[加速](/docs/development-acceleration#调用点与参照计算)）。
+
+### 错误
+
+抛出 `EngineError(message, detail, code=codes.…)`，错误码取自 `mizuoto.core.codes`（`invalid_input`、`capability_not_supported`、`model_missing` 等）；把解决问题的命令放进 `detail["hint"]`。`Unsupported(message)` 就是 `capability_not_supported`。核心依据错误码还原领域错误；内存不足和其他异常会自动映射。
+
+## 3. 注册
+
+运行时按 id 找实现（`mizuoto/runtime/engine.py` 的 `get_engine`）：
+
+- **在本发行包里**：把引擎加进 `BUILTIN`：
+
+  ```python
+  BUILTIN: dict[str, str] = {
+      ...
+      "omnivoice": "mizuoto.engines.omnivoice:OmniVoiceEngine",
+  }
+  ```
+
+- **在单独的发行包里**（许可证不允许随 `mizuoto` 发布，即决策 D1）：在它的 `pyproject.toml` 里把类注册到入口点组 `mizuoto.engines`，依赖 `mizuoto`，并在 `mizuoto/core/inference/service.py` 的 `DISTRIBUTIONS` 里加上引擎 id → 发行包名，这样缺少安装时能按名字报告。Fish Speech 的写法：
+
+  ```toml
+  [project]
+  name = "mizuoto-fishspeech"
+  dependencies = ["mizuoto", "tokenizers>=0.20", "safetensors"]
+
+  [project.entry-points."mizuoto.engines"]
+  fishspeech = "mizuoto_fishspeech:FishSpeechEngine"
+  ```
+
+  入口点每个进程只读一次：装上这样的发行包后要重启 Mizuoto。它的包遵守引擎的分层规则（`test_native_engine_packages_import_like_engines`），带着 Mizuoto 的版本号（`test_gated_distributions_move_in_lockstep`），由 `scripts/build_wheels.py native` 构建。
+
+当 torch 能导入（dummy 引擎不需要）且实现已注册时，引擎就是*可用*的；否则 `EngineStatus.missing` 写明缺什么，界面和 `mizuoto doctor` 给出解决办法。
+
+## 4. 测试
+
+<Tabs items={["小型随机模型", "契约套件", "对照"]}>
+<Tab value="小型随机模型">
+
+`tests/engines_native/test_<id>_tiny.py` 在临时目录里搭一个与引擎结构相同、权重随机的小模型（配置文件、字节级词表、测试自己写出的 safetensors），在 CPU 上走真实的代码路径：加载、音色提示及其缓存、解码、批处理、可重复的种子、取消。不下载任何权重，所以 CI 每次推送都跑（CPU 版 torch）。`test_omnivoice_tiny.py` 是一个完整的例子；训练器有 `test_<id>_train_tiny.py`。
+
+</Tab>
+<Tab value="契约套件">
+
+```bash
+MIZUOTO_TEST_DEVICE=cpu python scripts/dev.py test-engines omnivoice -- -x
+```
+
+`tests/engines/test_contract.py`（标记 `engine` 和 `weights`，默认排除）对可用引擎的每个已安装目录模型，走完整的链路（规划 → 任务 → 运行时 → 引擎）：`describe` 与清单一致；声明的每种音色模式都能发声、采样率正确、时长与文本相称、说的是那段文本（装了 ASR 时，词错误率低于 0.35）；种子可复现；两段能正确切分；中途取消能让引擎停下；不留下任何进程级状态。新引擎的 id 要加进套件里 `engines` 设置覆盖的列表。见[测试](/docs/development-testing#真实引擎的契约套件)。
+
+</Tab>
+<Tab value="对照">
+
+Mizuoto 对移植的标准是：在 CPU 上以 fp32、带种子运行时，输出与上游实现完全相同。对于 Mizuoto 0.1 已有的引擎，`scripts/parity/` 让同样的用例分别走 0.1 的链路和原生链路，逐采样比较（见[测试](/docs/development-testing#与参照实现对照)）。移植复现了什么、哪里有偏差、对照结果如何，记在[引擎参考](/docs/engines)中该引擎的页面（`site/content/docs/engines-<id>.mdx` 与 `.en.mdx`）；以后的改动不能破坏的规则记在 `AGENTS.md`。
+
+</Tab>
+</Tabs>
+
+<Callout type="info" title="输出不一致时">
+
+先看随机数：上游可能在构建模型或准备参考音频时抽过随机数（HuBERT 的层丢弃、IndexTTS 的 w2v-BERT、CosyVoice 3 的声码器噪声），或者是对跨步不同的张量抽的。再看张量形状和内核：SDPA 带不带掩码、掩码的精度、是否连续、CPU 线程数。`AGENTS.md` §2b 按引擎逐一列出了这类发现。
+
+</Callout>
+
+## OmniVoice 实例
+
+`mizuoto/engines/omnivoice/`（总共约 2900 行）：
+
+| 模块 | 内容 |
+| --- | --- |
+| `engine.py` | `OmniVoiceEngine` 和 `LoadedOmniVoice`：加载、音色提示、迭代解码、长文本分块、解码与后处理 |
+| `model.py` | 基于 `mizuoto.runtime.lm.qwen` 解码器的扩散语言模型 |
+| `audio_tokenizer.py` | HiggsAudio v2 分词器：`nn/codecs/dac`、`nn/ssl/hubert`、残差码本 |
+| `audio.py`、`text.py`、`duration.py`、`voice_design.py`、`lang_map.py` | 按 pydub 的算法去静音和淡入淡出；文本分块与标点；时长估计；由设计属性生成指令；语言名称 |
+| `train.py` | `OmniVoiceTrainer`：`full` 和 `lora` 两种方法 |
+
+从中可以看到：
+
+- **加载**：`OmniVoiceModel(config, ops.default)` 由 `load_into(model, load_state_dict(folder / "model.safetensors"))` 填充，再转成目标精度（GPU 支持 bf16 就用 bf16，否则 fp16；CPU 上 fp32；明确设置的 `engines.omnivoice.dtype` 优先）；音频分词器同样处理；文本分词器来自 `mizuoto.text.tokenize.bpe.load_bpe(folder)`；两个句柄。
+- **参数映射**：Mizuoto 的通用参数名映射到上游的生成配置（`num_steps → num_step`、`temperature → class_temperature`），其余由引擎选项填充。
+- **三种音色模式**：有参考音频 → 音色提示；有属性 → 由 `instruct_from(attributes)` 生成的指令；都没有 → 模型自己的声音。自由文本描述会抛出 `capability_not_supported`。
+- **音色缓存**：`prepare_voice` 把提示存成 `prompt.pt`；`synthesize` 优先用 `voice.cache["prompt"]`。
+- **随机数**：Gumbel 噪声从 `ctx.generator_for(self.device)` 抽取；HuBERT 的层丢弃抽样（上游在评估模式下也会抽）从 `ctx.generator_for("cpu")` 抽取。
+- **取消与进度**：每个解码步调用 `ctx.check_cancel()`，之后 `ctx.progress("generating", …)`。
+- **批处理**：设置了 `task.texts` 时，所有文本放进一批，各自以 `segment = task.segment + index` 产出。
+- **内存**：`memory_required` 按批中每行估算 logits 所需的工作内存。
+
+[OmniVoice 的引擎页面](/docs/engines-omnivoice)记录了对照结果（在 CPU 上以 fp32 运行时，克隆、设计、自身音色和微调模型都与 0.1 完全相同）以及做到完全一致所需的细节。
+
+## 清单：一个新引擎要动哪些地方
+
+<Steps>
+<Step>
+
+`mizuoto/core/engines/manifests/<id>.toml`；运行 `dev.py model-manifests <id>`；需要接受许可时，把许可全文放进 `manifests/licences/`。
+
+</Step>
+<Step>
+
+`mizuoto/engines/<id>/`（或 `packages/native/<id>/`）：`OPTION_SCHEMA` 与清单一致的 `Engine` 子类、它的 `LoadedEngine` 和所需的模块；可共用的部分放进 `mizuoto/nn` 或 `mizuoto/runtime`。
+
+</Step>
+<Step>
+
+注册：`mizuoto/runtime/engine.py` 的 `BUILTIN`，或 `mizuoto.engines` 入口点加 `DISTRIBUTIONS`。`mizuoto/core/models/detect.py` 能识别它的模型文件夹；可选的包放进 `pyproject.toml` 的附加依赖和 `EXTRAS`。
+
+</Step>
+<Step>
+
+测试：`tests/engines_native/test_<id>_tiny.py`；`tests/core/test_engines.py::test_registry_lookups` 里的引擎 id 列表，以及 `tests/engines/test_contract.py` 里的 `engines` 覆盖。
+
+</Step>
+<Step>
+
+`mizuoto model download <id>/<名字>`，然后在真实模型上跑契约套件；把移植情况和对照结果记进该引擎的页面（`engines-<id>`，中英文都要），把它加进侧边栏（`meta.json`、`meta.en.json`）和[引擎参考](/docs/engines)的表格；如有新的规则，再记进 `AGENTS.md`。
+
+</Step>
+</Steps>

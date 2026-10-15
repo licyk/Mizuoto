@@ -1,0 +1,228 @@
+---
+title: "Memory"
+description: "How the runtime spends GPU memory and RAM, after ComfyUI: phases, the budget and VRAM modes, units and weight streaming, host copies, partial loading and eviction, the exact out-of-memory retry, working-memory estimates and their calibration, simulated devices, training presets, and what an engine does to take part."
+icon: MemoryStick
+---
+
+A model runs whenever its smallest working set fits the device, not only when all of it fits. Mizuoto's runtime does this the way ComfyUI does (`load_models_gpu`, `ModelPatcher`'s partial loading, dynamic VRAM), without a native allocator: a request places only the components its current step needs; when they do not fit, other components give up memory unit by unit; when that is still not enough, the components load partly and the rest of their weights stream from RAM as each layer runs. Running out of memory becomes slower, not failed.
+
+None of this changes a result. A streamed layer computes with the same tensors as a resident one, a retried step replays the same random draws, and the tests run every engine with its weights streamed and compare the audio with the plain run. The mechanisms that do change numbers (tiled decoding, the static KV cache, the `lowest` training preset) are opt-in and say so in the output.
+
+The user-facing settings are in [Performance](/docs/advanced-performance); the runtime as a whole in [Runtime](/docs/development-runtime).
+
+## Where it lives
+
+| Part | Code | Role |
+| --- | --- | --- |
+| `VramPolicy` | `mizuoto/runtime/policy.py` | The mode, reserves, host copies, pinned budget, copy streams and OOM switches, built from the `compute` settings at every use (`core/inference/service.py: policy_from`), so a change reaches the next load without a restart |
+| Units | `mizuoto/runtime/units.py` | Which parts of a module may stay off the device and which are fixed |
+| `ModelHandle` | `mizuoto/runtime/handle.py` | One component: whole or partly placed, host copies, hooks for streamed units |
+| `Streamer` | `mizuoto/runtime/stream.py` | One per device: the device copies of streamed units, their learnt order, prefetch on side streams, pinning |
+| `ModelManager` | `mizuoto/runtime/manager.py` | Every registered component, the budget, eviction, partial loading, the OOM retry's clean-up, calibration, reporting |
+| `RequestContext.use` / `run` | `mizuoto/runtime/context.py` | A phase of a request; `run` adds the exact retry and the fallback |
+| `peak_bytes`, `BufferCache` | `mizuoto/runtime/lm/cache.py` | KV cache peaks for estimates; the static cache |
+| `tiled_1d` | `mizuoto/nn/dsp/tiles.py` | Decoding in overlapping tiles (a fallback) |
+| `DeviceService` | `mizuoto/runtime/device.py` | Free memory, `vram_limit_mb`, simulated devices |
+| Training tools | `mizuoto/training/memory.py` | Checkpointing, presets, host optimizer, streamed frozen weights, estimates |
+
+<Mermaid chart={`flowchart TD
+    ctx["ctx.use / ctx.run<br/>one phase: handles + working memory"] --> mgr["ModelManager.load<br/>budget · eviction · whole or partly"]
+    pol["VramPolicy<br/>compute.* settings"] --> mgr
+    mgr --> h["ModelHandle.load(budget)<br/>fixed parts + resident units"]
+    h -- "units left out" --> st["Streamer<br/>copies · learnt order · prefetch · pinning"]
+    st -- "forward hooks swap param.data" --> run["the engine's own code, unchanged"]
+    h --> run`} />
+
+## Phases
+
+An engine with `PHASED = True` (every real engine Mizuoto ships; the dummy is not) wraps each part of a request in a phase, so only that part's components are placed, with that part's working memory set aside:
+
+```python
+prompt = ctx.run("voice prompt", [self.h_codec], encode, self._codec_memory(len(wav)))
+codes = ctx.run("talker", [self.h_talker], generate, self._generation_memory(rows, positions))
+audio = ctx.run("codec decoder", [self.h_decoder], decode, self._decoder_memory(frames))
+```
+
+- **`ctx.use(handles, memory)`** is a context manager: the manager loads `handles` (whole or partly) with room for `memory` bytes of working memory and keeps them from giving up memory until the block ends. Use it for a phase that yields audio or consumes a generator.
+- **`ctx.run(name, handles, fn, memory, generators=(), fallback=None)`** is the same around a pure function and adds the exact retry and the fallback (below). Use it wherever the block's only effect is its result.
+- Components the phase does not name stay where they are and give up memory first when another phase needs it: an IndexTTS clone of a cached voice never places w2v-BERT or CAM++.
+- An engine without `PHASED` gets every handle for the whole call, with `memory_required(task)` as the working memory.
+
+On the CPU the manager moves and counts nothing (the load and offload device are the same), so phases cost nothing there.
+
+## The budget
+
+`ModelManager.load(handles, memory)` decides per device:
+
+1. **Need** = the handles' bytes not yet on the device + the working memory (the estimate times its calibration, below) + `compute.vram_reserve_mb`.
+2. **Free** = the driver's free memory plus what torch's caching allocator holds but does not use, capped by `compute.vram_limit_mb` (less what this process already holds) when that is set.
+3. If free memory falls short, other idle components give up memory (eviction, below), then free memory is measured again.
+4. If the handles fit, they load whole. Otherwise they load partly within the budget: free memory less working memory and reserve.
+
+| Mode (`compute.vram_mode`, `engines.<id>.vram_mode`) | Whole when it fits | Otherwise |
+| --- | --- | --- |
+| `auto` / `normal` | yes | partly, down to the minimum |
+| `high` | yes | whole anyway, after idle components left whole; no partial loading |
+| `low` | only when the weights take at most half of the device's memory (`low_ratio`) | partly, within that half |
+| `none` | never | every unit streams: the fixed parts and the copies in flight only |
+| `shared` (automatic on MPS) | yes | whole: unified memory gains nothing from offloading, so no partial loading and no host copies |
+
+**No estimate refuses a load** (ComfyUI's way). In `high` the model is tried whole once idle components made room; in the other modes, below the minimum, it is tried at the minimum with a warning in the log. Only an allocation that really fails is an error. The catalogue's `vram_mb` is never checked before loading.
+
+**Two requests on one GPU.** With `compute.gpu_jobs` above 1, a request short of its minimum (in `high`: of its whole size) while another request holds components on the device waits for that request to let go, up to 10 minutes, checking for a cancel; then it tries.
+
+## Units: what streams
+
+A unit is a group of weights that moves together: a decoder layer, a DiT block, a vocoder stage (ComfyUI's dynamic-VRAM units).
+
+- A module may name its units with `memory_units() -> list[nn.Module]`. Otherwise each child of a `ModuleList` or `Sequential` of at least 1 MB is a unit (the outermost lists; a unit is never split further).
+- **Only the weights of `nn.Linear`, `Conv1d/2d` and `ConvTranspose1d/2d` stream**, and of classes that declare `STREAMABLE = True` (IndexTTS's GPT-2 `Conv1D`). Their `forward` is where they are read.
+- **Everything else is fixed**: on the device whenever the component is. That includes embeddings (codebooks are read through `.weight` as often as they are called), norms, scales, buffers, a parameter shared with a module outside the unit (tied embeddings and heads), the model's first parameter (code reads the model's device from it), units under 64 KB, modules marked `fixed` and everything under a module pinned to the CPU (`DeviceService.pin_to_cpu`, which never moves).
+
+An engine marks submodules on the handle with `handle.mark(module, mark)`:
+
+| Mark | Meaning | Used by |
+| --- | --- | --- |
+| `fixed` | Never streams: code reads its weights outside its `forward` | CosyVoice's HiFT F0 predictor; GPT-SoVITS's T2S (`memory_units() = []`) |
+| `hot` | Runs many times per step: resident first | Qwen3-TTS's code predictor, VoxCPM's local DiT and encoder, Whisper's decoder |
+| `cold` | Runs once per request: streams first | |
+
+A handle's `kind` decides which units stay resident when not all fit, after the `hot` ones:
+
+- `sequence` (an autoregressive LM, every layer once per token): units in execution order, so a fixed prefix of layers stays and the same layers stream every token;
+- `oneshot` (encoders, decoders, flow steps over a whole input): the largest first, which keeps the copies in flight small.
+
+A handle's **minimum** is its fixed parts plus the copies of its largest units the streamer holds at once.
+
+## Weight streaming
+
+A streamed unit's weights rest in RAM. Forward pre- and post-hooks on the unit, and on each module holding its weights, swap `param.data` to a device copy for the call and back after it. Hooks on the leaves make any path into a layer work (`layer.forward_step(…)`, `vae.decode`), and nothing in `ops` or in a layer's code changes. A component wholly on its device has no hooks at all, so the resident path costs nothing.
+
+The device's `Streamer`:
+
+- **keeps a few copies**: the running unit and those in flight (`compute.async_offload + 1`); a unit that runs again before its copy is dropped (CFG halves, beams) reuses it;
+- **learns the order** units run in (each unit's successor, as last seen) and, on CUDA and ROCm, **prefetches** the next units on side streams while the current one computes. The compute stream waits on a copy's event, and each copy is recorded on the compute stream so the caching allocator does not reuse it early. A unit entered out of order is copied there and then: correctness never depends on the order;
+- **pins** the host copies of streamed weights (page-locked memory makes copies asynchronous and about twice as fast) within `compute.max_pinned_mb`, by default ComfyUI's budget: 40 % of RAM on Windows, elsewhere `max(0.4 × RAM, min(0.9 × RAM, RAM − 4 GB))`. Beyond it weights stay pageable and copy synchronously. XPU and MPS copy synchronously.
+
+Copies are made outside inference mode, in the weights' own dtype, so a streamed layer computes with the same kind of tensor as a resident one (an inference tensor takes other CPU kernels). Each fetch checks for a cancel. A `Compiled` module above a streamed unit runs eagerly (its graph would hold the weights), and CUDA graphs are captured only for models wholly on their device.
+
+## Host copies and RAM
+
+- With host copies (`compute.host_copies`: `auto` keeps them while free RAM stays above `compute.ram_reserve_mb`; `on`; `off`), a parameter placed on the device keeps its host tensor, so offloading it costs no transfer: the device is a cache over RAM. A partly loaded component always keeps them (its streamed units rest there). Buffers are always copied back (a module may update one in place).
+- Unloading frees everything without copying anything back.
+- A weight that changes after placement goes through the handle (`handle.replace(module)`: a voice's own GPT-SoVITS weights), so a host copy is never stale.
+- `compute.ram_reserve_mb` (empty: the larger of 2 GB and a tenth of the RAM): below it the runtime service drops the host copies of wholly loaded components first, then unloads idle models, least recently used first, never pinned or busy ones (`RuntimeService.relieve_ram`).
+
+## Eviction
+
+When free memory falls short, idle components on the same device give up the shortfall, in this order:
+
+1. partly loaded ones (already slow; ComfyUI's first key);
+2. then those of models not in `engines.<id>.pinned_models` before pinned ones;
+3. then the least recently used.
+
+Components in use by any request are never victims; the running model's components that the current phase does not need are. Each victim gives up units, in reverse fill order, until the shortfall is met (`partially_unload`); in `high` and `shared` it leaves whole. `empty_cache` runs after an eviction, never per request.
+
+Partly loading a phase's components: the smaller ones load whole first, each leaving the others at least their minimum, and the largest gets what is left, its remaining units streaming.
+
+Above the manager, `RuntimeService` keeps at most `compute.max_resident_models` models loaded, unloads idle ones after `compute.unload_after_minutes` (server only), moves every idle model off a GPU before a fine-tune there (`release_device`), and after a job fails for running out of memory unloads every model not in use from every GPU (`ComputeService.release_after_oom`, ComfyUI's `unload_all_models`). See [Runtime](/docs/development-runtime#memory).
+
+## Running out of memory
+
+**The exact retry** (`compute.oom_retry`, on). When a phase run through `ctx.run` runs out of device memory:
+
+1. the attempt's exception frame is left first (it holds the failed attempt's tensors);
+2. `manager.after_oom`: every other idle component on the device leaves it, the streamer's cached copies go, and each of the phase's components is capped at half of what it had on the device (`ModelHandle.cap_bytes`, kept until it is offloaded, so the next requests do not run out too);
+3. the request's generators, its `rng` and any the engine names (`generators=`) are put back as they were before the first attempt;
+4. the phase runs again: the same draws, the same result, slower. At most two retries; the output records `applied.oom_retries` and a warning.
+
+A phase under `ctx.use` (one that yields audio or consumes a generator) is not retried, so its estimate must bound what it can reach.
+
+**Fallbacks** (`compute.oom_fallback`, off). After the retries an engine's cheaper way runs, if it gave one (`ctx.run(…, fallback=(what, fn))`). Its output differs slightly, so it is recorded in `applied.fallbacks` with a warning:
+
+| Engine | Fallback |
+| --- | --- |
+| ASR | one 30 s window at a time |
+| GPT-SoVITS | one text at a time |
+| F5-TTS | Vocos in tiles |
+| IndexTTS | BigVGAN in tiles |
+| VoxCPM | the VAE in tiles |
+
+`tiled_1d` decodes 256 frames at a time with 32 frames of overlap, cross-faded (ComfyUI's audio VAE tiling). Qwen3-TTS's codec already decodes in chunks; CosyVoice's HiFT carries a phase that tiles would break.
+
+## Working-memory estimates
+
+A phase's estimate decides whether its weights fit whole, so it is sized by the request (its text tokens, batch rows, the reference's length), not by the worst case `max_new_tokens` allows. Setting aside memory the request never uses pushes weights out for nothing: a worst case of 8192 frames, doubled, was 2.4 GB for a Qwen3-TTS sentence that uses about 20 MB.
+
+- Language models' caches are sized by the text: Qwen3-TTS 16 frames a text token, IndexTTS 24 codes, GPT-SoVITS 16 a phone, CosyVoice upstream's 20 a token, each within `max_new_tokens`; Fish Speech's batches by their true bound; in the dtype and KV width the model computes in.
+- `runtime.lm.cache.peak_bytes(position_bytes, layers, positions, kind, rows)` gives a growing cache's peak: for `dynamic`, every layer plus one layer's new copy while a step concatenates (each layer's old tensors are freed before the next), not twice the cache; for `static`, the doubled buffers plus one old buffer while it grows.
+- A rare generation that outruns its estimate under `ctx.run` runs again with more weights streamed, exactly.
+
+**Calibration.** After each phase on CUDA or XPU, the manager measures its working memory: the peak above the placed weights, less the streamer's copies at their most and less what the phase keeps afterwards (CUDA graphs' pools, buffers kept with the model). When that exceeds the estimate, it remembers the ratio (times 1.1, at most 16) per phase, keyed by the engine and its components' names (`qwen3tts:talker`), and sets aside that much more next time. The ratios are kept in `<cache>/memory/calibration.json` (format version 2; a file of another version is ignored).
+
+## Reporting
+
+- Every output's `meta.memory`: `streamed_mb` (copied from RAM during the request), `loaded_mb`, `size_mb`, and for partly loaded components `partial`: per component the `reason` (the budget fell short, `vram_mode low` or `none`, capped after running out of memory, or gave up memory for another), the `mode`, `free_mb`, `working_mb` and `reserve_mb` weighed, `loaded_mb`, `size_mb` and `gave_up_for`. The log says the same when it happens.
+- `GET /api/v1/runtime` and `mizuoto runtime`: per model `loaded_bytes`, `streamed_bytes` and `host_bytes`; the web UI's loaded-models sheet draws them as a bar.
+- `mizuoto doctor` has a `memory` finding with the policy in effect (mode, reserve, limit, RAM reserve, host copies, pinned budget, streams, retry and fallbacks).
+
+## Static KV cache and the CUDA allocator
+
+- `compute.kv_cache = static` gives the Qwen-family caches (Qwen3-TTS, CosyVoice 2/3) preallocated buffers that double when full (`BufferCache`): no per-step concatenation, no transient copy, less fragmentation. Attention reads views with the buffer's strides, which some kernels sum in another order. Identical on the CPU; opt-in until it is checked identical on a GPU.
+- `compute.cuda_allocator` (`native`, `async`: cudaMallocAsync, `expandable`: expandable segments; `auto` is `native`) is set by the host in `PYTORCH_CUDA_ALLOC_CONF` before CUDA is first used, never by engine code, and handed to training stages. A value the environment already sets wins; a change applies at the next start.
+
+## Simulated devices and tests
+
+`DeviceService(simulate={"cpu": bytes}, strict=True)` (the setting `compute.simulate_vram_mb`, for tests and the parity harness) makes the CPU play a GPU of that size. The manager places weights by copying them, streams units, and counts what it placed against the simulated size. In strict mode every weight off the device rests as a meta tensor, so:
+
+- a component used outside its phase fails (it was not placed);
+- a unit's weight read outside its `forward` fails (it is not there).
+
+`tests/engines_native/streaming.py` runs each tiny engine so, with every unit streamed (mode `none`), with half the room between its minimum and its size, and whole, and compares each output with the plain CPU run: identical. The parity harness does the same on real models (`--setting compute.simulate_vram_mb=…`). See [Testing](/docs/development-testing).
+
+## Training
+
+Training stages run in their own process and own their device: before a GPU stage the host moves every idle model off that GPU, and the train job holds every slot of `gpu:<dev>` (`JobSpec.exclusive`). Inside the stage, `training.memory` chooses a preset of `mizuoto/training/memory.py`'s tools; a method's own hyperparameters win:
+
+| Preset | Adds | Results |
+| --- | --- | --- |
+| `standard` (default) | nothing: each recipe exactly | identical to upstream |
+| `low` | gradient checkpointing over each block (`gradient_checkpointing`: `blocks`, `every:k`; VoxCPM, Qwen3-TTS, OmniVoice, F5-TTS, CosyVoice), the recomputation with the global generators *and the trainer's own* put back; F5-TTS's EMA copy in RAM; VoxCPM's LoRA frozen weights in the autocast dtype | identical (tested per trainer on the CPU) |
+| `lowest` | also AdamW's state in RAM, stepped on the CPU (`host_optimizer`; Qwen3-TTS, OmniVoice, F5-TTS without a gradient scaler); VoxCPM's LoRA base weights streamed from RAM for each product (`streamed_linear`) | the optimizer's sums may differ in the last bits on a GPU |
+
+Always: a GPU stage reports `memory/peak_mb`; `MethodInfo.memory_mb` estimates a run's peak per preset from the model's size, and a GPU run warns in its log, naming the preset that would fit, when the estimate exceeds the free memory. Trainers themselves are in [Trainers](/docs/development-training).
+
+## Writing an engine for it
+
+<Steps>
+<Step>
+
+**Wrap every module with weights in a `ModelHandle`** and list it in `self.handles`. Give an autoregressive LM `kind="sequence"`; mark parts that run many times per step `hot`, and modules whose weights code reads outside their `forward` `fixed`. Name units with `memory_units()` when the default split (children of `ModuleList`/`Sequential`) does not fit the model.
+
+</Step>
+<Step>
+
+**Never move modules yourself.** Build on the host (or on `spec.device`; the handle takes it from there), and let the manager place them. A float64 module on a device without float64 uses `float64_device` and `pin_to_cpu`. Swap weights with `handle.replace`.
+
+</Step>
+<Step>
+
+**Set `PHASED = True` and run each part in a phase**: `ctx.run` for pure blocks, `ctx.use` for blocks that yield or consume a generator. Pass `generators=` for any generator the engine owns besides the context's, so a retry replays it.
+
+</Step>
+<Step>
+
+**Estimate each phase's working memory from the request**: KV caches with `peak_bytes` in the dtype the model computes in, attention scores, CFG batches, decoder activations by length. Under `ctx.use`, bound what the phase can reach.
+
+</Step>
+<Step>
+
+**Offer a fallback** where a cheaper exact-enough way exists (tiles, one item at a time), with a short description of what it does.
+
+</Step>
+<Step>
+
+**Run the tiny model under `streaming.py`**: every unit streamed, half, none, strict. A failure there names the component used outside its phase or the weight read outside its unit.
+
+</Step>
+</Steps>

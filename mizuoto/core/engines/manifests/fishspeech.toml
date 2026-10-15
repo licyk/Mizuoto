@@ -1,0 +1,152 @@
+# Fish Speech / Fish Audio S2. Licence-gated.
+id = "fishspeech"
+title = "Fish Speech"
+description = "Fish Audio S2 Pro: a dual-autoregressive model trained on about ten million hours in some fifty languages; cloning from one or several clips, free-form inline tags such as [laughing], and dialogue by speaker tags."
+devices = ["cuda", "rocm", "xpu", "mps", "cpu"]
+languages = ["*"]
+ops = ["codec_encode", "codec_decode"]
+
+[upstream]
+url = "https://github.com/fishaudio/fish-speech"
+commit = "bdd39477922a89b904c6f2c7397f2a9bbcc60a0c"
+
+[licence]
+id = "fish-audio-research"
+name = "Fish Audio Research License"
+url = "https://github.com/fishaudio/fish-speech/blob/main/LICENSE"
+version = "2026-03-07"
+gated = true
+commercial = false
+file = "fish-audio-research.md"
+trains_others = false
+notice = "Built with Fish Audio"
+
+# -- variants -------------------------------------------------------------------------
+
+[variants.s2_pro]
+title = "S2 Pro"
+sample_rate = 44100
+capabilities = ["clone", "multi_reference", "inline_tags", "dialogue", "stream_audio", "seed"]
+stream_granularity = "segment"
+
+[variants.s2_pro.reference]
+min_seconds = 2.0
+max_seconds = 30.0
+max_references = 4
+
+# -- common parameters ----------------------------------------------------------------
+
+[params.temperature]
+target = "temperature"
+min = 0.1
+max = 1.0
+step = 0.05
+default = 0.8
+
+[params.top_p]
+target = "top_p"
+min = 0.1
+max = 1.0
+step = 0.01
+default = 0.8
+
+[params.repetition_penalty]
+target = "repetition_penalty"
+min = 0.9
+max = 2.0
+step = 0.01
+default = 1.1
+
+[params.max_new_tokens]
+target = "max_new_tokens"
+type = "int"
+min = 0
+max = 8192
+default = 1024
+help = "At most this many semantic tokens per segment (0: no limit but the model's)."
+
+[params.seed]
+target = "seed"
+type = "int"
+min = 0
+max = 2147483647
+
+# -- engine options -------------------------------------------------------------------
+
+[options.chunk_length]
+type = "int"
+default = 200
+min = 100
+max = 1000
+step = 10
+help = "How long, in text bytes, the text segments upstream generates one after the other are."
+
+[options.normalize]
+type = "bool"
+default = true
+help = "Normalise numbers and symbols in English and Chinese text."
+
+# -- models ---------------------------------------------------------------------------
+
+[[models]]
+id = "fishspeech/s2-pro"
+variant = "s2_pro"
+title = "Fish Audio S2 Pro"
+description = "The S2 Pro weights and their codec; about 24 GB of GPU memory recommended."
+vram_mb = 22000
+recommended = true
+files = { hf = "fishaudio/s2-pro", exclude = [".gitattributes", "*.md", "*.png"], manifest = "fishspeech-s2-pro.files.json" }
+
+[training.lora]
+title = "Fine-tune with LoRA"
+description = "Upstream's LoRA fine-tune: the clips' semantic tokens through the codec (extract_vq), packed (build_dataset), fish_speech/train.py with text2semantic_finetune and a LoRA config, then merged into a new model (merge_lora). Upstream warns it learns speaking style more than timbre. A GPU with 24 GB; the result is under Fish Audio's research licence."
+export = "model"
+min_seconds = 30.0
+devices = ["cuda", "rocm", "xpu", "mps", "cpu"]
+stages = [
+    { id = "tokens", title = "Semantic tokens", help = "The clips through the S2 codec (tools/vqgan/extract_vq.py), packed as protobuf shards (tools/llama/build_dataset.py).", uses = [] },
+    { id = "train", title = "Train", uses = ["steps", "learning_rate", "batch_size", "max_length", "lora"] },
+    { id = "export", title = "Merge and export", uses = ["lora", "preview_text"] },
+]
+
+[training.lora.hyperparams.steps]
+type = "int"
+default = 1000
+min = 1
+max = 100000
+group = "basic"
+help = "Optimiser steps (upstream's config: 10000; a voice's style needs far fewer)."
+
+[training.lora.hyperparams.learning_rate]
+type = "float"
+default = 0.0001
+min = 0.0000001
+max = 0.01
+group = "basic"
+help = "Upstream: 1e-4."
+
+[training.lora.hyperparams.batch_size]
+type = "int"
+default = 4
+min = 1
+max = 64
+group = "basic"
+help = "Samples per step (upstream: 4); lower it when the GPU runs out of memory."
+
+[training.lora.hyperparams.max_length]
+type = "int"
+default = 4096
+min = 256
+max = 8192
+help = "Tokens per sample (upstream: 4096); shorter is lighter."
+
+[training.lora.hyperparams.lora]
+type = "enum"
+default = "r_8_alpha_16"
+choices = ["r_8_alpha_16", "r_32_alpha_16_fast"]
+help = "Upstream's LoRA configs: rank 8 on both transformers, or rank 32 on the fast one only."
+
+[training.lora.hyperparams.preview_text]
+type = "str"
+default = ""
+help = "What the preview says (empty: a dataset clip's text)."

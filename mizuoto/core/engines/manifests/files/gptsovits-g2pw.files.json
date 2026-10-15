@@ -1,0 +1,11 @@
+{
+ "repo": "XXXXRT/GPT-SoVITS-Pretrained",
+ "revision": "0c47645e02a7bc3688d7b263b0042c81e3cd82cd",
+ "files": [
+  {
+   "path": "G2PWModel.zip",
+   "size": 588856634,
+   "sha256": "46292be0374a49308069233cd5c147ae4c41806558e4781a2467a31a4d8099da"
+  }
+ ]
+}

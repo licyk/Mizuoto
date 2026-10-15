@@ -1,0 +1,228 @@
+---
+title: "显存与内存"
+description: "运行时怎样仿照 ComfyUI 使用显存和内存：阶段、预算与显存模式、单元与权重流式加载、主机副本、部分加载与让出显存、精确的显存不足重试、工作显存估算及其校准、模拟设备、训练预设，以及引擎要怎样配合。"
+icon: MemoryStick
+---
+
+只要模型的最小工作集放得进设备，模型就能运行，而不必整个放得下。Mizuoto 的运行时仿照 ComfyUI（`load_models_gpu`、`ModelPatcher` 的部分加载、dynamic VRAM）做到这一点，但不用原生分配器：请求只放上当前这一步需要的组件；放不下时，其他组件逐个单元让出显存；仍然不够时，组件部分加载，其余权重留在内存中，每层运行时再流式加载到设备。显存不足由“失败”变成“更慢”。
+
+这一切都不改变任何结果。流式加载的层与常驻的层用的是相同的张量计算，重试的那一步重放相同的随机数，测试让每个引擎在权重流式加载的情况下运行，并把音频与普通运行逐样本比较。会改变数值的机制（分块解码、静态 KV 缓存、训练的 `lowest` 预设）都需要主动开启，并在输出中注明。
+
+面向用户的设置见[性能与加速](/docs/advanced-performance)；运行时的整体介绍见[运行时](/docs/development-runtime)。
+
+## 代码位置
+
+| 部分 | 代码 | 作用 |
+| --- | --- | --- |
+| `VramPolicy` | `mizuoto/runtime/policy.py` | 模式、保留量、主机副本、锁页预算、复制流和显存不足时的开关；每次使用时由 `compute` 设置构造（`core/inference/service.py: policy_from`），所以修改设置后下一次加载即生效，无需重启 |
+| 单元 | `mizuoto/runtime/units.py` | 模块中哪些部分可以留在设备之外，哪些是固定部分 |
+| `ModelHandle` | `mizuoto/runtime/handle.py` | 一个组件：整体或部分放置、主机副本、流式单元的钩子 |
+| `Streamer` | `mizuoto/runtime/stream.py` | 每个设备一个：流式单元在设备上的副本、学到的运行顺序、副流上的预取、锁页 |
+| `ModelManager` | `mizuoto/runtime/manager.py` | 所有已登记的组件、预算、让出显存、部分加载、显存不足重试前的清理、校准、报告 |
+| `RequestContext.use` / `run` | `mizuoto/runtime/context.py` | 请求的一个阶段；`run` 另加精确重试和回退 |
+| `peak_bytes`、`BufferCache` | `mizuoto/runtime/lm/cache.py` | 供估算用的 KV 缓存峰值；静态缓存 |
+| `tiled_1d` | `mizuoto/nn/dsp/tiles.py` | 以重叠分块解码（一种回退方式） |
+| `DeviceService` | `mizuoto/runtime/device.py` | 空闲显存、`vram_limit_mb`、模拟设备 |
+| 训练工具 | `mizuoto/training/memory.py` | 梯度检查点、预设、主机端优化器、流式加载的冻结权重、估算 |
+
+<Mermaid chart={`flowchart TD
+    ctx["ctx.use / ctx.run<br/>一个阶段：句柄 + 工作显存"] --> mgr["ModelManager.load<br/>预算 · 让出显存 · 整体或部分"]
+    pol["VramPolicy<br/>compute.* 设置"] --> mgr
+    mgr --> h["ModelHandle.load(budget)<br/>固定部分 + 常驻单元"]
+    h -- "未放上的单元" --> st["Streamer<br/>副本 · 学到的顺序 · 预取 · 锁页"]
+    st -- "forward 钩子替换 param.data" --> run["引擎自己的代码，不变"]
+    h --> run`} />
+
+## 阶段
+
+设置了 `PHASED = True` 的引擎（Mizuoto 自带的所有真实引擎；dummy 引擎没有）把请求的每个部分包在一个阶段里，这样只放上这部分的组件，并只为这部分预留工作显存：
+
+```python
+prompt = ctx.run("voice prompt", [self.h_codec], encode, self._codec_memory(len(wav)))
+codes = ctx.run("talker", [self.h_talker], generate, self._generation_memory(rows, positions))
+audio = ctx.run("codec decoder", [self.h_decoder], decode, self._decoder_memory(frames))
+```
+
+- **`ctx.use(handles, memory)`** 是一个上下文管理器：管理器把 `handles`（整体或部分）放到设备上，为 `memory` 字节的工作显存留出空间，并在代码块结束前不让它们让出显存。用于产出音频或消费生成器的阶段。
+- **`ctx.run(name, handles, fn, memory, generators=(), fallback=None)`** 对一个纯函数做同样的事，另加精确重试和回退（见下文）。凡是代码块唯一的作用就是其返回值的地方都用它。
+- 阶段没有列出的组件留在原处，别的阶段需要显存时它们先让出：IndexTTS 克隆一个已缓存的音色时，从不放上 w2v-BERT 或 CAM++。
+- 没有 `PHASED` 的引擎在整个调用期间得到所有句柄，以 `memory_required(task)` 作为工作显存。
+
+在 CPU 上管理器什么都不移动、不计数（加载设备与卸载设备相同），所以阶段在那里没有开销。
+
+## 预算
+
+`ModelManager.load(handles, memory)` 按设备决定：
+
+1. **需要** = 句柄尚未放到设备上的字节 + 工作显存（估算乘以其校准系数，见下文）+ `compute.vram_reserve_mb`。
+2. **空闲** = 驱动报告的空闲显存，加上 torch 缓存分配器占着但未使用的部分；设置了 `compute.vram_limit_mb` 时，不超过它减去本进程已占用的量。
+3. 空闲不够时，其他空闲组件让出显存（见下文“让出显存”），然后重新测量空闲显存。
+4. 放得下就整体加载；否则在预算内部分加载，预算为空闲显存减去工作显存和保留量。
+
+| 模式（`compute.vram_mode`、`engines.<id>.vram_mode`） | 放得下时整体加载 | 否则 |
+| --- | --- | --- |
+| `auto` / `normal` | 是 | 部分加载，最少到最小工作集 |
+| `high` | 是 | 在空闲组件整体移走后仍整体加载；不做部分加载 |
+| `low` | 仅当权重不超过设备显存的一半（`low_ratio`） | 在这一半之内部分加载 |
+| `none` | 从不 | 每个单元都流式加载：设备上只有固定部分和正在复制的副本 |
+| `shared`（MPS 上自动使用） | 是 | 整体加载：统一内存移出也省不出空间，所以不做部分加载，也不保留主机副本 |
+
+**估算从不拒绝加载**（ComfyUI 的做法）。`high` 模式下，空闲组件腾出空间后整体尝试加载；其他模式下，低于最小工作集时仍按最小工作集尝试，并在日志中记一条警告。只有显存分配真正失败才算错误。加载前从不检查模型目录中的 `vram_mb`。
+
+**一块 GPU 上的两个请求。** `compute.gpu_jobs` 大于 1 时，如果一个请求连最小工作集都放不下（`high` 模式下是整个模型放不下），而另一个请求正占着该设备上的组件，它会等那个请求释放，最多 10 分钟，期间检查取消；然后再尝试。
+
+## 单元：哪些会流式加载
+
+单元是一起移动的一组权重：一个解码器层、一个 DiT 块、一级声码器（即 ComfyUI dynamic VRAM 中的 units）。
+
+- 模块可以用 `memory_units() -> list[nn.Module]` 指定自己的单元。否则，每个 `ModuleList` 或 `Sequential` 中不小于 1 MB 的子模块是一个单元（取最外层的列表；单元不会再往下拆）。
+- **只有 `nn.Linear`、`Conv1d/2d`、`ConvTranspose1d/2d` 的权重会流式加载**，以及声明了 `STREAMABLE = True` 的类（IndexTTS 的 GPT-2 `Conv1D`）。这些层的权重只在其 `forward` 中读取。
+- **其余都是固定部分**：只要组件在设备上，它们就在设备上。包括嵌入（码本经常通过 `.weight` 直接读取）、归一化、缩放系数、缓冲区、与单元外模块共享的参数（共享的嵌入与输出头）、模型的第一个参数（代码通过它判断模型所在设备）、小于 64 KB 的单元、标为 `fixed` 的模块，以及固定在 CPU 上的模块（`DeviceService.pin_to_cpu`，从不移动）之下的一切。
+
+引擎用 `handle.mark(module, mark)` 在句柄上标记子模块：
+
+| 标记 | 含义 | 使用者 |
+| --- | --- | --- |
+| `fixed` | 从不流式加载：代码在其 `forward` 之外读取它的权重 | CosyVoice 的 HiFT F0 预测器；GPT-SoVITS 的 T2S（`memory_units() = []`） |
+| `hot` | 每一步运行多次：优先常驻 | Qwen3-TTS 的 code predictor、VoxCPM 的局部 DiT 与编码器、Whisper 的解码器 |
+| `cold` | 每个请求运行一次：优先流式加载 | |
+
+放不下全部单元时，在 `hot` 单元之后，句柄的 `kind` 决定哪些单元常驻：
+
+- `sequence`（自回归语言模型，每个 token 每层运行一次）：按运行顺序，于是固定的前若干层常驻，每个 token 流式加载的都是同样那些层；
+- `oneshot`（编码器、解码器、对整段输入做的 flow 步）：从最大的开始，这样正在复制的副本较小。
+
+句柄的**最小工作集**是它的固定部分，加上 Streamer 同时持有的、它最大的那几个单元的副本。
+
+## 权重流式加载
+
+流式单元的权重留在内存中。单元上以及每个持有其权重的模块上都有 forward 前后钩子，调用时把 `param.data` 换成设备上的副本，调用后换回。叶子模块上的钩子让任何进入该层的路径都能工作（`layer.forward_step(…)`、`vae.decode`），`ops` 和层的代码都不需要改。整个放在设备上的组件根本没有钩子，所以常驻路径没有任何开销。
+
+设备的 `Streamer`：
+
+- **保留少量副本**：正在运行的单元和正在传输的单元（`compute.async_offload + 1` 个）；副本被丢弃前再次运行的单元（CFG 的两半、beam）直接复用；
+- **学习单元的运行顺序**（记录每个单元上次之后运行的单元），并在 CUDA 和 ROCm 上**预取**：当前单元计算时，在副流上复制接下来的单元。计算流在使用副本前等待复制的事件，每个副本都记录在计算流上，缓存分配器不会提前复用它的显存。不按学到的顺序进入的单元当场复制：正确性从不依赖顺序；
+- **锁页**：在 `compute.max_pinned_mb` 之内把流式权重的主机副本放进锁页内存（复制变为异步，约快一倍）；默认为 ComfyUI 的预算：Windows 上为内存的 40 %，其他系统为 `max(0.4 × 内存, min(0.9 × 内存, 内存 − 4 GB))`。超出部分仍为可分页内存，同步复制。XPU 和 MPS 上同步复制。
+
+副本在推理模式之外、以权重自身的精度创建，所以流式加载的层与常驻的层用同一种张量计算（推理张量在 CPU 上会走另一个内核）。每次取副本都检查取消。位于流式单元之上的 `Compiled` 模块改为即时执行（编译出的图会持有权重），CUDA Graph 只对整个放在设备上的模型捕获。
+
+## 主机副本与内存
+
+- 有主机副本时（`compute.host_copies`：`auto` 在空闲内存高于 `compute.ram_reserve_mb` 时保留；`on`；`off`），放到设备上的参数保留其主机张量，把它移出设备不需要任何传输：设备显存成了内存之上的一层缓存。部分加载的组件总是保留主机副本（流式单元就放在那里）。缓冲区总是复制回来（模块可能原地更新它）。
+- 卸载时直接释放所有内容，不复制回来。
+- 放置之后会改变的权重通过句柄修改（`handle.replace(module)`：音色自己的 GPT-SoVITS 权重），所以主机副本不会过时。
+- `compute.ram_reserve_mb`（留空：2 GB 与内存十分之一中较大者）：空闲内存低于它时，运行时服务先丢弃整体加载的组件的主机副本，再按最久未用卸载空闲模型，从不卸载固定的或忙碌的模型（`RuntimeService.relieve_ram`）。
+
+## 让出显存
+
+空闲显存不够时，同一设备上的空闲组件按以下顺序让出差额：
+
+1. 部分加载的组件（本来就慢；ComfyUI 的第一排序键）；
+2. 然后不在 `engines.<id>.pinned_models` 中的模型先于固定的模型；
+3. 然后最久未用的。
+
+任何请求正在使用的组件都不会让出；正在运行的模型中当前阶段用不到的组件则会。每个让出者按放置顺序的逆序逐个单元让出（`partially_unload`），直到满足差额；在 `high` 和 `shared` 模式下整体移走。`empty_cache` 只在让出之后执行，从不每个请求都执行。
+
+部分加载一个阶段的组件时：较小的组件先整体加载，每个都给其余组件至少留下最小工作集，最大的组件得到剩下的部分，其余单元流式加载。
+
+在管理器之上，`RuntimeService` 最多保留 `compute.max_resident_models` 个已加载模型，空闲超过 `compute.unload_after_minutes` 的模型被卸载（仅服务器），在 GPU 上微调前把该 GPU 上所有空闲模型移走（`release_device`），并在任务因显存不足失败后卸载所有 GPU 上未在使用的模型（`ComputeService.release_after_oom`，即 ComfyUI 的 `unload_all_models`）。见[运行时](/docs/development-runtime#内存)。
+
+## 显存不足
+
+**精确重试**（`compute.oom_retry`，默认开）。经 `ctx.run` 运行的阶段显存不足时：
+
+1. 先离开这次尝试的异常帧（它持有失败尝试的张量）；
+2. `manager.after_oom`：该设备上其他所有空闲组件移出设备，Streamer 缓存的副本丢弃，该阶段的每个组件被限制为它原先在设备上的一半（`ModelHandle.cap_bytes`，保留到它被移出设备为止，这样后面的请求不会再次显存不足）；
+3. 请求的生成器、它的 `rng` 以及引擎指定的生成器（`generators=`）恢复到第一次尝试前的状态；
+4. 重新运行该阶段：相同的随机数，相同的结果，只是更慢。最多重试两次；输出记录 `applied.oom_retries` 并带一条警告。
+
+`ctx.use` 下的阶段（产出音频或消费生成器的阶段）不会重试，所以它的估算必须覆盖它可能达到的上限。
+
+**回退**（`compute.oom_fallback`，默认关）。重试之后，如果引擎提供了更省显存的方式（`ctx.run(…, fallback=(what, fn))`），就用它。其输出略有不同，因此记录在 `applied.fallbacks` 中并带一条警告：
+
+| 引擎 | 回退方式 |
+| --- | --- |
+| ASR | 一次一个 30 秒窗口 |
+| GPT-SoVITS | 一次一句 |
+| F5-TTS | Vocos 分块解码 |
+| IndexTTS | BigVGAN 分块解码 |
+| VoxCPM | VAE 分块解码 |
+
+`tiled_1d` 每次解码 256 帧，重叠 32 帧并交叉淡化（ComfyUI 的音频 VAE 分块方式）。Qwen3-TTS 的编解码器本来就分段解码；CosyVoice 的 HiFT 带有相位状态，分块会破坏它。
+
+## 工作显存估算
+
+阶段的估算决定其权重能否整体放下，所以按请求本身估算（文本 token 数、批次行数、参考音频长度），而不是按 `max_new_tokens` 允许的最坏情况。为请求永远用不到的显存预留空间，会白白把权重挤出去：最坏情况 8192 帧再翻倍，对一个只用约 20 MB 的 Qwen3-TTS 句子要预留 2.4 GB。
+
+- 语言模型的缓存按文本估算：Qwen3-TTS 每个文本 token 16 帧，IndexTTS 24 个码，GPT-SoVITS 每个音素 16 个，CosyVoice 按上游的每个 token 20 个，均不超过 `max_new_tokens`；Fish Speech 的批次按其真实上限；精度和 KV 宽度按模型实际计算时的。
+- `runtime.lm.cache.peak_bytes(position_bytes, layers, positions, kind, rows)` 给出增长中的缓存的峰值：`dynamic` 为所有层，加上一步拼接时一层的新拷贝（每层的旧张量在下一层之前释放），而不是整个缓存的两倍；`static` 为翻倍后的缓冲区，加上增长时的一个旧缓冲区。
+- 在 `ctx.run` 下，偶尔超出估算的生成会以更多权重流式加载的方式精确地重新运行。
+
+**校准。** 在 CUDA 或 XPU 上每个阶段之后，管理器测量其工作显存：高于已放置权重的峰值，减去 Streamer 副本的最大占用，再减去该阶段之后保留下来的内存（CUDA Graph 的内存池、随模型保留的缓冲区）。超出估算时，它按阶段记住这个比值（乘以 1.1，最多 16），以引擎和组件名为键（`qwen3tts:talker`），下次相应地多预留。比值保存在 `<cache>/memory/calibration.json`（格式版本 2；其他版本的文件会被忽略）。
+
+## 报告
+
+- 每个输出的 `meta.memory`：`streamed_mb`（请求期间从内存复制的量）、`loaded_mb`、`size_mb`，部分加载的组件还有 `partial`：每个组件的 `reason`（预算不够、`vram_mode low` 或 `none`、显存不足后被限制，或为别的组件让出了显存），以及当时权衡的 `mode`、`free_mb`、`working_mb`、`reserve_mb`，还有 `loaded_mb`、`size_mb` 和 `gave_up_for`。发生时日志中也有同样的信息。
+- `GET /api/v1/runtime` 与 `mizuoto runtime`：每个模型的 `loaded_bytes`、`streamed_bytes`、`host_bytes`；网页界面的已加载模型面板用进度条显示。
+- `mizuoto doctor` 有一项 `memory` 检查结果，列出当前生效的策略（模式、保留量、上限、内存保留量、主机副本、锁页预算、复制流、重试与回退）。
+
+## 静态 KV 缓存与 CUDA 分配器
+
+- `compute.kv_cache = static` 让 Qwen 系列的缓存（Qwen3-TTS、CosyVoice 2/3）写入预分配的缓冲区，满了就翻倍（`BufferCache`）：没有每步拼接，没有临时拷贝，碎片更少。注意力读取的是带缓冲区步长的视图，某些内核会以另一种顺序求和。在 CPU 上结果相同；在 GPU 上验证结果相同之前一直需要主动开启。
+- `compute.cuda_allocator`（`native`；`async`：cudaMallocAsync；`expandable`：可扩展段；`auto` 即 `native`）由主机在第一次使用 CUDA 之前写入 `PYTORCH_CUDA_ALLOC_CONF`，从不由引擎代码设置，并传给训练阶段。环境中已设置的值优先；修改在下次启动时生效。
+
+## 模拟设备与测试
+
+`DeviceService(simulate={"cpu": bytes}, strict=True)`（设置项 `compute.simulate_vram_mb`，供测试和一致性验证工具使用）让 CPU 扮演一块该大小的 GPU。管理器通过复制来放置权重、流式加载单元，并按模拟的大小计算已放置的量。严格模式下，不在设备上的每个权重都以 meta 张量存放，于是：
+
+- 在阶段之外使用的组件会报错（它没有被放置）；
+- 在 `forward` 之外读取的单元权重会报错（它不在那里）。
+
+`tests/engines_native/streaming.py` 这样运行每个小型引擎：所有单元都流式加载（`none` 模式）、取最小工作集与整个大小之间一半的空间、整体加载，并把每次的输出与普通 CPU 运行比较：完全相同。一致性验证工具在真实模型上也这样做（`--setting compute.simulate_vram_mb=…`）。见[测试](/docs/development-testing)。
+
+## 训练
+
+训练阶段在自己的进程中运行并独占设备：GPU 阶段开始前，主机把该 GPU 上所有空闲模型移走，训练任务占用 `gpu:<dev>` 的全部名额（`JobSpec.exclusive`）。在阶段内部，`training.memory` 选择 `mizuoto/training/memory.py` 中工具的一组预设；方法自己的超参数优先：
+
+| 预设 | 增加 | 结果 |
+| --- | --- | --- |
+| `standard`（默认） | 无：完全按各引擎的训练配方 | 与上游相同 |
+| `low` | 对每个块做梯度检查点（`gradient_checkpointing`：`blocks`、`every:k`；VoxCPM、Qwen3-TTS、OmniVoice、F5-TTS、CosyVoice），重算时恢复全局生成器*以及训练器自己的生成器*；F5-TTS 的 EMA 副本放在内存中；VoxCPM 的 LoRA 冻结权重以 autocast 精度存放 | 相同（在 CPU 上逐个训练器测试） |
+| `lowest` | 另外把 AdamW 的状态放在内存中并在 CPU 上更新（`host_optimizer`；Qwen3-TTS、OmniVoice、不用梯度缩放的 F5-TTS）；VoxCPM 的 LoRA 基座权重在每次矩阵乘法时从内存流式加载（`streamed_linear`） | 在 GPU 上优化器求和的最后几位可能不同 |
+
+始终如此：GPU 阶段报告 `memory/peak_mb`；`MethodInfo.memory_mb` 根据模型大小估算每个预设下的峰值，GPU 上运行时若估算超过空闲显存，会在日志中警告并给出放得下的预设。训练器本身见[训练器](/docs/development-training)。
+
+## 编写配合显存管理的引擎
+
+<Steps>
+<Step>
+
+**把每个带权重的模块包进 `ModelHandle`**，列在 `self.handles` 中。自回归语言模型用 `kind="sequence"`；每一步运行多次的部分标为 `hot`，代码在 `forward` 之外读取其权重的模块标为 `fixed`。默认拆分（`ModuleList`/`Sequential` 的子模块）不适合模型时，用 `memory_units()` 指定单元。
+
+</Step>
+<Step>
+
+**不要自己移动模块。** 在主机上构建（或在 `spec.device` 上；句柄会接手），由管理器放置。以 float64 计算的模块在没有 float64 的设备上用 `float64_device` 和 `pin_to_cpu`。用 `handle.replace` 换权重。
+
+</Step>
+<Step>
+
+**设置 `PHASED = True`，把每个部分放进一个阶段**：纯代码块用 `ctx.run`，产出或消费生成器的代码块用 `ctx.use`。引擎在上下文之外自己持有的生成器用 `generators=` 传入，重试时会一并重放。
+
+</Step>
+<Step>
+
+**按请求估算每个阶段的工作显存**：KV 缓存用 `peak_bytes`，按模型实际计算的精度；注意力分数、CFG 批次、按长度计算的解码器激活。`ctx.use` 下要给出该阶段可能达到的上限。
+
+</Step>
+<Step>
+
+**在有更省显存且足够接近的方式时提供回退**（分块、一次一项），附一句说明它做什么。
+
+</Step>
+<Step>
+
+**在 `streaming.py` 下运行小型模型**：所有单元流式加载、一半、不流式，严格模式。在那里失败时，会指出在阶段之外使用的组件或在单元之外读取的权重。
+
+</Step>
+</Steps>

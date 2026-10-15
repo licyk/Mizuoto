@@ -1,0 +1,89 @@
+---
+title: "Quick start"
+description: "From nothing to the first spoken sentence: install, start, check the settings, Speak with the dummy engine, then a real engine."
+icon: Rocket
+---
+
+This page takes the shortest path. [Installation](/docs/installation) and [First run](/docs/first-run) have the details of each step.
+
+<Steps>
+<Step>
+
+### Install Mizuoto
+
+You need Python 3.10–3.13. Install torch 2.8 or newer first, in the build for your hardware, then Mizuoto from a release build (the wheels in `dist/`):
+
+```bash
+pip install "torch>=2.8" --index-url https://download.pytorch.org/whl/cu128   # NVIDIA; other builds in Installation
+pip install dist/mizuoto-*.whl
+mizuoto doctor                                  # checks torch against this machine
+```
+
+The torch builds for AMD, Intel, Apple silicon and the CPU, installing from source and Docker are in [Installation](/docs/installation).
+
+</Step>
+<Step>
+
+### Start the web UI
+
+```bash
+mizuoto webui
+```
+
+When the server is ready the terminal prints `SERVER_READY url=http://127.0.0.1:7869`, and a browser opens that address a moment later. The default port is **7869**, and only this machine can connect by default. Press <kbd>Ctrl</kbd>+<kbd>C</kbd> to stop the server.
+
+</Step>
+<Step>
+
+### Check the settings
+
+The UI opens on **Speak**; nothing has to be set up before you try it. Two settings are worth a look before downloading a real model:
+
+- **Settings › Downloads › Download source**: where models come from (**Hugging Face**, **hf-mirror.com**, **ModelScope**; the last two are often faster in mainland China).
+- **Settings › Compute**: this computer's GPUs and the torch build in use, with the command to install the right build when it does not fit (the same check as `mizuoto doctor`).
+
+To download now, see step 5 below or [First run](/docs/first-run).
+
+</Step>
+<Step>
+
+### Speak with the dummy engine
+
+The dummy engine ships with Mizuoto: nothing to download, and it needs no torch. It speaks in tones instead of words, but goes through exactly the same steps as a real engine.
+
+1. Open **Speak** in the navigation (the UI starts there).
+2. Under **Model**, choose **Dummy voice** (marked **demo**).
+3. Under **Voice**, choose **Preset speaker**, and `alto` as the **Speaker**.
+4. Type anything under **Text**.
+5. Click **Speak** at the bottom of the page (or press <kbd>Ctrl</kbd>+<kbd>Enter</kbd> in the text box).
+
+A job card appears at the bottom of the page; when it is done the result is listed under **Results**. Click its play button.
+
+</Step>
+<Step>
+
+### Switch to a real engine
+
+1. Open the **Model** picker and choose a real model, for example **Qwen3-TTS 1.7B CustomVoice**. Models that are not ready carry badges such as **Not downloaded** or **Not available**, but can still be chosen.
+2. The **Speak** button at the bottom is replaced by the one step the model still needs, here **Download Qwen3-TTS 1.7B CustomVoice (size)**. Click it and wait for the progress bar. (When torch is missing, it shows the command that installs it instead.)
+3. When the download is done the **Speak** button is back. Pick a **Preset speaker**, optionally write an instruction under **Style** › **How to say it** (such as "Cheerfully, a little faster"), and click **Speak**.
+
+Downloads are jobs: you can leave the page and follow them under **Jobs** at the top right. The first synthesis loads the model; the next ones are much faster.
+
+</Step>
+</Steps>
+
+## The same from the command line
+
+```bash
+mizuoto speak "Hello there." -m dummy/default --preset alto -o hello.wav     # the dummy engine
+mizuoto model download qwen3tts/1.7b-custom-voice                            # the model
+mizuoto speak "Nice to meet you." -m qwen3tts/1.7b-custom-voice --preset vivian --instruct "cheerfully" -o vivian.wav
+```
+
+## Next
+
+- Clone your own voice: [Voices](/docs/guide-voices).
+- What each option of Speak does: [Speak](/docs/guide-speak).
+- Read a whole book or a dialogue with several voices: [Projects](/docs/guide-projects).
+- An NVIDIA GPU that is not used, or slow downloads: [First run](/docs/first-run) and the [FAQ](/docs/advanced-faq).

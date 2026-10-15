@@ -1,0 +1,55 @@
+---
+title: "Mizuoto"
+description: "Open text-to-speech engines in one platform: one web UI, one command line and one HTTP API."
+icon: House
+---
+
+Mizuoto puts open text-to-speech engines — CosyVoice, F5-TTS, GPT-SoVITS, OmniVoice, Qwen3-TTS, VoxCPM, Fish Speech and IndexTTS — into **one platform**: one local server, one web UI and one command line, `mizuoto`. Use it to speak text, clone and design voices, have a cast of voices read a whole book or script, convert and edit recordings, and fine-tune models on your own recordings.
+
+Every engine is implemented in Mizuoto itself, on its own runtime over torch, and runs inside the server's process; there is one Python environment and nothing to build per engine. Requests, voices, parameters, jobs and results look the same whichever engine serves them.
+
+<Cards>
+  <Card title="First time here" href="/docs/quick-start" description="From nothing to the first spoken sentence, the short way." />
+  <Card title="Installation" href="/docs/installation" description="Requirements, and installing from release wheels, from source or with Docker." />
+  <Card title="First run" href="/docs/first-run" description="Where to start, checking torch and the engines, downloading models and licence-gated engines." />
+  <Card title="FAQ" href="/docs/advanced-faq" description="Ports, downloads, GPU memory, devices and other common questions." />
+</Cards>
+
+## What it does
+
+| Feature | What it is for | Guide |
+| --- | --- | --- |
+| Speak | Read text with any installed model: a library voice, a clip to clone, a preset speaker, a described voice or the model's own voice; style instructions, emotions, parameter presets and playback while the audio is made. | [Speak](/docs/guide-speak) |
+| Voices | The voice library: voices from clips (speech recognition fills in missing transcripts), designed voices, preset speakers and voices with their own fine-tuned weights; export and import. | [Voices](/docs/guide-voices) |
+| Projects | A cast of voices reads a book, a script or a dialogue line by line, each speaker with its own model and voice; changed lines are rendered again, and a chapter or the whole project is exported as one file with subtitles. | [Projects](/docs/guide-projects) |
+| Tools | Voice conversion (CosyVoice) and speech editing (F5-TTS). | [Tools](/docs/guide-tools) |
+| Train | Datasets from recordings, files, voices or earlier results, then experiments that run each engine's own fine-tuning recipe stage by stage; the result is a voice's own weights or a new model. | [Train](/docs/guide-train) |
+| Models | Download, verify and import catalogue models; each engine's availability, device and options; shared files. | [Models](/docs/guide-models) |
+| History | Every result: search, favourites, download, run again with the same settings. | [History](/docs/guide-history) |
+| Remote hosts | Run engines on another machine (running `mizuoto agent`) while voices, results and the UI stay here. | [Remote hosts](/docs/advanced-remote) |
+| API | The REST API, a WebSocket for events and streamed audio, an OpenAI-compatible `/v1/audio/speech`, and Python. | [HTTP API](/docs/advanced-api) |
+
+## Engines
+
+| Engine | Models | What it adds | Training | Licence |
+| --- | --- | --- | --- | --- |
+| Qwen3-TTS | 1.7B / 0.6B Base, CustomVoice, VoiceDesign | 10 languages, preset speakers with instructions, voices from a description | a speaker | Apache-2.0 |
+| CosyVoice | 3 (0.5B), 2 (0.5B), 300M base / SFT / instruct | streaming in and out, voice conversion, instructions | LLM, LLM + flow | Apache-2.0 |
+| F5-TTS | v1 Base, Base, E2-TTS | flow matching, exact duration, speech editing | full fine-tune | MIT code; CC-BY-NC-4.0 weights |
+| GPT-SoVITS | v2, v2Pro, v2ProPlus, v4, v5 Turbo | few-shot cloning, a voice's own GPT and SoVITS weights | a voice's weights | MIT |
+| OmniVoice | OmniVoice | 600+ languages, voices from attributes, inline tags | full, LoRA | Apache-2.0 |
+| VoxCPM | VoxCPM2, 1.5, 0.5B | tokenizer-free; VoxCPM2: 30 languages at 48 kHz, cloning with or without a transcript, voices from a description, instructions | full, LoRA | Apache-2.0 |
+| Fish Speech | S2 Pro | expressive cloning | LoRA | Fish Audio Research License (licence-gated) |
+| IndexTTS | 1.5, 2, 2.5 | emotion from weights, a clip or a description | — | bilibili Model Use License (licence-gated) |
+
+Two helper engines are built in as well: **speech recognition** (Whisper large-v3-turbo, which fills in the transcripts of reference clips) and the **dummy engine** (`dummy/default`, nothing to download; it speaks in tones so you can learn the UI first).
+
+## Sections
+
+<Cards>
+  <Card title="Guides" href="/docs/guide" description="Each screen in turn: Speak, Projects, Tools, Voices, Train, Models, History and Settings." />
+  <Card title="Command line" href="/docs/cli" description="Everything without a browser: the commands, the settings file and environment variables." />
+  <Card title="Advanced" href="/docs/advanced" description="Engine details, the HTTP API, remote hosts, performance, download sources, Docker, embedding and the FAQ." />
+  <Card title="Engine reference" href="/docs/engines" description="How each engine reproduces its upstream: the behaviour kept, deviations, memory and speed, training and parity." />
+  <Card title="Development" href="/docs/development" description="For contributors: conventions, architecture and design references, the runtime, memory and acceleration, adding an engine, training, the API, the web UI, tests and releases." />
+</Cards>

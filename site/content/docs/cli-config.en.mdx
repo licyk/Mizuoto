@@ -1,0 +1,309 @@
+---
+title: "Configuration and environment variables"
+description: "Mizuoto keeps its settings in settings.toml, and the web UI's Settings, the mizuoto config command and MIZUOTO_ environment variables all change the same settings; this page lists every setting, the environment variables and the data folder's layout."
+icon: FileCog
+---
+
+## Where settings come from
+
+The effective settings are four layers, each overriding the ones before it:
+
+1. the built-in defaults;
+2. `settings.toml` (in the data folder by default);
+3. environment variables `MIZUOTO_<GROUP>__<FIELD>`;
+4. values pinned by an application embedding Mizuoto (only then; see [Using Mizuoto from Python](/docs/advanced-embed)).
+
+Environment variables and pinned values live in memory only: they are **never written back** to `settings.toml` and cannot be changed in the web UI or through the API. The web UI marks a setting an environment variable overrides **Set by an environment variable**, and one the embedding application pins **Set by the application Mizuoto runs in**; `mizuoto config set` on a setting an environment variable overrides says `An environment variable overrides this setting.`.
+
+## The data folder and the settings file
+
+The data folder holds the settings, the database, models, voices and outputs. By default:
+
+| System | Location |
+| --- | --- |
+| Linux | `$XDG_DATA_HOME/mizuoto`, else `~/.local/share/mizuoto` |
+| macOS | `~/Library/Application Support/mizuoto` |
+| Windows | `%APPDATA%\mizuoto` |
+
+`MIZUOTO_DATA_DIR` or `mizuoto webui --data-dir <path>` puts it elsewhere. `settings.toml` sits in the data folder unless `MIZUOTO_CONFIG_DIR` or `webui --config-dir` names another folder for it (the data stays in the data folder). **Settings** › **About** in the web UI shows the **Data folder** and the **Settings file**.
+
+To have `mizuoto config`, `mizuoto speak` and the rest use the same data folder as a server, the environment variable is the easy way: `--data-dir` is an option of `webui` only.
+
+### Layout
+
+```text
+<data folder>/
+├── settings.toml        settings
+├── mizuoto.db            the database: jobs, outputs, reference clips, transcripts, presets…
+├── server.json          the running server's address and process id (removed when it stops)
+├── models/              models, <engine>/<model>/; shared assets in models/_assets/<engine>/<name>/
+├── voices/              the voice library, one folder per voice
+├── outputs/             synthesized audio, one folder per month: outputs/<yyyy-mm>/
+├── datasets/            datasets
+├── experiments/         training experiments, <engine>/<name>/
+├── projects/            projects
+├── cache/               reference clips, voice caches, the engines' scratch files, the remote file cache
+├── uploads/             uploaded files
+├── jobs/                job logs, <job id>.log
+└── trash/               deleted voices, outputs… when the system has no trash
+```
+
+The `paths.*` settings move models, voices, outputs, datasets, experiments, projects and caches elsewhere one by one; empty means inside the data folder.
+
+## Viewing and changing settings
+
+```bash
+mizuoto config path                              # where settings.toml is
+mizuoto config show                              # every effective setting (JSON)
+mizuoto config get tts.default_model
+mizuoto config set tts.default_model qwen3tts/1.7b-custom-voice
+mizuoto config set compute.unload_after_minutes 0
+mizuoto config set paths.browse_roots '["/srv/audio", "/mnt/datasets"]'
+mizuoto config set engines.qwen3tts.device cuda:1
+mizuoto config set engines.cosyvoice.load_options.fp16 true
+mizuoto config set tts.model_aliases.tts-1 qwen3tts/1.7b-custom-voice
+mizuoto config set server.access_token "a long random string of your own"
+mizuoto config set server.access_token null      # clear the token
+```
+
+- Keys are dotted; values are parsed as JSON (numbers, `true`/`false`, lists, objects), else taken as a string; `null` clears a setting that may be empty. The whole file is validated before it is written: a value out of range, of the wrong type, or an unknown key is an error (exit code 4) and the file stays as it was.
+- Dictionary settings take new keys: `engines.<engine id>.<field>`, `engines.<engine id>.load_options.<option>`, `tts.model_aliases.<alias>`. `mizuoto config set` does not check load option names and values; the web UI and the API check them against the engine's manifest.
+- `config show` and `config get` never show tokens, only whether `access_token_configured` and `token_configured` are set; `config set` on a token prints `(hidden)`. `config show` also lists `resolved_paths` (the folders in use where settings are empty), `env_overrides` (the environment variables in effect) and `pinned` (what the embedding application pins).
+- A running server reads changes to the file within about a second, and open web UIs refresh; saving in the web UI afterwards merges with the file as it is, so it keeps the command line's changes. A broken file makes the server log `Ignored a change to … settings.toml` and keep its settings. `server.host`, `server.port` and the certificates take effect the next time the server starts; changing `engines.<id>.*` unloads that engine's models, which load with the new settings when next used.
+- Keys Mizuoto does not know are ignored when `settings.toml` is read.
+
+## Environment variables
+
+`mizuoto env vars` lists the environment variables Mizuoto reads, and the `MIZUOTO_*` variables set now:
+
+| Variable | Meaning |
+| --- | --- |
+| `MIZUOTO_DATA_DIR` | The data folder |
+| `MIZUOTO_CONFIG_DIR` | The folder for `settings.toml`, when it should not sit in the data folder |
+| `MIZUOTO_LOG_LEVEL` | Log level: `DEBUG`, `INFO`, `WARNING` or `ERROR` (default `INFO`) |
+| `MIZUOTO_<GROUP>__<FIELD>` | Override one setting, e.g. `MIZUOTO_SERVER__PORT=8000` or `MIZUOTO_DOWNLOADS__SOURCE=hf-mirror` |
+| `HF_TOKEN` | A Hugging Face token, sent to huggingface.co only (never to a mirror) when downloading models |
+
+How overrides work:
+
+- The `MIZUOTO_` prefix is dropped and the rest lower-cased; `__` (two underscores) goes one level down: `MIZUOTO_COMPUTE__GPU_JOBS` is `compute.gpu_jobs`, `MIZUOTO_ENGINES__QWEN3TTS__DEVICE` is `engines.qwen3tts.device`, `MIZUOTO_REMOTE__AGENT__PORT` is `remote.agent.port`.
+- A value that parses as JSON is used as JSON (numbers, `true`/`false`, lists, objects), else as a string; `null` or `none` means empty.
+- Only `MIZUOTO_*` variables whose names contain `__` are overrides.
+
+<Tabs items={["Linux / macOS", "Windows (PowerShell)", "Windows (cmd)"]}>
+<Tab value="Linux / macOS">
+
+```bash
+export MIZUOTO_DATA_DIR=/data/mizuoto
+export MIZUOTO_DOWNLOADS__SOURCE=hf-mirror
+MIZUOTO_SERVER__PORT=8000 mizuoto webui
+```
+
+</Tab>
+<Tab value="Windows (PowerShell)">
+
+```powershell
+$env:MIZUOTO_DATA_DIR = "D:\mizuoto-data"
+$env:MIZUOTO_DOWNLOADS__SOURCE = "hf-mirror"
+mizuoto webui
+```
+
+</Tab>
+<Tab value="Windows (cmd)">
+
+```bat
+set MIZUOTO_DATA_DIR=D:\mizuoto-data
+set MIZUOTO_DOWNLOADS__SOURCE=hf-mirror
+mizuoto webui
+```
+
+</Tab>
+</Tabs>
+
+## All settings
+
+The "UI" column names the place in the web UI's **Settings**; engine settings are on the engine's card in **Models** › **Engines**.
+
+### `server`
+
+| Key | Default | Meaning | UI |
+| --- | --- | --- | --- |
+| `server.host` | `127.0.0.1` | Address to bind; `0.0.0.0` for every interface | **General** › **Server address** |
+| `server.port` | `7869` | First port to try (1–65535) | **General** › **Port** |
+| `server.strict_port` | `false` | Fail when the port is taken instead of trying the next ones | — |
+| `server.open_browser` | `true` | Open a browser when `mizuoto webui` starts | **General** › **Open the browser when the server starts** |
+| `server.access_token` | none | Access token: once set, every API and socket request must carry it | **General** › **Access token** |
+| `server.allowed_origins` | `[]` | Other origins allowed to send state-changing requests (CORS is enabled for them too) | — |
+| `server.ssl_certfile` | none | A PEM certificate (chain): serve HTTPS. Browsers on other machines let a page record the microphone only over HTTPS | — |
+| `server.ssl_keyfile` | none | The certificate's private key, when the certificate file lacks it | — |
+
+Access tokens, the origin check and the Host check are described in [HTTP API](/docs/advanced-api).
+
+### `paths`
+
+| Key | Default | Meaning | UI |
+| --- | --- | --- | --- |
+| `paths.models_dir` | empty (`models/`) | Models and shared assets | **Storage** › **Models** |
+| `paths.voices_dir` | empty (`voices/`) | The voice library | **Storage** › **Voices** |
+| `paths.outputs_dir` | empty (`outputs/`) | Synthesized audio | **Storage** › **Results** |
+| `paths.datasets_dir` | empty (`datasets/`) | Datasets | — |
+| `paths.experiments_dir` | empty (`experiments/`) | Training experiments | — |
+| `paths.projects_dir` | empty (`projects/`) | Projects | — |
+| `paths.cache_dir` | empty (`cache/`) | Caches | **Storage** › **Cache** |
+| `paths.browse_roots` | `[]` | Server folders the web UI may read; empty: home, the data folder and every drive or volume. Applies to browsers on the server's own machine only | **Storage** › **Folders the browser may open** |
+
+### `compute`
+
+| Key | Default | Meaning | UI |
+| --- | --- | --- | --- |
+| `compute.devices` | `[]` | Devices Mizuoto may use, such as `["cuda:0"]`; empty: every device found | — |
+| `compute.default_device` | `auto` | Engines' default device: `auto`, `cpu`, `cuda:N` (NVIDIA, or AMD on ROCm), `xpu:N` (Intel) or `mps` | **Compute** › **Default device** |
+| `compute.unload_after_minutes` | `20` | Unload a model nobody used for this long; `0` keeps models loaded | **Compute** › **Unload models after idle minutes (0: never)** |
+| `compute.max_resident_models` | `3` | Models kept loaded at once across every engine (1–32); the least recently used idle one is unloaded first | **Compute** › **Models kept in memory** |
+| `compute.vram_reserve_mb` | `1024` | GPU memory (MB) left free beyond what a request needs: idle models give up memory (part by part) until it fits | **Compute** › **GPU memory left free (MB)** |
+| `compute.vram_mode` | `auto` | How models use GPU memory: `auto`/`normal` (whole when they fit, else partly, the rest streaming from RAM), `high` (whole or not at all), `low` (at most half the free memory), `none` (almost all streams) | **Compute** › **How models use GPU memory** |
+| `compute.vram_limit_mb` | `0` | Use at most this much of each GPU (MB; 0: all) | **Compute** › **Use at most this much of each GPU** |
+| `compute.ram_reserve_mb` | `null` | RAM left free (MB); below it copies of weights in RAM are dropped and idle models unloaded. `null`: the larger of 2 GB and a tenth of the RAM | **Compute** › **RAM left free** |
+| `compute.host_copies` | `auto` | Keep a RAM copy of the weights of models on a GPU: `auto` (while RAM allows), `on`, `off` | **Compute** › **Keep a copy of GPU weights in RAM** |
+| `compute.max_pinned_mb` | `0` | Page-locked RAM for weights that stream (MB; 0: automatic) | **Compute** › **Page-locked RAM for streamed weights** |
+| `compute.async_offload` | `-1` | Copy streams for streamed weights (-1: two on NVIDIA and AMD, none elsewhere; 0: off) | **Compute** › **Copy streams** |
+| `compute.oom_retry` | `true` | Run a step that runs out of GPU memory again with more of its weights in RAM (the same result) | **Compute** › **Retry a step that runs out of GPU memory** |
+| `compute.oom_fallback` | `false` | Then allow an engine's cheaper way (tiles, smaller batches; the output differs slightly) | **Compute** › **Then allow cheaper ways** |
+| `compute.kv_cache` | `dynamic` | `static`: preallocated key/value caches for Qwen3-TTS and CosyVoice 2/3 | — |
+| `compute.cuda_graphs` | `true` | Decoding steps of language models (Qwen3-TTS, Fish Speech, CosyVoice 2/3, VoxCPM, GPT-SoVITS, IndexTTS) as CUDA graphs on NVIDIA GPUs; identical results | — |
+| `compute.cuda_allocator` | `auto` | torch's CUDA allocator: `native`, `async`, `expandable` (`auto`: native); at the next start | — |
+| `compute.cpu_allocator` | `auto` | CPU memory: `tuned`, `system` (`auto`: tuned on Linux with glibc); at the next start | — |
+| `compute.cpu_threads` | `auto` | CPU threads: `cores` (bound to physical cores), `off` (`auto`: cores on Linux); at the next start | — |
+| `compute.simulate_vram_mb` | `0` | For tests: the CPU plays a GPU of this size | — |
+| `compute.gpu_jobs` | `1` | GPU jobs that may run at once on one device (1–16) | **Compute** › **GPU jobs at once** |
+| `compute.inference_jobs` | `1` | Synthesis jobs (speak, voice conversion, speech editing) that may run at once across every engine and device (1–16); the others wait in the queue in order. Requests run together as one micro-batch count as one job | **Compute** › **Synthesis jobs at once** |
+| `compute.compile` | `false` | `torch.compile` the heavy modules of F5-TTS, CosyVoice, GPT-SoVITS v4/v5 and IndexTTS; applies to models loaded after the change (see [Performance](/docs/advanced-performance)) | **Compute** › **Compile models (torch.compile)** |
+| `compute.attention` | `auto` | How engines compute attention: `auto` (as each model does, identical results), `fast` (the fastest backend available), or a backend: `sdpa`, `math`, `sdpa_flash`, `sdpa_efficient`, `sdpa_cudnn`, `flash`, `xformers`, `sage`, `sage3`; a call a backend cannot take falls back to the next; applies to models loaded after the change (see [Performance](/docs/advanced-performance#attention-backends)) | **Compute** › **Attention** |
+| `compute.attention_strict` | `false` | Fail a request instead of falling back when the chosen backend cannot compute part of it | **Compute** › **Fail instead of falling back** |
+| `compute.fast` | `[]` | Process-wide GPU speed switches, each changing results slightly: `tf32`, `fp16_accumulation`, `cudnn_benchmark`, `sdpa_reduced_precision`; at the next start | **Compute** › **Acceleration** |
+
+### `downloads`
+
+See [Model downloads and mirrors](/docs/advanced-downloads).
+
+| Key | Default | Meaning | UI |
+| --- | --- | --- | --- |
+| `downloads.source` | `huggingface` | Where model files come from: `huggingface`, `hf-mirror`, `modelscope` or `custom`; a file a source lacks comes from the next | **Downloads** › **Download source** |
+| `downloads.endpoint` | empty | The endpoint for `custom`: a Hugging Face compatible server | **Downloads** › **Custom endpoint** |
+| `downloads.verify_checksums` | `true` | Check SHA-256 after downloading | **Downloads** › **Verify checksums** |
+| `downloads.concurrency` | `2` | Files downloaded at once (1–8) | **Downloads** › **Files at once** |
+| `downloads.repository` | `official` | `official`: each model's own repositories; `mizuoto-model`: Mizuoto's mirror first, and what it lacks from the official repositories | **Downloads** › **Repository** |
+| `downloads.mirror_repo` | `licyk/mizuoto-model` | The mirror's repository (the same id on Hugging Face and ModelScope) | — |
+
+### `tts`
+
+| Key | Default | Meaning | UI |
+| --- | --- | --- | --- |
+| `tts.default_model` | empty | The model used when none is named (command line, OpenAI-compatible endpoint) | **Speech** › **Default model** |
+| `tts.output_format` | `wav` | Result format: `wav`, `flac`, `mp3`, `ogg`, `m4a` | **Speech** › **Result format** |
+| `tts.output_sample_rate` | none | Result sample rate (8000–192000); empty: the model's own | **Speech** › **Result sample rate** |
+| `tts.normalize` | `peak` | Levelling: `none`, `peak` or `loudness` | **Speech** › **Levelling** |
+| `tts.auto_transcribe` | `true` | Transcribe a reference clip without a transcript (needs the speech recognition model `tts.asr_model` downloaded) | **Speech** › **Transcribe reference clips without a transcript** |
+| `tts.asr_model` | `asr/whisper-large-v3-turbo` | The speech recognition model | **Speech** › **Speech recognition model** |
+| `tts.reference_policy` | `reject` | A reference clip outside the model's length window: `reject` refuses it, `trim` cuts it at its quietest point before the limit (its transcript no longer matches and is dropped) | **Speech** › **A reference clip too long for a model** |
+| `tts.max_text_chars` | `20000` | The most characters in one request (at least 100) | — |
+| `tts.strict_params` | `true` | Refuse a parameter the model does not take; off: drop it with a warning | **Speech** › **Refuse parameters a model does not take** |
+| `tts.model_aliases` | `{}` | Other names for models, for the OpenAI-compatible endpoint: `{"tts-1": "qwen3tts/1.7b-base"}` | — |
+| `tts.micro_batch` | `true` | Requests waiting for the same model that differ only in their text run as one batch, on engines that take one | **Speech** › **Run waiting requests together** |
+
+When requests are batched: [Performance](/docs/advanced-performance).
+
+### `engines.<id>`
+
+`<id>` is an engine id: `qwen3tts`, `cosyvoice`, `f5tts`, `gptsovits`, `omnivoice`, `fishspeech`, `indextts`, `asr`. An engine missing from the file has the defaults.
+
+| Key | Default | Meaning | UI (engine card) |
+| --- | --- | --- | --- |
+| `enabled` | `true` | Whether the engine is enabled | **Enable** / **Disable** |
+| `accepted_licence` | none | The licence id and version accepted, such as `fish-audio-research@2026-03-07` (licence-gated engines) | **Accept the licence** |
+| `device` | `auto` | Where the engine runs: `auto`, `cpu`, `cuda:1`…; `<host>/<device>` (such as `gpu-box/cuda:0`) runs it on a [remote host](/docs/advanced-remote) | **Device** |
+| `dtype` | `auto` | Precision: `auto`, `fp32`, `fp16`, `bf16` | **Precision** |
+| `load_options` | `{}` | Engine-specific load options (CosyVoice's `fp16`, IndexTTS's `use_qwen_emo`…); see [Engines in depth](/docs/advanced-engines) | **Options** |
+| `idle_minutes` | none | Overrides `compute.unload_after_minutes` for this engine | — |
+| `pinned_models` | `[]` | Models never unloaded for being idle or to make room for another; they give up GPU memory last | — |
+| `vram_mode` | `auto` | Overrides `compute.vram_mode` for this engine's models (`auto`: the global one) | **GPU memory for this engine** on the engine's card |
+| `attention` | `inherit` | Overrides `compute.attention` for this engine's models | **Attention for this engine** on the engine's card |
+
+```toml
+[engines.cosyvoice]
+device = "cuda:1"
+pinned_models = ["cosyvoice/cosyvoice2-0.5b"]
+
+[engines.cosyvoice.load_options]
+fp16 = true
+```
+
+### `training`
+
+| Key | Default | Meaning | UI |
+| --- | --- | --- | --- |
+| `training.devices` | `[]` | The device training uses (the first); empty: the engine's own device. A fine-tune takes the device for itself while it runs | **Training** › **Training device** |
+| `training.precision` | `auto` | Training precision: `auto`, `fp32`, `fp16`, `bf16` | **Training** › **Training precision** |
+| `training.memory` | `standard` | How a fine-tune spends GPU memory: `standard` (each recipe), `low` (gradient checkpointing and more; the same results), `lowest` (also the optimizer in RAM and streamed LoRA bases; results differ slightly) | **Training** › **Memory** |
+| `training.attention` | `auto` | How trainers compute attention: `auto` (each recipe exactly), `fast` or a backend with a backward pass (`sdpa`, `math`, `sdpa_flash`, `sdpa_efficient`, `sdpa_cudnn`, `flash`, `xformers`) | **Training** › **Attention** |
+| `training.keep_checkpoints` | `3` | Checkpoints kept per run | **Training** › **Checkpoints kept per run** |
+| `training.previews` | `true` | The export stage speaks a dataset clip's text with what was trained | **Training** › **Speak a preview after training** |
+
+### `outputs`
+
+| Key | Default | Meaning | UI |
+| --- | --- | --- | --- |
+| `outputs.naming` | `{date}-{voice}-{model}` | The output file name: `{date}` (`YYYYMMDD-HHMMSS`), `{voice}`, `{model}` (the model's name without the engine), `{engine}`; unknown fields are empty, and a clash adds `-1`, `-2`… | — |
+| `outputs.keep_days` | `0` | Delete outputs older than this (favourites are kept); `0` keeps everything. This version saves the setting, but no code deletes outputs by it | **Storage** › **Delete results after days (0: keep)** |
+
+### `remote`
+
+See [Remote hosts](/docs/advanced-remote).
+
+| Key | Default | Meaning |
+| --- | --- | --- |
+| `remote.hosts.<name>.address` | — | The agent's `host:port` (port 7870 by default) |
+| `remote.hosts.<name>.token` | empty | The agent's token (`remote.agent.token` on that machine) |
+| `remote.hosts.<name>.tls` | `false` | Connect with TLS |
+| `remote.hosts.<name>.ca_file` | empty | A CA bundle, or the agent's own certificate when it is self-signed; empty: the system's CAs |
+| `remote.agent.host` | `127.0.0.1` | The address this machine listens on as an agent; `0.0.0.0` for every interface |
+| `remote.agent.port` | `7870` | The agent's port |
+| `remote.agent.token` | none | The token hosts must give; `mizuoto agent` makes one when there is none |
+| `remote.agent.ssl_certfile` | none | The agent's TLS certificate |
+| `remote.agent.ssl_keyfile` | none | The certificate's private key |
+| `remote.connect_timeout` | `10.0` | Seconds to connect to an agent (1–120) |
+| `remote.heartbeat_timeout` | `60.0` | A remote request whose agent stays silent this long fails (seconds, 10–3600) |
+
+Remote hosts are added in the web UI under **Settings** › **Remote hosts**, or with `mizuoto remote add`, which also checks that the host answers.
+
+## A sample `settings.toml`
+
+```toml
+[server]
+host = "0.0.0.0"
+port = 7869
+access_token = "a long random string of your own"
+
+[downloads]
+source = "hf-mirror"
+
+[compute]
+unload_after_minutes = 60
+max_resident_models = 2
+
+[tts]
+default_model = "qwen3tts/1.7b-custom-voice"
+
+[tts.model_aliases]
+tts-1 = "qwen3tts/1.7b-custom-voice"
+
+[engines.qwen3tts]
+device = "cuda:0"
+
+[engines.indextts]
+device = "gpu-box/cuda:0"
+
+[remote.hosts.gpu-box]
+address = "192.168.1.20:7870"
+token = "the token the agent printed"
+```

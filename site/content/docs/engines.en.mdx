@@ -1,0 +1,106 @@
+---
+title: "Engine reference"
+description: "How each built-in engine is implemented and how exactly it reproduces its upstream: variants, code, parity results and training methods, how exactness is defined and checked, and the rules every engine keeps."
+icon: Microscope
+---
+
+Every engine in Mizuoto is a port: the model code of an upstream project, written again on Mizuoto's runtime (`mizuoto/runtime`) and its shared building blocks (`mizuoto/nn`, `mizuoto/text`). No upstream code is vendored, and no engine imports transformers, onnxruntime or the upstream package. Each port is held to one standard: on the CPU, in fp32, with the same seed, it gives the output of the code it replaces, sample for sample.
+
+This section records, engine by engine, what that took, where an engine deliberately differs, how it uses memory and runs fast, how it trains, and what the comparison found. Which engine to choose and what each offers is in [Engines in depth](/docs/advanced-engines); how an engine is written and registered is in [Adding an engine](/docs/development-engine).
+
+## The engines
+
+| Engine | Variants | Code | Exactness (CPU, fp32, same seed) | Training |
+| --- | --- | --- | --- | --- |
+| [Qwen3-TTS](/docs/engines-qwen3tts) | `base`, `custom_voice`, `custom_voice_lite`, `voice_design` | `mizuoto/engines/qwen3tts` | identical in all 8 stack cases | `speaker` |
+| [F5-TTS](/docs/engines-f5tts) | `v1_base`, `base`, `e2_base` | `mizuoto/engines/f5tts` | identical in all 6 stack cases | `full` |
+| [OmniVoice](/docs/engines-omnivoice) | `v0` | `mizuoto/engines/omnivoice` | identical in all 4 stack cases | `full`, `lora` |
+| [CosyVoice](/docs/engines-cosyvoice) | `v1_base`, `v1_sft`, `v1_instruct`, `v2`, `v3` | `mizuoto/engines/cosyvoice` | identical given the same voice prompt; through the whole stack 23–68 dB SNR (CAM++'s float noise) | `llm`, `llm_flow` |
+| [Fish Speech](/docs/engines-fishspeech) | `s2_pro` | `packages/native/fishspeech` (`mizuoto-fishspeech`) | identical codes and audio in both stack cases | `lora` |
+| [IndexTTS](/docs/engines-indextts) | `v1_5`, `v2`, `v2_5` | `packages/native/indextts` (`mizuoto-indextts`) | identical in all 4 stack cases | none |
+| [GPT-SoVITS](/docs/engines-gptsovits) | `v2`, `v2pro`, `v2proplus`, `v4`, `v5turbo` | `mizuoto/engines/gptsovits` | identical in all 15 stack cases | `speaker` |
+| [VoxCPM](/docs/engines-voxcpm) | `v2`, `v1_5`, `v1` | `mizuoto/engines/voxcpm` | identical to upstream's own package in all 27 stack cases, in bf16 and fp32 | `full`, `lora` |
+| [Speech recognition](/docs/engines-asr) | `whisper` | `mizuoto/engines/asr` | identical transcripts on 63 clips | none |
+
+Every trainer gives upstream's losses, learning rates and saved weights byte for byte on the CPU when both are seeded alike, and each implementation loads the other's exports (and, but for CosyVoice's voice prompt, speaks them identically). The contract suite (the real models through the whole stack) passes for every engine on the CPU: Qwen3-TTS 24 tests, F5-TTS 12, OmniVoice 12, CosyVoice 18, Fish Speech 6, IndexTTS 18, GPT-SoVITS 24, VoxCPM 18.
+
+## What "identical" means
+
+### The reference
+
+For seven engines the reference is **Mizuoto 0.1** (git tag `v1-engine-workers`). 0.1 ran each upstream project's own code, in an environment of its own, behind a small adapter; "identical to 0.1" therefore means identical to upstream as Mizuoto drove it, adapter choices included (how text is segmented, the order of chunks, how parameters map). Where 0.1's adapter and upstream differed, 0.1's behaviour is the one kept: F5-TTS generates a long text's chunks in order, GPT-SoVITS scales its pauses as the adapter did.
+
+Two engines have another reference:
+
+- **VoxCPM** came after 0.1. Its reference is upstream's own package (the commit the manifest pins), run behind an adapter in the same Mizuoto stack, with the library versions upstream locks.
+- **CosyVoice** is compared with upstream running on torch 2.8, not on the torch 2.3.1 it was released with: upstream on 2.3.1 and upstream on 2.8 disagree with each other (sampling diverges; voice conversion matches to 62 dB), and Mizuoto needs torch 2.8 or newer.
+
+### The conditions
+
+CPU, fp32 (VoxCPM also bf16, its default), the same seed, the same torch release and the same thread count (CPU kernels split their sums by it). The CPU is where the claim is made because any difference in a logit can flip a sampling draw or a beam choice, after which everything diverges; on a GPU in reduced precision, kernels change with shapes and upstream does not even agree with itself (a batch against single requests). On the CPU in fp32 the computation is deterministic, so a port that does exactly what upstream does gives exactly upstream's bits.
+
+### Tiers
+
+| Tier | What is compared | Passes when |
+| --- | --- | --- |
+| T0 operation | DSP, samplers, tokenizers, normalisers, g2p | identical: `torch.equal`, the same ids, the same strings |
+| T1 module | each module with the real weights on captured inputs | max abs error ≤ 1e-5 × max(1, ‖ref‖∞), cosine ≥ 0.99999 |
+| T2 stage | teacher-forced logits; discrete outputs from captured inputs (speech-tokenizer codes, VQ codes) | argmax agreement 100 %; discrete agreement ≥ 99.9 % with every flip explained |
+| T3 end to end | a whole seeded request through Mizuoto's stack | identical tokens; audio identical, or max abs error ≤ 1e-4 |
+
+Every engine above is identical at T3, with no error at all, except CosyVoice when each side makes its own voice prompt. Two opt-in paths are held to less: `compute.compile` (within 1e-4, except CosyVoice, whose vocoder amplifies float differences) and Qwen3-TTS's `fused_projections` (identical on the CPU, not on a GPU).
+
+Behaviour is compared along with the audio: the parameters applied and the warnings, the voice mode chosen, the segments, the streamed chunks' lengths, the sample rate and the error codes of invalid requests.
+
+**Training** is identical when, seeded alike, every step's losses, learning rates and other metrics, and the saved weights, equal upstream's. Upstream rarely seeds everything (0.1 never did), so the reference is upstream with its generators seeded the way the native training stage seeds them.
+
+**On a GPU** there is no sample-level comparison with upstream. What a GPU checks is that Mizuoto's own speed paths change nothing: CUDA graphs and the decoding loops that wait for the device once per step give the same tokens and audio as the plain eager code on the same GPU.
+
+## How it is checked
+
+- **The parity harness** (`scripts/parity/`) runs cases through a whole Mizuoto stack with either implementation and compares the runs: `stack.py run <cases> --impl reference|native` (VoxCPM: `--impl upstream|native`), `compare.py <engine>`, and `train.py run|compare` for the trainers. The cases are `scripts/parity/cases/<engine>.jsonl` (74 in all); the environments, clips, fixtures and reports live outside the repository in `MIZUOTO_PARITY_DIR`. The reference is first compared with a repeat of itself: a case that does not repeat cannot judge the port. Its commands are in [Testing](/docs/development-testing).
+- **Component checks**: `scripts/parity/check_tokenizer.py` (the BPE against transformers' tokenizer), `scripts/parity/dsp_fixtures.py` (the DSP against torchaudio, librosa, Whisper and soxr, kept as `tests/fixtures/dsp/*.npz`), `scripts/parity/check_rng.py` (explicit generators against the seeded default stream), and per-engine module scripts such as `voxcpm_modules.py`.
+- **In CI**: `tests/engines_native/` runs every engine and trainer on a tiny random model of its own architecture, also with its weights streamed, half streamed and not streamed on a simulated device, which must give the same output; `tests/runtime/test_dsp.py` checks the DSP against its fixtures.
+- **The contract suite** (`python scripts/dev.py test-engines`) drives the installed real models through planning, jobs and the runtime: every voice mode audible and intelligible (WER under 0.35 by speech recognition), seeds that repeat, segments, cancelling, and no residue in the process.
+
+## Rules every engine keeps
+
+- **Upstream's computation, in its order and shapes.** Batching changes floating-point sums, so a port keeps upstream's tensor shapes even where a simpler form would do (three embeddings looked up in one call, a cache grown by concatenation, SDPA called with the same arguments transformers passed).
+- **Randomness from the request.** Every draw comes from `ctx.generator_for(device)` or `ctx.rng`, never from torch's global generator. A fresh `torch.Generator` seeded with *s* gives the same stream as the default generator after `torch.manual_seed(s)`, on the CPU and on CUDA (`check_rng.py`), so drawing upstream's draws in upstream's order reproduces upstream's seeded run. Where upstream draws while it builds a model (default initialisations that consume the global generator), the port replays those draws on a private generator when their values matter (CosyVoice 3's vocoder noise, the trainers' initialisations) or jumps the generator over them (Fish Speech's trainer).
+- **No process-wide state.** No environment variables, working folder, `sys.path`, `torch.backends` flags, global seeds or logging configuration are changed; `tests/test_architecture.py` forbids it and the contract suite checks a digest of the process state before and after requests (the `mizuoto.snapshot` operation).
+- **Libraries' numerics, reproduced.** `mizuoto.nn.dsp` is bit-exact with what upstream called: torchaudio (2.3.1 and 2.8.0), librosa (0.10, 0.11, 1.0), openai-whisper, soxr as `librosa.resample` calls it, Matcha-TTS's mel, the ffmpeg program's resampler and soundfile's WAV. `mizuoto.text.tokenize.bpe` gives transformers' ids for the Qwen2-family tokenizers; normalisers apply the original FSTs with kaldifst; ONNX weights are read from the protobuf without onnx.
+- **Strict checkpoints.** A missing or unexpected key is an error; upstream sometimes kept random weights for missing keys.
+- **Loading outside inference mode**, requests inside it (below).
+
+<Callout type="warn" title="Two CPU kernel traps">
+
+Both were found while comparing E2-TTS: `F.linear` on a strided (non-contiguous) 3-D input takes another CPU kernel, with other rounding, when its weight requires grad, or when the weight is an *inference tensor* (made inside `torch.inference_mode()`), even under `no_grad`. Upstream's weights are ordinary parameters that require grad. So native engines leave parameters as `nn.Module` makes them (no `requires_grad_(False)`), and models are loaded outside inference mode; requests still run inside it.
+
+</Callout>
+
+## Shared building blocks
+
+| Module | What it is | Engines |
+| --- | --- | --- |
+| `runtime/lm/qwen.py`, `runtime/lm/cache.py` | The Qwen2/Qwen3 decoder with transformers' numerics (`hf_sdpa`, `mask_for`), `DynamicCache` and the optional preallocated `BufferCache` | Qwen3-TTS, OmniVoice, CosyVoice 2/3, IndexTTS's emotion model; Fish Speech uses the cache |
+| `runtime/sampling.py` | transformers' logits processors in their order; `multinomial`'s own computation without its device waits | Qwen3-TTS, IndexTTS, CosyVoice |
+| `runtime/graphs.py` | CUDA graphs over a decoder's one-token step (`DecoderSteps`, `LayerSteps`) | Qwen3-TTS, Fish Speech, CosyVoice 2/3, VoxCPM, GPT-SoVITS, IndexTTS |
+| `runtime/compile.py` | `Compiled`: one hot module under `torch.compile` when `compute.compile` is on | F5-TTS, CosyVoice, GPT-SoVITS, IndexTTS, VoxCPM |
+| `nn/transformer/` | F5's DiT (`dit.py`), E2's UNetT, wenet's Conformer, Seed-VC's DiT, VITS, BERT | F5-TTS, CosyVoice, GPT-SoVITS, IndexTTS |
+| `nn/flow/` | F5's CFM with torchdiffeq's fixed grids, Matcha's U-Net, coupling flows | F5-TTS, CosyVoice, GPT-SoVITS |
+| `nn/vocoders/` | Vocos, HiFT v1–v3, BigVGAN v1/v2, HiFi-GAN | F5-TTS, IndexTTS, CosyVoice, GPT-SoVITS |
+| `nn/codecs/` | DAC, the s3tokenizer speech tokenizers built from their ONNX files, RepCodec | OmniVoice, CosyVoice, IndexTTS |
+| `nn/ssl/`, `nn/speaker/` | HuBERT, w2v-BERT 2.0; CAM++ (as CosyVoice's ONNX graph has it, and as 3D-Speaker's code), ECAPA, MelStyle | OmniVoice, GPT-SoVITS, IndexTTS, CosyVoice |
+| `nn/dsp/` | Mel filterbanks, kaldi fbank, resamplers, WAV and FLAC, the tiled decoding used as a memory fallback | all |
+| `text/tokenize/`, `text/normalize/` | Qwen2-family BPE, Whisper's tiktoken vocabulary, wetext's normaliser over kaldifst | Qwen3-TTS, OmniVoice, Fish Speech, CosyVoice, IndexTTS, VoxCPM |
+
+How the runtime places these models in memory, streams their weights and retries after running out of memory is in [Runtime](/docs/development-runtime); the settings that turn on the speed paths are in [Performance](/docs/advanced-performance).
+
+## Licence-gated engines
+
+Fish Speech and IndexTTS are ports of code whose licences (the Fish Audio Research License, the bilibili Model Use License) also cover the port. They are therefore separate distributions, `mizuoto-fishspeech` and `mizuoto-indextts`, each shipping its licence, installed into the same environment and registered under the entry-point group `mizuoto.engines`. Their manifests ship with `mizuoto`, so the catalogue and the licence text are there before the distribution is installed. They follow the same rules as the built-in engines and import nothing from another engine.
+
+## Limitations
+
+- Exactness is established on the CPU. GPU runs are checked for identical results between Mizuoto's own fast and plain paths, not sample for sample against upstream.
+- CUDA graphs run on NVIDIA GPUs only. Every engine declares AMD (ROCm), Intel (XPU) and Apple (MPS) GPUs, but none has been run on that hardware yet.

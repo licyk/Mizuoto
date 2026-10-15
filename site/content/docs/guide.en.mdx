@@ -1,0 +1,53 @@
+---
+title: "Interface overview"
+description: "The web UI's layout: navigation, the jobs sheet, the models in memory, the theme, and the guide to each screen."
+icon: Compass
+---
+
+This section explains the Mizuoto web UI screen by screen. If you have not installed or started Mizuoto yet, read [Quick start](/docs/quick-start) first. Every action in the UI has a `mizuoto` command too; see [Command line](/docs/cli).
+
+## Navigation
+
+The navigation is on the left (at the bottom in a narrow window):
+
+| Screen | What it is for |
+| --- | --- |
+| **Speak** | Choose a model and a voice and turn text into speech |
+| **Projects** | A cast of voices reads a book, a script or a dialogue line by line |
+| **Tools** | **Convert voice** and **Edit speech** |
+| **Voices** | The voice library: make, design, import and export voices, and see which models can use them |
+| **Train** | Datasets and experiments: fine-tune models on your own recordings |
+| **Models** | Model downloads, engines and shared files |
+| **History** | Every result |
+| **Settings** (at the bottom) | Language, server, compute devices, download sources, storage, appearance and more |
+
+The UI opens on the screen you were last on. Each screen keeps its state (and scroll position) while you visit others; the page of each voice, dataset, experiment and project keeps its own.
+
+## The top bar
+
+Three buttons at the top right:
+
+- **Jobs**: while jobs run it shows a spinner and their number (**N running**). It opens the jobs sheet with the 30 most recent jobs; each job card shows the state and progress (for downloads also the amount done, the speed and the time left) and offers **Cancel**, **Retry** and **Log**. **All jobs** opens the full list, filtered by **All**, **Active** or **Finished**, where **Clear finished** tidies the history. A queued job says what it waits for, such as **Waiting for the GPU**, **Waiting for the engine**, **Waiting for other synthesis jobs** (see **Synthesis jobs at once** in [Settings](/docs/guide-settings#compute)) or **Waiting for other downloads**; when another job holds the GPU, **Run anyway** runs it beside that one if the memory suffices.
+- **Models in memory**: shows how many models are loaded (**N loaded**). It lists each loaded model with its device, the memory its weights take and whether it is **Busy** or **Idle**; **Unload** one, or **Free GPU memory** to unload every idle model at once. An engine whose last request failed is listed with the error.
+- **Theme**: cycles through light, dark and following the system. More under **Settings › Appearance**.
+
+When a job started on another screen finishes or fails, a message pops up at the bottom of the window; a failure's message has an **Open log** button.
+
+## The page footer
+
+The main button of **Speak**, **Tools** and other screens stays at the bottom of the page, with the jobs started there and any error. An error shows the **Reason** and **What to do**, with **Details** to expand and a **Copy** button.
+
+When the chosen model is not ready yet, the main button is replaced by the one step it still needs — **Enable**, **Accept the** *engine* **licence**, the command that installs what the engine needs (torch, or a licence-gated engine's package) or **Download** *model* *(size)* — with its progress while it runs.
+
+## The screens
+
+<Cards>
+  <Card title="Speak" href="/docs/guide-speak" description="Model, voice, text, style, parameters and presets, the plan, streaming and results." />
+  <Card title="Voices" href="/docs/guide-voices" description="The voice library: from audio, designed, preset speakers, clips, fine-tuned weights, export and import." />
+  <Card title="Projects" href="/docs/guide-projects" description="Long-form reading: chapters and lines, the cast, script import, rendering, takes and export." />
+  <Card title="Tools" href="/docs/guide-tools" description="Voice conversion (CosyVoice) and speech editing (F5-TTS)." />
+  <Card title="Models" href="/docs/guide-models" description="The catalogue, engine cards (availability, device, precision, options, licence) and shared files." />
+  <Card title="Train" href="/docs/guide-train" description="Datasets and their preparation; experiments, stages, losses, previews and exports." />
+  <Card title="History" href="/docs/guide-history" description="Every result: search, filter, favourites, run again, download and delete." />
+  <Card title="Settings" href="/docs/guide-settings" description="General, Compute, Remote hosts, Speech, Training, Downloads, Storage, Appearance and About." />
+</Cards>

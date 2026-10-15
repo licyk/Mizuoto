@@ -1,0 +1,16 @@
+{
+ "repo": "nvidia/bigvgan_v2_22khz_80band_256x",
+ "revision": "633ff708ed5b74903e86ff1298cf4a98e921c513",
+ "files": [
+  {
+   "path": "bigvgan_generator.pt",
+   "size": 449228171,
+   "sha256": "e95ba25972d3de0628d99cd156e9315a9c018899bf739988959ebe3544080ced"
+  },
+  {
+   "path": "config.json",
+   "size": 1405,
+   "sha256": "88a1f47acf747db0b21e97a389d838566147f7a5464583ff5c8d819d870f03ee"
+  }
+ ]
+}

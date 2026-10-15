@@ -1,0 +1,16 @@
+{
+ "repo": "lj1995/GPT-SoVITS",
+ "revision": "8f8857563c040d542de108a2c18b0425abd6c9c5",
+ "files": [
+  {
+   "path": "gsv-v2final-pretrained/s1bert25hz-5kh-longer-epoch=12-step=369668.ckpt",
+   "size": 155315150,
+   "sha256": "732f94e63b148066e24c7f9d2637f3374083e637635f07fbdb695dee20ddbe1f"
+  },
+  {
+   "path": "gsv-v2final-pretrained/s2G2333k.pth",
+   "size": 106035259,
+   "sha256": "924fdccaa3c574bf139c25c9759aa1ed3b3f99e19a7c529ee996c2bc17663695"
+  }
+ ]
+}

@@ -1,0 +1,55 @@
+---
+title: "Mizuoto"
+description: "把多款开源语音合成引擎放进一个平台：一个网页界面、一个命令行和一套 HTTP 接口。"
+icon: House
+---
+
+Mizuoto 把多款开源语音合成（TTS）引擎——CosyVoice、F5-TTS、GPT-SoVITS、OmniVoice、Qwen3-TTS、VoxCPM、Fish Speech 和 IndexTTS——放进**一个平台**：同一个本地服务器、同一个网页界面和同一个命令行工具 `mizuoto`。你可以用它合成语音、克隆与设计音色、让一组角色朗读整本书或剧本、转换与编辑录音，并用自己的录音微调模型。
+
+所有引擎都在 Mizuoto 内部实现，基于 Mizuoto 自己构建在 torch 之上的运行时，在服务器进程内运行；只有一个 Python 环境，不需要为每个引擎单独搭建。无论由哪个引擎处理，请求、音色、参数、任务和结果的形式都相同。
+
+<Cards>
+  <Card title="第一次使用" href="/docs/quick-start" description="从零开始，最快听到第一句合成的语音。" />
+  <Card title="安装" href="/docs/installation" description="系统要求，以及用发布包、源码或 Docker 安装。" />
+  <Card title="首次运行" href="/docs/first-run" description="从哪里开始、检查 torch 与引擎、下载模型和需要接受许可的引擎。" />
+  <Card title="常见问题" href="/docs/advanced-faq" description="端口、下载、显存、设备等常见问题。" />
+</Cards>
+
+## 能做什么
+
+| 功能 | 说明 | 教程 |
+| --- | --- | --- |
+| 合成 | 用任一已安装模型朗读文本：音色库中的音色、一段用于克隆的音频、预置说话人、描述出的音色或模型自带的音色；支持风格指令、情感、参数预设和边生成边播放。 | [合成](/docs/guide-speak) |
+| 音色 | 音色库：来自音频（缺少的文本由语音识别补全）、设计出的音色、预置说话人，以及带有专属微调权重的音色；可导出与导入。 | [音色](/docs/guide-voices) |
+| 项目 | 由一组角色逐句朗读书、剧本或对话，每个角色可用各自的模型和音色；改过的句子重新生成，整个项目或单章导出为一个文件并附带字幕。 | [项目](/docs/guide-projects) |
+| 工具 | 音色转换（CosyVoice）与语音编辑（F5-TTS）。 | [工具](/docs/guide-tools) |
+| 训练 | 从录音、文件、音色或之前的结果建立数据集，再逐阶段运行各引擎自己的微调流程；结果是音色的专属权重或一个新模型。 | [训练](/docs/guide-train) |
+| 模型 | 模型目录的下载、校验与导入，各引擎的可用状态、设备与选项，以及共享文件。 | [模型](/docs/guide-models) |
+| 历史 | 所有合成结果：搜索、收藏、下载、用同样的设置再运行。 | [历史](/docs/guide-history) |
+| 远程主机 | 在另一台机器上运行引擎（那里运行 `mizuoto agent`），音色、结果和界面留在本机。 | [远程主机](/docs/advanced-remote) |
+| 接口 | REST 接口、事件与流式音频的 WebSocket、兼容 OpenAI 的 `/v1/audio/speech`，以及 Python 调用。 | [HTTP 接口](/docs/advanced-api) |
+
+## 引擎
+
+| 引擎 | 模型 | 特点 | 训练 | 许可 |
+| --- | --- | --- | --- | --- |
+| Qwen3-TTS | 1.7B / 0.6B Base、CustomVoice、VoiceDesign | 10 种语言，带指令的预置说话人，按描述生成音色 | 说话人微调 | Apache-2.0 |
+| CosyVoice | 3（0.5B）、2（0.5B）、300M base / SFT / instruct | 输入输出均可流式，音色转换，指令 | LLM、LLM + flow | Apache-2.0 |
+| F5-TTS | v1 Base、Base、E2-TTS | 流匹配，精确时长，语音编辑 | 全量微调 | 代码 MIT；权重 CC-BY-NC-4.0 |
+| GPT-SoVITS | v2、v2Pro、v2ProPlus、v4、v5 Turbo | 少样本克隆，音色专属的 GPT 与 SoVITS 权重 | 音色权重 | MIT |
+| OmniVoice | OmniVoice | 600 多种语言，按属性设计音色，行内标签 | 全量、LoRA | Apache-2.0 |
+| VoxCPM | VoxCPM2、1.5、0.5B | 无离散分词；VoxCPM2：30 种语言、48 kHz，有无参考文本均可克隆，按描述设计音色，指令 | 全量、LoRA | Apache-2.0 |
+| Fish Speech | S2 Pro | 富有表现力的克隆 | LoRA | Fish Audio Research License（需接受许可） |
+| IndexTTS | 1.5、2、2.5 | 情感可由权重、一段音频或文字描述控制 | — | bilibili Model Use License（需接受许可） |
+
+此外还内置两个辅助引擎：**语音识别**（Whisper large-v3-turbo，用来补全参考音频的文本）和**演示引擎**（`dummy/default`，不需要下载，用音调代替语音，方便先熟悉界面）。
+
+## 文档板块
+
+<Cards>
+  <Card title="使用教程" href="/docs/guide" description="逐个页面讲解合成、项目、工具、音色、训练、模型、历史与设置。" />
+  <Card title="命令行" href="/docs/cli" description="不打开浏览器也能完成全部操作：命令参考、配置文件与环境变量。" />
+  <Card title="进阶" href="/docs/advanced" description="引擎细节、HTTP 接口、远程主机、性能、下载来源、Docker、嵌入与常见问题。" />
+  <Card title="引擎参考" href="/docs/engines" description="各引擎如何复现其上游：保留的行为、偏差、显存与速度、训练和对照结果。" />
+  <Card title="开发文档" href="/docs/development" description="面向贡献者：开发约定、架构与设计参考、运行时、显存与加速、接入引擎、训练、API、Web UI、测试与发布。" />
+</Cards>

@@ -1,0 +1,200 @@
+---
+title: "测试"
+description: "Mizuoto 的测试怎样组织：核心依靠 dummy 引擎在几秒内跑通整条链路，每个引擎和训练器都在 CI 里用小型随机模型运行（也在模拟设备上流式加载运行），真实模型有契约套件，对照工具把原生引擎与参照实现逐采样比较，行为一致性分层判断，Web UI 用 vitest，CI 覆盖三个平台和四个 Python 版本。"
+icon: FlaskConical
+---
+
+Mizuoto 的测试分三层：
+
+- **核心的测试**不需要 GPU，也不需要模型：dummy 引擎在测试自己的进程里，端到端地支撑起规划、任务、运行时服务、流式、取消和错误。
+- **引擎的测试**在 CPU 上用权重随机的小模型运行每个引擎和训练器，包括在模拟设备上部分加载、流式加载的运行，同样在 CI 里跑。
+- **真实模型**：契约套件让已安装的模型走完整条链路，对照工具把原生引擎与参照实现逐采样比较。开发者改动引擎时手动运行它们。
+
+`python scripts/dev.py check` 运行 CI 跑的全部：`lint`、`typecheck-py`、`test-py`、`test-web`、`typegen-check`。
+
+## 布局
+
+```
+tests/
+  conftest.py            make_services、services 和 wav_file 夹具
+  test_architecture.py   分层规则、全局状态规则、注意力入口、轻量导入、单一发行包
+  core/                  每个服务一个文件：jobs、engines、models、tts、voices、presets、training、projects、
+                         remote、settings、runtime_service、compute、protocol（帧、任务、任务 worker 事件）、
+                         audio/text/process、db/errors/events，以及 CPU 调优和 compute.fast 的开关
+  api/                   test_api.py（通过 TestClient 测整个 API）、test_embed.py（MizuotoServer）
+  cli/                   test_cli.py（命令树 EXPECTED_TREE 与各条命令）
+  runtime/               运行时的各部分：上下文、ops、加载（test_runtime.py），设备（test_device.py），
+                         显存单元、部分加载与管理器（test_memory.py），注意力调度与后端（test_accel*.py），
+                         mizuoto.nn 与参考实现逐比特一致（test_nn_exact.py），DSP 夹具（test_dsp.py），
+                         compute.compile（test_compile.py），随机数生成器跳转（test_rng_jump.py）
+  text/                  mizuoto.text 的分词器，用一个很小的词表
+  engines_native/        每个引擎和训练器在小型随机模型上运行（test_<id>_tiny.py、test_<id>_train_tiny.py）；
+                         streaming.py（模拟设备上的流式加载检查）、training_memory.py（训练显存工具的检查）
+  engines/               test_contract.py：针对真实模型的契约套件（默认排除）
+  fixtures/dsp/          由 scripts/parity/dsp_fixtures.py 生成的 DSP 夹具
+```
+
+`pyproject.toml` 定义了四个标记，默认全部排除（`addopts = "-m 'not live and not engine and not weights and not e2e'"`）：
+
+| 标记 | 含义 |
+| --- | --- |
+| `live` | 需要本仓库之外的东西 |
+| `engine` | 针对已安装模型的引擎契约套件（`dev.py test-engines`） |
+| `weights` | 需要已下载的模型权重 |
+| `e2e` | 浏览器端到端测试 |
+
+所以 `python -m pytest`（或 `python scripts/dev.py test-py`）运行的是核心的测试和小模型测试。需要 torch 或某个可选包的测试，在没有它时会跳过（`pytest.importorskip`）。
+
+## dummy 引擎
+
+`mizuoto/engines/dummy/` 是一个没有模型的完整引擎：引擎（`engine.py`）和训练器（`train.py`），清单是 `mizuoto/core/engines/manifests/dummy.toml`。它只导入 numpy，不需要 torch，并像所有引擎一样在测试的进程里运行。
+
+- 它把每个字符变成一小段音调，音高取决于音色（预设、描述、参考音频的 SHA-256 或权重的哈希），所以不同音色听起来不同；随机数从 `ctx.rng` 抽取，所以同一个种子得到同样的音频。
+- 它声明了**全部**能力：预设说话人、克隆、设计、风格与情感、流式输出与流式文本输入、音色转换、语音编辑、批处理、权重、`transcribe` 操作（所以 ASR 路径也能测）、训练。
+- 引擎选项可以让它故意出错：`delay_ms`、`chunk_ms` 和 `load_delay_ms` 让它变慢；`fail = error | oom | crash | exception` 和 `fail_at_segment` 让它在指定位置失败、内存不足、报告崩溃（`worker_failed`）或抛出未处理的异常。
+
+正是靠它，在下一次检查时停下的取消、内存不足变成 `compute_unavailable`、超时、卸载、空闲回收和流式音频块，都能在没有 GPU 的 CI 机器上几秒内测完。dummy 引擎也是用户试用 Mizuoto 的方式，`smoke_wheels.py` 也用它。
+
+## 夹具
+
+`tests/conftest.py`：
+
+```python
+@pytest.fixture
+def make_services(tmp_path: Path):
+    from mizuoto.core.context import build_services
+    built = []
+
+    def make(start_background: bool = False, **kwargs):
+        env = kwargs.pop("env", {})
+        s = build_services(data_dir=tmp_path / "data", environ=dict(env), start_background=start_background, **kwargs)
+        built.append(s)
+        return s
+
+    yield make
+    for s in built:
+        s.close()
+```
+
+- 每个测试一个临时数据目录、一个空的环境（`environ={}`：开发者自己的 `MIZUOTO_*` 变量不会混进来）。
+- `services` 是 `make_services()` 的简写；`wav_file` 是一段 2 秒、22.05 kHz 的立体声 WAV。
+- 需要调度器和空闲回收的测试传 `start_background=True`。API 测试就是这样：`create_app(make_services(start_background=True), bound_host="127.0.0.1", serve_ui=False)`，然后用 `TestClient`。
+- 下载测试把 `services.models.http_transport` 换成 `httpx.MockTransport`。
+- 远程测试（`tests/core/test_remote.py`）在本机启动一个 `AgentServer`，由主机通过 TCP 驱动它的 dummy 引擎。
+
+## 小型随机模型
+
+`tests/engines_native/` 为每个引擎搭一个与引擎结构相同、只有几个小层、权重随机的模型，按引擎期望的样子写进临时目录（配置、字节级词表、safetensors），然后驱动真实的代码：用 `Runtime(DeviceService(), ModelManager(...))` 调 `Engine.load`，配一个 `RequestContext`，测音色提示、解码、批处理、可重复的种子和取消。`test_<id>_train_tiny.py` 用几段音频跑完引擎训练器的每个阶段。它们不需要下载，所以 CI 每次推送都用 CPU 版 torch 运行；需要接受许可的引擎的测试，在没装它们的包时跳过。
+
+这里还守着几条跨引擎的规则：
+
+- **注意力。** 每个调用点传入的 `mask_info` 都与它的稠密掩码对照检查。`MIZUOTO_TEST_ACCEL=count python -m pytest tests/engines_native` 让每次注意力调用都经过一个策略：它统计调用点，并按调用点自己的参照方式计算；如果某个调用点从没以这种方式被调用到（例如有代码绕过 `compute.attention` 直接调用 SDPA），测试结束时就会失败。
+- **训练显存工具。** `training_memory.py` 的 `check_checkpointing` 把训练器的阶段在全新的工作目录里跑两遍，一遍原样，一遍每个块都做梯度检查点，比较每个指标和每个写出的权重文件：必须完全相同。保持结果的其他工具（如把优化器状态放在内存里）用同样的方式检查。
+
+### 模拟设备上的流式加载
+
+显存管理改变的是权重放在哪里，不是计算什么，所以部分加载和流式加载的结果必须与整体加载完全相同。`tests/engines_native/streaming.py` 让 CPU 扮演一个给定大小的设备（`DeviceService(simulate=…, strict=True)`）：
+
+- `check_streamed` 在三种设备大小下（每个单元都流式加载、一半、全部常驻）运行小型引擎，与普通 CPU 上的结果逐采样比较。
+- 严格模式下，不在设备上的组件以 meta 张量存放，被流式加载的单元的权重只在该单元运行时存在。所以一个引擎在某个阶段用了没有为这个阶段放置（`ctx.use`）的组件，或者在单元的 `forward` 之外读了它的权重，就会在这里失败。
+- `check_oom_retry` 让阶段里的某一层第一次调用时内存不足：阶段以更多权重流式加载的方式重新运行，结果必须与未受干扰时完全相同。
+
+显存管理本身见[显存管理](/docs/development-memory)。
+
+## 真实引擎的契约套件
+
+`tests/engines/test_contract.py` 对每个可用引擎的每个已安装目录模型，走完整的链路（规划 → 任务 → 运行时 → 引擎）：
+
+```bash
+python scripts/dev.py test-engines                 # 所有已安装的模型
+python scripts/dev.py test-engines qwen3tts f5tts -- -x -k cancel
+MIZUOTO_TEST_DEVICE=cpu python scripts/dev.py test-engines cosyvoice
+```
+
+`test-engines` 设置 `MIZUOTO_CONTRACT=1` 和 `MIZUOTO_TEST_ENGINES`（指定的引擎），以 `-m engine -v` 运行 `tests/engines`。套件使用 `MIZUOTO_TEST_DATA_DIR`（默认是平常的数据目录）里的模型，但在临时数据目录里运行，不往真实目录写任何东西，设备是 `MIZUOTO_TEST_DEVICE`（默认 `auto`）。
+
+| 测试 | 检查什么 |
+| --- | --- |
+| `test_load_and_describe` | 加载后的 `describe` 与清单一致：采样率、预设说话人 |
+| `test_every_voice_mode_speaks_the_text` | 声明的每种音色模式，中英文都能发声（RMS &gt; 0.01）、采样率正确、时长与文本相称；装了 ASR 时词错误率 &lt; 0.35 |
+| `test_seed_repeats_and_segments` | 同一个种子逐采样复现；放不进一段的两句话切成两段（或由引擎自己处理长文本） |
+| `test_cancel_stops_the_engine` | 生成中途取消，任务在 30 秒内变为 `cancelled`，模型仍在加载状态，下一个请求正常发声 |
+| `test_no_residue` | 进程级状态（工作目录、环境变量、`sys.path`、随机数生成器、torch 标志、日志处理器、警告过滤器）的摘要在多次请求前后相同，通过 `mizuoto.snapshot` 操作获取 |
+
+要克隆的参考音频来自 `MIZUOTO_TEST_REFERENCE`（加上 `MIZUOTO_TEST_REFERENCE_TEXT`），没有时由已安装的预设或设计模型说一段。需要接受许可的引擎只有在设了 `MIZUOTO_TEST_ACCEPT_LICENCES=1`（并装了它们的包）时才参加，许可只在临时目录里接受。
+
+在 CPU 上，每个引擎的全部目录模型都通过契约套件。整套跑完需要几个小时（模型越大越慢），所以改动某个引擎时只跑它。
+
+## 与参照实现对照
+
+`scripts/parity/` 把原生引擎与它们的参照实现逐采样比较（它的 README 有完整说明）。参照是 Mizuoto 0.1 的引擎 worker（git 标签 `v1-engine-workers`，各引擎在自己原来的环境里运行上游代码）；0.1 没有的 VoxCPM，参照是上游自己的包，经 `stack.py --impl upstream` 套进同一条链路。代码在仓库里；数据放在仓库之外的工作区 `MIZUOTO_PARITY_DIR`（默认 `~/code_workspace/experiment/kodama-refactor`），其中有：
+
+- `reference/`：位于标签 `v1-engine-workers` 的 git 工作树，即原生引擎与之比对的 0.1 代码；
+- `reference-host/` 和 `native-env/`：分别驱动参照实现和原生实现的 Python 环境（原生一侧用参照环境相同的 torch 2.8.0，差异因此只来自代码而不是内核）；CosyVoice 另有一套 torch 2.8 上的参照环境和数据目录；
+- `corpus/`（参考音频及其转写）、`fixtures/`（每次运行写出的音频和行为）、`reports/`（比较报告）。
+
+```bash
+W=~/code_workspace/experiment/kodama-refactor
+CUDA_VISIBLE_DEVICES= $W/reference-host/bin/python scripts/parity/stack.py run scripts/parity/cases/qwen3tts.jsonl --impl reference
+CUDA_VISIBLE_DEVICES= $W/native-env/bin/python scripts/parity/stack.py run scripts/parity/cases/qwen3tts.jsonl --impl native
+$W/native-env/bin/python scripts/parity/compare.py qwen3tts --a reference --b native --report $W/reports/qwen3tts-T3.md
+```
+
+| 脚本 | 作用 |
+| --- | --- |
+| `stack.py run <cases.jsonl> --impl reference\|native\|upstream` | 让每个用例（一个 `SpeakRequest`，或一个 `convert` / `edit` 请求）走某一实现的完整链路，把音频和行为存进 `fixtures/<engine>/<case>/<name>`。`--name` 设置本次运行的文件名（如 `reference-repeat`、`reference-t28`），`--only` 选用例，`--setting k=v` 对整次运行应用一项设置，`--repeat` 在同一条链路里把每个用例再跑几遍，`--device`（默认 `cpu`） |
+| `compare.py <engine…> [--a reference] [--b native]` | 逐采样比较两次运行（`--tolerance`；`--report` 写出 Markdown 报告）；不运行模型，直接从夹具打印当前的对照表 |
+| `train.py run <engine> --impl reference\|native --model <id> --method <m> --hp k=v --name <n>` | 用某一实现在工作区的数据集上训练，保留实验、指标、预览和导出结果 |
+| `train.py compare <engine> <name>` | 比较两种实现的训练结果；导出的音色或模型可以交给另一种实现加载 |
+| `perf.py`、`train_perf.py` | 按阶段计时同样的用例和微调，并与上一轮的音频、指标和权重对照（见[性能工作](/docs/development-performance)） |
+| `memory.py` | 每个用例的显存与内存峰值、加载和卸载时间（见[显存管理](/docs/development-memory)） |
+| `voxcpm_modules.py`、`voxcpm_upstream.py` | VoxCPM 的组件级对照，以及把上游包作为引擎套进链路的适配器 |
+| `check_rng.py --device cuda:0` | 用种子 *s* 初始化的全新 `torch.Generator`，对比 `torch.manual_seed(s)` 之后的默认随机流 |
+| `check_tokenizer.py <model>` | 在语料上比较 `mizuoto.text` 的 BPE 与 transformers 的分词器（在装有 transformers 的环境里运行） |
+| `dsp_fixtures.py` | 用真正的 torchaudio、librosa、Whisper 和 soxr 写出 `tests/fixtures/dsp/*.npz` |
+
+**先自洽，再对照。** 参照实现先与自己的重复运行比较（`--name reference-repeat`）：自己都不能复现的用例无法用来评判原生实现。`cases/<engine>.jsonl` 每行一个用例，字段见 README。
+
+结果：在 CPU 上以 fp32 运行时，每个引擎都与参照完全相同（VoxCPM 在 bf16 下也是），只有 CosyVoice 在两边各自生成音色提示时例外：CAM++ 的说话人嵌入与 onnxruntime 相差约 1e-6，HiFT 的正弦源把这个差异沿句子积累放大；给定同一个音色提示时，CosyVoice 也逐采样相同。每个训练器在 CPU 上与上游带同样种子的运行给出逐字节相同的损失、学习率和权重。
+
+## 行为一致性的层级与容差
+
+“相同”分层判断。低层级逐比特检查，高层级判断整条链路：
+
+| 层级 | 比较什么 | 在哪里 | 通过条件 |
+| --- | --- | --- | --- |
+| **T0 运算** | DSP、采样器、分词器、规范化器、字音转换 | CPU | 完全相同（`torch.equal`、相同的 id、相同的字符串） |
+| **T1 模块** | 每个模块用真实权重处理截取的输入 | CPU fp32 | 最大绝对误差 ≤ 1e-5 × max(1, ‖参照‖∞)，余弦相似度 ≥ 0.99999 |
+| | | GPU bf16/fp16 | 余弦相似度 ≥ 0.999 |
+| **T2 阶段** | 教师强制的 logits；给定截取的输入时的离散输出（语音分词器的码、VQ 码、注入噪声后的 ODE 轨迹） | CPU fp32 | argmax 100% 一致；离散输出一致率 ≥ 99.9%，每个翻转都要检查并解释（如 FSQ 取整边界上的平局）；轨迹在 T1 之内 |
+| **T3 端到端（带种子）** | 完整请求走完 Mizuoto 的链路：原生与参照，同一种子、同一 torch 版本 | CPU fp32 | **token 完全相同；音频完全相同或最大绝对误差 ≤ 1e-4**；例外逐个引擎列出并说明原因 |
+| **T4 统计** | 每个引擎在其生产精度和设备上的语料运行，原生与参照；种子不对齐（GPU 内核不同） | GPU（bf16/fp16）、CPU | 每种音色模式和模型至少 20 段文本 × 3 个音色 × 每个音色 3 个种子：平均 CER/WER（Whisper large-v3-turbo）≤ 参照 + 0.5 个百分点，且没有用例比参照最差的再差 5 个百分点以上；说话人相似度（CAM++ 与参考片段的余弦）均值 ≥ 参照 − 0.01；时长比在 ±5% 之内；UTMOS 均值 ≥ 参照 − 0.05；响度和 F0 中位数在参照的分布之内 |
+
+- **为什么 T3 只在 CPU 上以 fp32 判断。** 任何一点 logits 差异都会翻转一次多项式抽样（或一个束），之后的一切随之分叉。在 GPU 上降精度运行时，连上游自己都不能与自己逐比特一致（例如批量和单条的贪心解码），所以 GPU 上的一致性由 T1 的模块级误差加 T4 的统计指标判断。
+- **音频之外的行为**也是对照的一部分，在两种实现上都经过契约套件检查：实际生效的参数和警告、音色模式的判定（`fit`）、流式的粒度与块数、取消的行为、对无效输入的错误码（参考音频太长、不支持的语言、缺少转写）、输出采样率、分段的拼接。
+- 加速与提速遵守同样的层级：会改变比特的加速（例如编译）至少保持在该引擎的 T1/T3 容差之内，并记录实测误差；默认路径上的提速必须逐比特不变。
+
+## Web UI 测试
+
+`mizuoto/webui/src/**/*.test.ts` 用 vitest 运行；`python scripts/dev.py test-web` 先运行 `bun run test`，再运行 `bun run typecheck`（vue-tsc）。除了组件和 store 的单元测试，还有几个守护整个界面的规则测试：`imports.test.ts`、`tokens.test.ts`、`layout.test.ts`、`ui/layers.test.ts` 和 `i18n/i18n.test.ts`（两种语言的键相同）；见 [Web UI](/docs/development-webui)。
+
+`python scripts/dev.py typegen-check` 重新生成 `schema.d.ts` 并与提交的版本比较；API 改了而类型没有重新生成时失败。
+
+文档站（`site/`）有自己的 vitest 测试；`src/lib/i18n-content.test.ts` 要求每个中文 `<slug>.mdx` 都有对应的 `<slug>.en.mdx`，且两个侧栏的页面顺序相同。
+
+## CI
+
+`.github/workflows/ci.yml` 在每次推送和拉取请求时运行四个作业，使用 torch 的 CPU 构建（`https://download.pytorch.org/whl/cpu`）：
+
+| 作业 | 环境 | 步骤 |
+| --- | --- | --- |
+| `host` | Ubuntu、Windows、macOS × Python 3.10、3.11、3.12、3.13 | 从 CPU 索引 `pip install torch`，再装 `-e . -e packages/native/fishspeech -e packages/native/indextts pytest pytest-cov ruff ty httpx tomli`；在 Ubuntu 的 3.11 上运行 `dev.py lint` 和 `dev.py typecheck-py`；所有组合都运行 `python -m pytest -q`（包括小模型测试） |
+| `torch` | Ubuntu、Python 3.12，torch 2.8.0 和最新版 | 用 Mizuoto 支持的最旧和最新的 torch 跑测试，发现 torch 的接口变化 |
+| `web` | Ubuntu、Python 3.11、bun | `dev.py web-install`、`dev.py test-web`、`dev.py typegen-check` |
+| `site` | Ubuntu、bun | 在 `site/` 里 `bun install --frozen-lockfile`、`bun run check`、`bun run test`、`bun run build` |
+
+`python scripts/dev.py check` 在本地运行同样的内容（只在你的平台和 Python 上）。契约套件和对照工具需要模型（对照还需要参照实现的环境），权重有几十 GB，所以不进 CI；发布工作流有自己的 wheel 冒烟测试（见[发布](/docs/development-release)）。
+
+<Callout type="info" title="CI 覆盖的是 CPU">
+CI 只有 CPU 版 torch。GPU 上的路径（CUDA 图、可选的注意力后端、显存流式加载的异步预取）在 CPU 上测的是逻辑；它们在 GPU 上的表现要在有 GPU 的机器上用契约套件和对照工具检查。
+</Callout>

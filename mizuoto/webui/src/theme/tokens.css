@@ -1,0 +1,132 @@
+/*
+ * Static Material Design 3 tokens: typography, shape, elevation, motion and state layers.
+ * Colour roles (--md-sys-color-*) are written by applyTheme.ts; the values below are only a
+ * first-paint fallback. Components use tokens only: no literal colours, radii or durations.
+ */
+@import '@fontsource-variable/roboto-flex';
+
+:root {
+  --md-ref-typeface-brand: 'Roboto Flex Variable', system-ui, sans-serif;
+  --md-ref-typeface-plain: 'Roboto Flex Variable', system-ui, sans-serif;
+
+  /* Type scale: size / line height, in rem. Regular 400, medium 500. */
+  --md-sys-typescale-display-large-size: 3.5625rem; --md-sys-typescale-display-large-line-height: 4rem;
+  --md-sys-typescale-display-medium-size: 2.8125rem; --md-sys-typescale-display-medium-line-height: 3.25rem;
+  --md-sys-typescale-display-small-size: 2.25rem; --md-sys-typescale-display-small-line-height: 2.75rem;
+  --md-sys-typescale-headline-large-size: 2rem; --md-sys-typescale-headline-large-line-height: 2.5rem;
+  --md-sys-typescale-headline-medium-size: 1.75rem; --md-sys-typescale-headline-medium-line-height: 2.25rem;
+  --md-sys-typescale-headline-small-size: 1.5rem; --md-sys-typescale-headline-small-line-height: 2rem;
+  --md-sys-typescale-title-large-size: 1.375rem; --md-sys-typescale-title-large-line-height: 1.75rem;
+  --md-sys-typescale-title-medium-size: 1rem; --md-sys-typescale-title-medium-line-height: 1.5rem; --md-sys-typescale-title-medium-weight: 500;
+  --md-sys-typescale-title-small-size: 0.875rem; --md-sys-typescale-title-small-line-height: 1.25rem; --md-sys-typescale-title-small-weight: 500;
+  --md-sys-typescale-body-large-size: 1rem; --md-sys-typescale-body-large-line-height: 1.5rem;
+  --md-sys-typescale-body-medium-size: 0.875rem; --md-sys-typescale-body-medium-line-height: 1.25rem;
+  --md-sys-typescale-body-small-size: 0.75rem; --md-sys-typescale-body-small-line-height: 1rem;
+  --md-sys-typescale-label-large-size: 0.875rem; --md-sys-typescale-label-large-line-height: 1.25rem; --md-sys-typescale-label-large-weight: 500;
+  --md-sys-typescale-label-medium-size: 0.75rem; --md-sys-typescale-label-medium-line-height: 1rem; --md-sys-typescale-label-medium-weight: 500;
+  --md-sys-typescale-label-small-size: 0.6875rem; --md-sys-typescale-label-small-line-height: 1rem; --md-sys-typescale-label-small-weight: 500;
+
+  /* Shape */
+  --md-sys-shape-corner-none: 0;
+  --md-sys-shape-corner-extra-small: 4px;
+  --md-sys-shape-corner-small: 8px;
+  --md-sys-shape-corner-medium: 12px;
+  --md-sys-shape-corner-large: 16px;
+  --md-sys-shape-corner-extra-large: 28px;
+  --md-sys-shape-corner-full: 9999px;
+
+  /* Elevation shadows, secondary to the surface tone */
+  --app-elevation-1: 0 1px 2px rgb(0 0 0 / 0.3), 0 1px 3px 1px rgb(0 0 0 / 0.15);
+  --app-elevation-2: 0 1px 2px rgb(0 0 0 / 0.3), 0 2px 6px 2px rgb(0 0 0 / 0.15);
+  --app-elevation-3: 0 4px 8px 3px rgb(0 0 0 / 0.15), 0 1px 3px rgb(0 0 0 / 0.3);
+
+  /* Motion */
+  --md-sys-motion-easing-emphasized: cubic-bezier(0.2, 0, 0, 1);
+  --md-sys-motion-easing-emphasized-decelerate: cubic-bezier(0.05, 0.7, 0.1, 1);
+  --md-sys-motion-easing-emphasized-accelerate: cubic-bezier(0.3, 0, 0.8, 0.15);
+  --md-sys-motion-easing-standard: cubic-bezier(0.2, 0, 0, 1);
+  --md-sys-motion-easing-standard-accelerate: cubic-bezier(0.3, 0, 1, 1);
+  --md-sys-motion-duration-short1: 50ms; --md-sys-motion-duration-short2: 100ms;
+  --md-sys-motion-duration-short3: 150ms; --md-sys-motion-duration-short4: 200ms;
+  --md-sys-motion-duration-medium1: 250ms; --md-sys-motion-duration-medium2: 300ms;
+  --md-sys-motion-duration-medium3: 350ms; --md-sys-motion-duration-medium4: 400ms;
+  --md-sys-motion-duration-long1: 450ms; --md-sys-motion-duration-long2: 500ms;
+  --md-sys-motion-duration-long3: 550ms; --md-sys-motion-duration-long4: 600ms;
+
+  /* State layers (values from Google's token file in @material/web 2.5.0) */
+  --md-sys-state-hover-state-layer-opacity: 0.08;
+  --md-sys-state-focus-state-layer-opacity: 0.12;
+  --md-sys-state-pressed-state-layer-opacity: 0.12;
+  --md-sys-state-dragged-state-layer-opacity: 0.16;
+  --app-disabled-content-opacity: 0.38;
+  --app-disabled-container-opacity: 0.12;
+  /* The box of an outlined text field or select (without its supporting text). */
+  --app-field-height: 56px;
+
+  /* Widths that grow with the window instead of stopping at a fixed size. Each is a floor for a
+     small window, a share of the viewport, and a ceiling where a wider line stops being readable. */
+  --app-width-sheet: clamp(360px, 30vw, 640px);         /* side sheets */
+  --app-width-dialog-small: clamp(400px, 34vw, 640px);
+  --app-width-dialog-medium: clamp(640px, 50vw, 960px);
+  --app-width-dialog-large: clamp(1040px, 80vw, 1680px);
+  --app-width-snackbar: clamp(560px, 40vw, 880px);
+  --app-width-menu: clamp(360px, 24vw, 560px);          /* the widest a menu grows for a long name */
+  --app-width-text: clamp(480px, 50vw, 880px);          /* a paragraph of help or empty-state text */
+
+  /* Stacking inside the page. A dropdown that lists in place (voice, device) opens over the
+     sections but under the page's sticky action footer, which it scrolls clear of rather than
+     covers; a tooltip clears both. What opens over the page (sheets, dialogs, menus, the snackbar)
+     is stacked by ui/layers.ts in the order it opened. */
+  --app-z-dropdown: 2;
+  --app-z-page-footer: 3;
+  --app-z-tooltip: 4;
+
+  /* Spacing: 4px base unit */
+  --app-space-1: 4px; --app-space-2: 8px; --app-space-3: 12px; --app-space-4: 16px;
+  --app-space-5: 20px; --app-space-6: 24px; --app-space-8: 32px;
+
+  /* First-paint fallback colours */
+  --md-sys-color-surface: #f9faef;
+  --md-sys-color-on-surface: #191d16;
+}
+
+:root[data-theme='dark'] {
+  --md-sys-color-surface: #11140e;
+  --md-sys-color-on-surface: #e1e3d9;
+}
+
+*, *::before, *::after { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  height: 100%;
+  background: var(--md-sys-color-surface);
+  color: var(--md-sys-color-on-surface);
+  font-family: var(--md-ref-typeface-plain);
+  font-size: var(--md-sys-typescale-body-large-size);
+  line-height: var(--md-sys-typescale-body-large-line-height);
+  -webkit-font-smoothing: antialiased;
+}
+
+#app { height: 100%; }
+
+.type-display-small { font-size: var(--md-sys-typescale-display-small-size); line-height: var(--md-sys-typescale-display-small-line-height); }
+.type-headline-small { font-size: var(--md-sys-typescale-headline-small-size); line-height: var(--md-sys-typescale-headline-small-line-height); }
+.type-title-large { font-size: var(--md-sys-typescale-title-large-size); line-height: var(--md-sys-typescale-title-large-line-height); }
+.type-title-medium { font-size: var(--md-sys-typescale-title-medium-size); line-height: var(--md-sys-typescale-title-medium-line-height); font-weight: var(--md-sys-typescale-title-medium-weight); }
+.type-title-small { font-size: var(--md-sys-typescale-title-small-size); line-height: var(--md-sys-typescale-title-small-line-height); font-weight: var(--md-sys-typescale-title-small-weight); }
+.type-body-medium { font-size: var(--md-sys-typescale-body-medium-size); line-height: var(--md-sys-typescale-body-medium-line-height); }
+.type-body-small { font-size: var(--md-sys-typescale-body-small-size); line-height: var(--md-sys-typescale-body-small-line-height); }
+.type-label-large { font-size: var(--md-sys-typescale-label-large-size); line-height: var(--md-sys-typescale-label-large-line-height); font-weight: var(--md-sys-typescale-label-large-weight); }
+.type-label-medium { font-size: var(--md-sys-typescale-label-medium-size); line-height: var(--md-sys-typescale-label-medium-line-height); font-weight: var(--md-sys-typescale-label-medium-weight); }
+.muted { color: var(--md-sys-color-on-surface-variant); }
+
+:focus-visible { outline: 2px solid var(--md-sys-color-secondary); outline-offset: 2px; }
+:focus:not(:focus-visible) { outline: none; }
+
+::selection { background: var(--md-sys-color-primary-container); color: var(--md-sys-color-on-primary-container); }
+
+.visually-hidden {
+  position: absolute !important; width: 1px; height: 1px; overflow: hidden;
+  clip: rect(0 0 0 0); white-space: nowrap;
+}

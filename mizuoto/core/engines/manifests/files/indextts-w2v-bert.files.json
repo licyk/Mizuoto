@@ -1,0 +1,21 @@
+{
+ "repo": "facebook/w2v-bert-2.0",
+ "revision": "da985ba0987f70aaeb84a80f2851cfac8c697a7b",
+ "files": [
+  {
+   "path": "config.json",
+   "size": 1874,
+   "sha256": "f5572bd5998b68182e9c328a43127ed21fed687f6910497136b91a4e3b0e3675"
+  },
+  {
+   "path": "model.safetensors",
+   "size": 2322063736,
+   "sha256": "eb890c9660ed6e3414b6812e27257b8ce5454365d5490d3ad581ea60b93be043"
+  },
+  {
+   "path": "preprocessor_config.json",
+   "size": 275,
+   "sha256": "8e6281aad64f97e40534135a59dcc5d33571efae376f2a25adf5551951897ab4"
+  }
+ ]
+}

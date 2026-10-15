@@ -1,0 +1,84 @@
+---
+title: "IndexTTS"
+description: "The IndexTTS engine as implemented in Mizuoto's separate mizuoto-indextts distribution: IndexTTS-1.5, 2 and 2.5, the GPT-2 with beam sampling, conditioning, emotion and the s2mel decoder, what reproduces upstream exactly, memory and GPU decoding, and its parity results."
+icon: Smile
+---
+
+bilibili's zero-shot TTS ([index-tts/index-tts](https://github.com/index-tts/index-tts), bilibili Model Use License). The port is under the same licence, so it ships as a distribution of its own, `mizuoto-indextts` (`packages/native/indextts`, package `mizuoto_indextts`, with `LICENSE.txt`), registered under `mizuoto.engines` (`indextts = mizuoto_indextts:IndexTtsEngine`). Downloading and speaking need the licence accepted, and cloning needs a consent statement. On the CPU in fp32 with the same seed IndexTTS-1.5, 2 and 2.5 are identical to Mizuoto 0.1 through the whole stack. User-facing details: [Engines in depth](/docs/advanced-engines#indextts).
+
+## Variants and files
+
+| Variant | Catalogue model | Rate | What it adds |
+| --- | --- | --- | --- |
+| `v1_5` | `indextts/v1.5` | 24 kHz | Cloning without a transcript, Chinese and English |
+| `v2` | `indextts/v2` | 22.05 kHz | Emotion from a clip, from eight weights, or from a description |
+| `v2_5` | `indextts/v2.5` | 22.05 kHz | Japanese and Spanish, a language token, and a speed (`duration_factor = 1 / speed`) |
+
+- 1.5 reads `config.yaml`, the GPT and BigVGAN checkpoints it names and the SentencePiece model; a voice's cache is `cond_mel.pt`.
+- 2 and 2.5 read `config.yaml`, `gpt.pth`, `s2mel.pth`, `wav2vec2bert_stats.pt`, the speaker and emotion matrices, `glossary.yaml` and the emotion model's folder (`qwen0.6bemo4-merge`); 2.5 also `codec.pth` and its tiktoken vocabulary. Shared assets: `indextts/w2v-bert`, `indextts/campplus` (`campplus_cn_common.bin`), `indextts/bigvgan`, and for 2 only `indextts/semantic-codec` (2.5 never reads it, so its catalogue entry does not download it).
+
+Precision: fp32 by default. On a CUDA GPU, IndexTTS-2 runs its GPT in fp16 when `engines.indextts.dtype` is `fp16`, and 2.5 in bf16 when it is `auto` or `bf16`, as 0.1 chose.
+
+## How it works
+
+Per text segment, IndexTTS-2:
+
+1. **Voice prompt** (cached with the voice): the clip at 22.05 kHz (at most 15 s) and its 16 kHz copy; w2v-BERT 2.0's hidden state 17, normalised, conditions the GPT; the MaskGCT semantic codec quantises it into the decoder's prompt codes; CAM++ gives the style; the mel is the decoder's prompt.
+2. **Emotion**: the speaker clip's, another clip's (mixed by `emo_alpha`), or eight weights mixed in through the emotion matrices (rows picked by CAM++ similarity); a description is turned into weights by the emotion model (Qwen3-0.6B, greedy).
+3. **GPT** (`UnifiedVoice`, a 24-layer GPT-2): beam sampling of semantic codes, then a second pass over them for their latents.
+4. **s2mel**: a length regulator and Seed-VC's DiT as a CFM (25 Euler steps, guidance 0.7) make the mel.
+5. **BigVGAN v2** makes 22.05 kHz audio; segments are joined with silence, the tail faded and the result quantised to 16 bits, as upstream returns it.
+
+2.5 conditions the GPT on the projected CAM++ embedding and a language embedding instead of the Conformer and perceiver over w2v-BERT, reads text through tiktoken with a `<|lang|>` prefix, and turns codes into decoder features with its own codec (RepCodec, a Vocos backbone, ×2 upsampling) instead of the GPT's latents. 1.5 has no emotion: the reference's log-mel conditions the GPT, and BigVGAN v1 with its ECAPA speaker encoder turns the GPT's latents directly into audio.
+
+| Module | What it is |
+| --- | --- |
+| `engine.py` | `IndexTTS2.infer` (2, 2.5) and the 1.5 path (`LoadedIndexTts15`): conditioning, emotion, segments, DiT, BigVGAN, fade-out |
+| `gpt.py` | `UnifiedVoice`: transformers 4.52's GPT-2 (`Conv1D` as `addmm`, tanh GELU, SDPA) and its beam sampling with `BeamSearchScorer` |
+| `conditioning.py` | IndexTTS's Conformer and the perceiver resampler |
+| `codec.py` | 2.5's `EnhancedCodec` decoding |
+| `qwen_emotion.py` | The emotion model: Qwen3-0.6B, greedy, its chat template, the answer parsed into eight weights |
+| `text.py` | The 1.5/2 front end: WeTextProcessing's FSTs through kaldifst (`TnProcessor`), `TextNormalizer`, SentencePiece, `split_segments` |
+| `text25.py` | The 2.5 front end: punctuation map, normalisation, fugashi for Japanese, tiktoken with `<\|lang\|>` |
+| `assets/tn/` | WeTextProcessing's Chinese and English tagger and verbaliser FSTs (10 MB) |
+
+Shared: `nn/ssl/w2vbert.py`, `nn/codecs/repcodec.py`, `nn/transformer/seedvc.py`, `nn/vocoders/bigvgan.py` (v2; v1 with ECAPA), `nn/speaker/campplus_torch.py`, `nn/vocoders/vocos.py`, `nn/dsp/` (`seamless`, `kaldi`, `mel`, `resample`, `wav`), `runtime/lm/qwen.py`, `runtime/sampling.py`, `runtime/graphs.py`, `text/normalize/wetext.py`, `text/tokenize/bpe.py`, `runtime/compile.py`.
+
+## What reproduces upstream
+
+- **GPT-2 as transformers 4.52 computes it**: `Conv1D` as `addmm`, tanh GELU, SDPA causal with no mask on the prompt and unmasked on each new token.
+- **Beam sampling**, upstream's legacy transformers path: the log-softmax through repetition penalty (over every id, the prompt's placeholder ids included), temperature, top-k and top-p (keeping at least two), the beams' scores added, `2 × num_beams` candidates drawn without replacement, `BeamSearchScorer`'s hypotheses.
+- **IndexTTS-1.5 without a KV cache** unless it runs in fp16, as upstream: each step reruns the whole sequence, and with a cache the sums would differ.
+- **Draw order**: every draw comes from the request's generator in upstream's order (the GPT, then the DiT's noise).
+- **The emotion embedding** is read from the clip again at 16 kHz, not from the 22.05 kHz copy resampled: it is a separate field of the voice cache.
+- **Text (1.5, 2)** is normalised by WeTextProcessing's own FSTs applied with kaldifst. Upstream runs pynini on Linux and other FSTs elsewhere; Mizuoto gives the Linux behaviour on every platform. Names and pinyin are numbered in first-seen order (upstream uses a `set`'s order, which varies between runs).
+- **2.5's text**: a language other than zh, en, ja or es (and an unset one) is sent as `zhen`, as upstream does. NeMo's Japanese and Spanish normalisation is absent upstream too, so that text passes unchanged; Japanese needs fugashi (`mizuoto-indextts[ja]`).
+
+## Deviations
+
+- **w2v-BERT's layer-drop draws are not made**: they never change the output in eval mode.
+- **Sizes from the configuration.** Sizes upstream hard-codes (w2v-BERT's width, `gpt_layer`) come from the configuration, so tiny test models build; the real models give the same numbers.
+- **Strict loading.** Checkpoints load strictly; upstream keeps random weights for missing keys (none are missing in the published checkpoints).
+- **Not ported**: TensorRT, upstream's accelerated engine and the BigVGAN CUDA kernel (0.1's load options `use_accel`, `use_trt`, `trt_precision`, `use_cuda_kernel`), and 2.5's low-memory text split (upstream splits text into 40-character pieces on GPUs under 10 GB; Mizuoto's runtime manages memory instead). `use_torch_compile` turns on `compute.compile` for the s2mel DiT and BigVGAN.
+
+## Memory and speed
+
+Phases: w2v-BERT, CAM++, the semantic codec and the regulator for a voice that is not cached (or w2v-BERT for an emotion clip); the emotion model for an emotion text; the GPT (`kind="sequence"`; its GPT-2 `Conv1D` layers stream like linear layers); the s2mel; BigVGAN. A clone of a cached voice never places w2v-BERT or CAM++. If BigVGAN runs out of memory with `compute.oom_fallback` on, it decodes in tiles (IndexTTS 2/2.5). The GPT's working memory is sized by each segment: its text tokens and 24 codes a token (speech runs at about 5), within `max_mel_tokens`, for every beam, in the dtype it computes in.
+
+Beam sampling used to wait for the device about ten times a step (`torch.multinomial`'s checks, the scorer reading each candidate with `.item()`, the stopping test, the beam reorder, the position embedding's index tensor). Now once: the draw is `multinomial`'s own `topk(p / Exp(1), 2 × beams)` (`runtime.sampling.multinomial_draws`, the same ids and generator state on the CPU and CUDA); the candidates' scores, tokens and beams are read back together and the scorer decides on the host from those values; the position embedding is its table's row. With `compute.cuda_graphs` (NVIDIA, the GPT wholly on its device, with a KV cache: IndexTTS 2/2.5, and 1.5 in fp16) the GPT-2's one-token steps of all beams run as graphs around each layer's attention; the cache, its beam reorder and the sampling stay eager. The same audio, 2.6–3.2 times faster per step on the 1.5's sizes.
+
+`compute.compile` on a CPU in fp32: the s2mel DiT's warm time drops 7 %, BigVGAN's 20 %; the audio stays within 6.1e-5 of eager (87.7 dB).
+
+## Training
+
+None: IndexTTS publishes no training code for its TTS models, and the manifest declares no method.
+
+## Parity
+
+IndexTTS-1.5, 2 and 2.5 are identical sample for sample to 0.1 on the CPU in fp32 through the stack in all four cases: a 1.5 clone, a 2 clone, IndexTTS-2 with emotion weights and a 2.5 Chinese clone. At component level also the emotion model, every text front end, and the GPT with and without a KV cache. The contract suite passes (18 tests).
+
+## Limitations
+
+- No training method.
+- 2.5's Japanese and Spanish text is not normalised (as upstream); Japanese needs the `ja` extra.
+- Results may not be used to train other engines (`trains_others = false`), and cloning needs the consent statement the licence requires.

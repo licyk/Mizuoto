@@ -1,0 +1,71 @@
+---
+title: "F5-TTS"
+description: "Mizuoto 中实现的 F5-TTS 引擎：v1 Base、v0 Base 和 E2，DiT 与 UNetT，CFM 采样器与 Vocos，哪些做法与上游完全一致，显存与编译说明，全量微调，以及对照结果。"
+icon: Waves
+---
+
+一个流匹配语音合成：在参考音频的 mel 谱之后补全新的 mel 谱，再用 Vocos 转成音频（[SWivid/F5-TTS](https://github.com/SWivid/F5-TTS)；代码 MIT，预训练权重 CC-BY-NC-4.0）。代码：`mizuoto/engines/f5tts`。在 CPU 上以 fp32、同一种子运行时，三个模型的克隆和语音编辑都与 Mizuoto 0.1 完全相同，它的训练器也逐字节给出 0.1 导出的权重。面向用户的说明见[引擎详解](/docs/advanced-engines#f5-tts)。
+
+## 变体与文件
+
+| 变体 | 目录中的模型 | 主干网络 |
+| --- | --- | --- |
+| `v1_base` | `f5tts/v1-base` | DiT（宽 1024、22 层），文本填充被掩码 |
+| `base` | `f5tts/base` | 只在一个头上用旋转位置编码的 DiT（`pe_attn_head = 1`） |
+| `e2_base` | `f5tts/e2-base` | E2-TTS 的 UNetT：带跳连的扁平 transformer，x-transformers 的 RMSNorm |
+
+三者都能克隆（必须有参考文本）和编辑语音。模型目录包含检查点（`*.safetensors`，否则 `*.pt`）、`vocab.txt` 以及 `vocos/config.yaml` + `vocos/pytorch_model.bin`。E2 的仓库没有词表，所以上游自带的 `vocab.txt` 作为包数据随引擎发布，供它使用。
+
+精度：计算能力 7 及以上的 CUDA GPU 上用 fp16，与上游的 `load_checkpoint` 判断相同；其他设备用 fp32。
+
+## 工作原理
+
+文本（参考文本加上新文本，汉字转成带声调的拼音）经 ConvNeXtV2 块嵌入；transformer 以参考音频的 mel 为条件，预测从噪声到 mel 帧的流；ODE 求解器在固定的时间网格上积分，无分类器引导作为一个大小为 2 的批次计算；Vocos 把 mel 转成 24 kHz 音频。没有时长模型：长度来自参考音频的语速，或者来自 `duration`。
+
+| 模块 | 是什么 |
+| --- | --- |
+| `engine.py` | 参考音频预处理、分块、`CFM.sample`（带种子的噪声、EPSS 或 sway 时间网格、Euler 或中点法步、引导）、Vocos、交叉淡化；`edit` 按上游的 `speech_edit.py` |
+| `text.py` | 字符与拼音（`f5_tts.model.utils`）、上游的分块 |
+| `vocab.txt` | 上游自带的词表 |
+| `train.py` | `F5Trainer`（方法 `full`） |
+
+共享：`nn/transformer/dit.py`（AdaLN-zero、ConvNeXtV2 文本块、交错式旋转位置编码）、`nn/transformer/unett.py`、`nn/flow/cfm.py`（`odeint_fixed`、`epss_timesteps`、`sway`）、`nn/vocoders/vocos.py`、`nn/dsp/mel.py`、`nn/dsp/resample.py`、`nn/dsp/tiles.py`、`runtime/compile.py`。
+
+## 与上游一致的做法
+
+- **参考音频**按 `preprocess_ref_audio_text` 的方式裁剪和填充，响度调到 `target_rms`，用 torchaudio 的 `Resample` 重采样。pydub 的 50 毫秒填充按 `audioop.ratecv` 的帧数复现（`edge_pad`：24 kHz 下 1198 个采样，而不是 1200），因为 Python 3.13 已经没有 `audioop`。
+- **文本。** 以单字节字符结尾的参考文本会补一个空格，与 `infer_batch_process` 相同。
+- **分块**按上游的方式切分，按顺序生成，并用上游的交叉淡化拼接；`duration` 也按上游的方式分摊到各块。
+- **ODE。** torchdiffeq 固定网格的 Euler 和中点法步即 `nn.flow.cfm.odeint_fixed`；步数为 5、6、7、10、12 或 16 时用上游的 Empirically Pruned Step Sampling 网格，否则用线性网格加 sway 采样。噪声按上游的方式抽取，逐条、以模型的 dtype。
+- **x-transformers 的交错式旋转位置编码和 RMSNorm** 原样移植。
+- **GPU 上的精度。** 与上游相同，模型*先*转换到它的 dtype，再复制检查点，所以在 GPU 上旋转位置编码的 `inv_freq` 也是 fp16，角度以 fp16 计算。
+
+## 有意的差异
+
+- **按顺序生成各块。** 上游在一个共享全局随机数生成器的线程池里生成长文本的各块，所以它自己的输出取决于线程时序；0.1 的适配层按顺序生成，Mizuoto 也是如此。
+- 只提供 Vocos 声码器；上游 v0 模型的 BigVGAN 版本不在模型目录中。
+
+## 显存与速度
+
+两个阶段：transformer 加 mel（每个 ODE 步；引导使批次翻倍）和 Vocos。开启 `compute.oom_fallback` 时，若 Vocos 显存不足，它会以 256 帧为一块、重叠 32 帧并交叉淡化地分块解码（`applied.fallbacks` 会注明）。
+
+`compute.compile` 用 `torch.compile(dynamic=True)` 包装 DiT 或 UNetT。在 CPU 上以 fp32、8 线程运行时，transformer 预热后的耗时下降 23 %（一个请求从 60 秒降到 45 秒）；第一个请求要付出约 30 秒的编译时间；音频与 eager 的差异在 9.2e-5 以内（89 dB）。`compute.cpu_allocator` 和 `compute.cpu_threads` 的 CPU 分配器与线程绑定，能让 F5-TTS 在 Linux 上快 10–20 %，且不改变任何结果。
+
+## 训练
+
+方法 `full`（阶段 `prepare`、`train`、`export`）：上游的 `finetune_cli` 方案，不需要 accelerate、datasets、wandb 或 ema_pytorch。两边用同样的种子时，它在 CPU 上逐字节给出 0.1 的损失、学习率和导出的 `model_<update>.safetensors`。（0.1 自己从未播种：它的条件丢弃来自未播种的 `random`。）
+
+- **按上游的顺序抽样**：按上游的构建顺序做模型的随机初始化（UNetT 最后才创建一层的跳连投影），前两个 epoch 各一个数据加载 worker 的种子（持久化的加载器；accelerate 的 `skip_first_batches` 副本会遍历 epoch 0），然后每个批次依次是片段、噪声、时间、两次 `random()` 调用和 dropout 掩码。
+- **第 *e* ≥ 1 个 epoch 用种子 666 + *e* − 1 打乱**：accelerate 的加载器会把采样器的 epoch 重置为它自己的迭代次数。
+- **mel 在单线程上计算**，与上游的加载 worker 相同；线程更多会改变滤波器组乘积的求和。
+- **导出**保留使用上游键名的 EMA 权重、词表和声码器，所以 0.1 和 Mizuoto 都能加载。
+- `training.memory`：对 transformer 的块做梯度检查点，结果相同；`low` 把 EMA 副本放在内存里；`lowest` 把 AdamW 的状态也放进去（CPU 上相同）。
+
+## 对照结果
+
+全部 6 个完整链路用例在 CPU 上以 fp32 与 0.1 逐采样相同：v1 Base、v0 Base 和 E2 的英文与中文克隆、微调后的模型，以及语音编辑。另有两个用例用一种实现合成另一种实现的训练导出，也都相同。契约套件通过（12 项）。
+
+## 限制
+
+- 预训练权重是 CC-BY-NC-4.0，基于它们的微调结果也是；输出带有标记。
+- 在 GPU 上模型像上游一样以 fp16 运行；Mizuoto 在那里不提供 fp32 的旋转位置编码。

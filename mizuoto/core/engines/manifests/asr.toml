@@ -1,0 +1,38 @@
+# Speech recognition, used by Mizuoto itself: reference transcripts, dataset labels, sanity checks
+#. It synthesizes nothing.
+id = "asr"
+title = "Speech recognition"
+description = "Whisper large-v3-turbo: transcribes reference clips and datasets in about 100 languages."
+internal = true
+devices = ["cuda", "rocm", "xpu", "mps", "cpu"]
+languages = ["*"]
+ops = ["transcribe"]
+
+[upstream]
+url = "https://github.com/openai/whisper"
+
+[licence]
+id = "mit"
+name = "MIT (Whisper weights)"
+url = "https://huggingface.co/openai/whisper-large-v3-turbo"
+
+[variants.whisper]
+title = "Whisper"
+sample_rate = 16000
+capabilities = []
+
+[options.beam_size]
+type = "int"
+default = 1
+min = 1
+max = 10
+help = "Beam search width; 1 keeps the default of 5 beams (as transformers' speech-recognition pipeline did)."
+
+[[models]]
+id = "asr/whisper-large-v3-turbo"
+variant = "whisper"
+title = "Whisper large-v3-turbo"
+description = "OpenAI's distilled large-v3: near large-v3 accuracy at several times the speed."
+vram_mb = 2000
+recommended = true
+files = { hf = "openai/whisper-large-v3-turbo", manifest = "asr-whisper-large-v3-turbo.files.json" }

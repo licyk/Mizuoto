@@ -1,0 +1,11 @@
+{
+ "repo": "amphion/MaskGCT",
+ "revision": "265c6cef07625665d0c28d2faafb1415562379dc",
+ "files": [
+  {
+   "path": "semantic_codec/model.safetensors",
+   "size": 177183712,
+   "sha256": "ec947271175d8cad75ec37e83aa487e27c97a0f72a303393772da5ffa84bddf2"
+  }
+ ]
+}

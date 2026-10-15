@@ -1,0 +1,25 @@
+[build-system]
+requires = ["setuptools", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mizuoto-fishspeech"
+description = "Fish Speech S2 for Mizuoto's native runtime (Fish Audio Research License)"
+requires-python = ">=3.10"
+dynamic = ["version"]
+license = "LicenseRef-Fish-Audio-Research"
+# A separate distribution because the Fish Audio Research License covers this port. It runs inside Mizuoto's own environment and registers itself as an engine.
+dependencies = ["mizuoto", "tokenizers>=0.20", "safetensors"]
+
+[project.entry-points."mizuoto.engines"]
+fishspeech = "mizuoto_fishspeech:FishSpeechEngine"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["mizuoto_fishspeech*"]
+
+[tool.setuptools.package-data]
+mizuoto_fishspeech = ["LICENSE.md"]
+
+[tool.setuptools.dynamic]
+version = { attr = "mizuoto_fishspeech.VERSION" }

@@ -1,0 +1,368 @@
+# GPT-SoVITS.
+id = "gptsovits"
+title = "GPT-SoVITS"
+description = "Few-shot cloning from a 3–10 s clip, and the classic fine-tuning path: a voice's own GPT and SoVITS weights, switched in per request. v2, v2Pro and v2ProPlus at 32 kHz; v4 and v5 at 48 kHz."
+devices = ["cuda", "rocm", "xpu", "mps", "cpu"]
+languages = ["zh", "en", "ja", "ko", "yue"]
+ops = ["switch_weights"]
+
+[weights]
+roles = { gpt = ".ckpt", sovits = ".pth" }
+help = "A fine-tuned pair: the GPT weights (.ckpt) and the SoVITS weights (.pth), from GPT-SoVITS's GPT_weights_* and SoVITS_weights_* folders."
+
+[upstream]
+url = "https://github.com/RVC-Boss/GPT-SoVITS"
+commit = "1b47ca07ef43a284e0b8bd7f29d3e1e3ff76082a"
+
+[licence]
+id = "mit"
+name = "MIT License"
+url = "https://github.com/RVC-Boss/GPT-SoVITS/blob/main/LICENSE"
+
+# -- variants -------------------------------------------------------------------------
+
+[variants.v2]
+title = "v2"
+sample_rate = 32000
+capabilities = ["clone", "clone_no_transcript", "multi_reference", "finetuned_voice", "speed", "batch", "long_text", "stream_audio", "seed"]
+stream_granularity = "token"
+max_batch = 20
+weights_version = "v2"
+
+[variants.v2.reference]
+min_seconds = 3.0
+max_seconds = 10.0
+max_references = 4
+
+[variants.v2pro]
+title = "v2Pro"
+sample_rate = 32000
+capabilities = ["clone", "clone_no_transcript", "multi_reference", "finetuned_voice", "speed", "batch", "long_text", "stream_audio", "seed"]
+stream_granularity = "token"
+max_batch = 20
+weights_version = "v2Pro"
+
+[variants.v2pro.reference]
+min_seconds = 3.0
+max_seconds = 10.0
+max_references = 4
+
+[variants.v2proplus]
+title = "v2ProPlus"
+sample_rate = 32000
+capabilities = ["clone", "clone_no_transcript", "multi_reference", "finetuned_voice", "speed", "batch", "long_text", "stream_audio", "seed"]
+stream_granularity = "token"
+max_batch = 20
+weights_version = "v2ProPlus"
+
+[variants.v2proplus.reference]
+min_seconds = 3.0
+max_seconds = 10.0
+max_references = 4
+
+[variants.v4]
+title = "v4"
+sample_rate = 48000
+capabilities = ["clone", "multi_reference", "finetuned_voice", "speed", "batch", "long_text", "stream_audio", "seed"]
+stream_granularity = "segment"
+max_batch = 20
+weights_version = "v4"
+
+[variants.v4.reference]
+min_seconds = 3.0
+max_seconds = 10.0
+max_references = 4
+
+[variants.v5turbo]
+title = "v5 Turbo"
+sample_rate = 48000
+capabilities = ["clone", "multi_reference", "finetuned_voice", "speed", "batch", "long_text", "stream_audio", "seed"]
+stream_granularity = "segment"
+max_batch = 20
+weights_version = "v5turbo"
+
+[variants.v5turbo.reference]
+min_seconds = 3.0
+max_seconds = 10.0
+max_references = 4
+
+# -- common parameters ----------------------------------------------------------------
+
+[params.temperature]
+target = "temperature"
+min = 0.01
+max = 2.0
+step = 0.05
+default = 1.0
+
+[params.top_p]
+target = "top_p"
+min = 0.0
+max = 1.0
+step = 0.01
+default = 1.0
+
+[params.top_k]
+target = "top_k"
+type = "int"
+min = 1
+max = 100
+default = 15
+
+[params.repetition_penalty]
+target = "repetition_penalty"
+min = 0.0
+max = 2.0
+step = 0.01
+default = 1.35
+
+[params.speed]
+target = "speed_factor"
+min = 0.6
+max = 1.65
+step = 0.05
+default = 1.0
+
+[params.num_steps]
+target = "sample_steps"
+type = "int"
+min = 4
+max = 128
+default = 32
+variants = ["v4", "v5turbo"]
+help = "Steps of the SoVITS flow (v5 Turbo defaults to 4)."
+
+[params.seed]
+target = "seed"
+type = "int"
+min = 0
+max = 4294967295
+
+[params.segment_silence_ms]
+target = "fragment_interval"
+type = "int"
+min = 0
+max = 5000
+default = 300
+
+# -- engine options -------------------------------------------------------------------
+
+[options.text_split_method]
+type = "enum"
+default = "cut1"
+choices = ["cut0", "cut1", "cut2", "cut3", "cut4", "cut5"]
+group = "basic"
+help = "How the text is cut: cut0 not at all, cut1 every four sentences, cut2 every 50 characters, cut3 at Chinese full stops, cut4 at English full stops, cut5 at every punctuation mark."
+
+[options.batch_size]
+type = "int"
+default = 1
+min = 1
+max = 200
+help = "Text segments decoded together (faster on a GPU, more memory)."
+
+[options.batch_threshold]
+type = "float"
+default = 0.75
+min = 0.0
+max = 1.0
+step = 0.05
+
+[options.split_bucket]
+type = "bool"
+default = true
+help = "Group segments of similar length into batches."
+
+[options.parallel_infer]
+type = "bool"
+default = true
+help = "Decode a batch in parallel."
+
+[options.overlap_length]
+type = "int"
+default = 2
+min = 0
+max = 20
+help = "Semantic tokens two streamed chunks share."
+
+[options.min_chunk_length]
+type = "int"
+default = 16
+min = 1
+max = 100
+help = "The fewest semantic tokens in a streamed chunk."
+
+[options.fixed_length_chunk]
+type = "bool"
+default = false
+help = "Streamed chunks of fixed length: the first sound comes sooner, a little rougher."
+
+# -- shared assets --------------------------------------------------------------------
+
+[[assets]]
+id = "gptsovits/encoders"
+title = "GPT-SoVITS encoders"
+description = "Chinese HuBERT (speech features), Chinese RoBERTa (text features), the speaker-verification model of v2Pro, and the language detector."
+files = { hf = "lj1995/GPT-SoVITS", include = ["chinese-hubert-base/*", "chinese-roberta-wwm-ext-large/*", "sv/*"], manifest = "gptsovits-encoders.files.json" }
+extra = [{ hf = "XXXXRT/GPT-SoVITS-Pretrained", subdir = "pretrained_models", include = ["pretrained_models/fast_langdetect/lid.176.bin"], manifest = "gptsovits-langdetect.files.json" }]
+
+[[assets]]
+id = "gptsovits/g2pw"
+title = "G2PW"
+description = "Chinese polyphone disambiguation for the text front-end."
+files = { hf = "XXXXRT/GPT-SoVITS-Pretrained", include = ["G2PWModel.zip"], unpack = true, manifest = "gptsovits-g2pw.files.json" }
+
+[[assets]]
+id = "gptsovits/nltk-data"
+title = "NLTK data"
+description = "The English part-of-speech tagger and tokenizers of the text front-end."
+files = { hf = "XXXXRT/GPT-SoVITS-Pretrained", include = ["nltk_data.zip"], unpack = true, manifest = "gptsovits-nltk.files.json" }
+
+[[assets]]
+id = "gptsovits/open-jtalk"
+title = "Open JTalk dictionary"
+description = "The Japanese text front-end's dictionary."
+files = { hf = "XXXXRT/GPT-SoVITS-Pretrained", include = ["open_jtalk_dic_utf_8-1.11.tar.gz"], unpack = true, manifest = "gptsovits-open-jtalk.files.json" }
+
+# -- models ---------------------------------------------------------------------------
+
+[[assets]]
+id = "gptsovits/s2d-v2"
+title = "v2 discriminator"
+description = "The pretrained SoVITS discriminator v2 fine-tunes start from (training only)."
+files = { hf = "lj1995/GPT-SoVITS", include = ["gsv-v2final-pretrained/s2D2333k.pth"], manifest = "gptsovits-s2d-v2.files.json" }
+
+[[assets]]
+id = "gptsovits/s2d-v2pro"
+title = "v2Pro discriminator"
+description = "The pretrained SoVITS discriminator v2Pro fine-tunes start from (training only)."
+files = { hf = "lj1995/GPT-SoVITS", include = ["v2Pro/s2Dv2Pro.pth"], manifest = "gptsovits-s2d-v2pro.files.json" }
+
+[[assets]]
+id = "gptsovits/s2d-v2proplus"
+title = "v2ProPlus discriminator"
+description = "The pretrained SoVITS discriminator v2ProPlus fine-tunes start from (training only)."
+files = { hf = "lj1995/GPT-SoVITS", include = ["v2Pro/s2Dv2ProPlus.pth"], manifest = "gptsovits-s2d-v2proplus.files.json" }
+
+[[models]]
+id = "gptsovits/v2-base"
+variant = "v2"
+title = "GPT-SoVITS v2"
+description = "The pretrained v2 pair, 32 kHz."
+vram_mb = 2500
+assets = ["gptsovits/encoders", "gptsovits/g2pw", "gptsovits/nltk-data", "gptsovits/open-jtalk"]
+files = { hf = "lj1995/GPT-SoVITS", include = ["gsv-v2final-pretrained/s1bert25hz-5kh-longer-epoch=12-step=369668.ckpt", "gsv-v2final-pretrained/s2G2333k.pth"], manifest = "gptsovits-v2.files.json" }
+
+[[models]]
+id = "gptsovits/v2pro-base"
+variant = "v2pro"
+title = "GPT-SoVITS v2Pro"
+description = "v2 with speaker-verification conditioning: closer timbre at v2's speed, 32 kHz."
+vram_mb = 2500
+recommended = true
+assets = ["gptsovits/encoders", "gptsovits/g2pw", "gptsovits/nltk-data", "gptsovits/open-jtalk"]
+files = { hf = "lj1995/GPT-SoVITS", include = ["s1v3.ckpt", "v2Pro/s2Gv2Pro.pth"], manifest = "gptsovits-v2pro.files.json" }
+
+[[models]]
+id = "gptsovits/v2proplus-base"
+variant = "v2proplus"
+title = "GPT-SoVITS v2ProPlus"
+description = "A larger v2Pro SoVITS, 32 kHz."
+vram_mb = 2800
+assets = ["gptsovits/encoders", "gptsovits/g2pw", "gptsovits/nltk-data", "gptsovits/open-jtalk"]
+files = { hf = "lj1995/GPT-SoVITS", include = ["s1v3.ckpt", "v2Pro/s2Gv2ProPlus.pth"], manifest = "gptsovits-v2proplus.files.json" }
+
+[[models]]
+id = "gptsovits/v4-base"
+variant = "v4"
+title = "GPT-SoVITS v4"
+description = "Flow-matching SoVITS with a 48 kHz vocoder; needs the reference transcript."
+vram_mb = 4000
+assets = ["gptsovits/encoders", "gptsovits/g2pw", "gptsovits/nltk-data", "gptsovits/open-jtalk"]
+files = { hf = "lj1995/GPT-SoVITS", include = ["s1v3.ckpt", "gsv-v4-pretrained/s2Gv4.pth", "gsv-v4-pretrained/vocoder.pth"], manifest = "gptsovits-v4.files.json" }
+
+[[models]]
+id = "gptsovits/v5turbo-base"
+variant = "v5turbo"
+title = "GPT-SoVITS v5 Turbo"
+description = "v5 in four flow steps, 48 kHz; needs the reference transcript."
+vram_mb = 4000
+assets = ["gptsovits/encoders", "gptsovits/g2pw", "gptsovits/nltk-data", "gptsovits/open-jtalk"]
+files = { hf = "lj1995/GPT-SoVITS", include = ["s1v3.ckpt", "gsv-v5-pretrained/s2Gv5turbo.pth", "gsv-v5-pretrained/vocoder.pth"], manifest = "gptsovits-v5turbo.files.json" }
+
+[training.speaker]
+title = "Fine-tune a voice"
+description = "Upstream's own recipe: text and speech features, then the SoVITS and the GPT weights, exported as the voice's own pair. One to ten minutes of one speaker; a GPU makes it minutes, a CPU hours."
+export = "voice_weights"
+min_seconds = 30.0
+note = "v4 and v5 Turbo train SoVITS as a LoRA; v2, v2Pro and v2ProPlus need their pretrained discriminator."
+stages = [
+    { id = "text", title = "Text features", help = "Phonemes, and BERT features for Chinese (1-get-text).", uses = [] },
+    { id = "speech", title = "Speech features", help = "HuBERT features and 32 kHz audio, and speaker embeddings for v2Pro (2-get-hubert-wav32k, 2-get-sv).", uses = [] },
+    { id = "semantic", title = "Semantic tokens", help = "The base SoVITS's tokens of each clip (3-get-semantic).", uses = [] },
+    { id = "sovits", title = "Train SoVITS", uses = ["sovits_epochs", "batch_size", "text_low_lr_rate", "lora_rank", "grad_ckpt"] },
+    { id = "gpt", title = "Train GPT", uses = ["gpt_epochs", "batch_size", "dpo"] },
+    { id = "export", title = "Export the voice", uses = ["preview_text"] },
+]
+
+[training.speaker.assets]
+v2 = ["gptsovits/s2d-v2"]
+v2pro = ["gptsovits/s2d-v2pro"]
+v2proplus = ["gptsovits/s2d-v2proplus"]
+
+[training.speaker.hyperparams.sovits_epochs]
+type = "int"
+default = 8
+min = 1
+max = 50
+group = "basic"
+help = "Passes of SoVITS training over the dataset."
+
+[training.speaker.hyperparams.gpt_epochs]
+type = "int"
+default = 15
+min = 1
+max = 50
+group = "basic"
+help = "Passes of GPT training over the dataset."
+
+[training.speaker.hyperparams.batch_size]
+type = "int"
+default = 4
+min = 1
+max = 64
+group = "basic"
+help = "Clips per step; halve it when the GPU runs out of memory (upstream halves it on a CPU)."
+
+[training.speaker.hyperparams.text_low_lr_rate]
+type = "float"
+default = 0.4
+min = 0.2
+max = 0.6
+step = 0.05
+help = "The text encoder's learning rate relative to the rest (v2 family)."
+variants = ["v2", "v2pro", "v2proplus"]
+
+[training.speaker.hyperparams.lora_rank]
+type = "enum"
+default = "32"
+choices = ["16", "32", "64", "128"]
+help = "The LoRA's rank (v4, v5 Turbo)."
+variants = ["v4", "v5turbo"]
+
+[training.speaker.hyperparams.grad_ckpt]
+type = "bool"
+default = false
+help = "Gradient checkpointing: less memory, slower (v4, v5 Turbo)."
+variants = ["v4", "v5turbo"]
+
+[training.speaker.hyperparams.dpo]
+type = "bool"
+default = false
+help = "DPO training of the GPT: steadier on hard text, about twice as slow."
+
+[training.speaker.hyperparams.preview_text]
+type = "str"
+default = ""
+help = "What the preview says (empty: a dataset clip's text)."
+

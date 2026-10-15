@@ -1,0 +1,70 @@
+---
+title: "Fish Speech"
+description: "Mizuoto 单独发行包 mizuoto-fishspeech 中实现的 Fish Speech S2 Pro 引擎：双自回归 transformer 与 44.1 kHz 编解码器，哪些做法与上游完全一致，每帧只等待设备一次与 CUDA 图，LoRA 微调，以及对照结果。"
+icon: Fish
+---
+
+Fish Audio S2 Pro（[fishaudio/fish-speech](https://github.com/fishaudio/fish-speech)，Fish Audio Research License）。移植版同样受该许可约束，所以作为单独的发行包发布：`mizuoto-fishspeech`（`packages/native/fishspeech`，包名 `mizuoto_fishspeech`，附 `LICENSE.md`），注册在入口点组 `mizuoto.engines` 下（`fishspeech = mizuoto_fishspeech:FishSpeechEngine`）。下载模型和合成都需要先接受许可。在 CPU 上以 fp32、相同种子运行时，它的编码和音频与 Mizuoto 0.1 所运行的上游带种子 `generate_long` 完全相同，训练器导出的模型与 0.1 逐位相同。面向用户的说明见 [引擎详解](/docs/advanced-engines#fish-speech)。
+
+## 变体与文件
+
+只有一个变体 `s2_pro`（目录模型 `fishspeech/s2-pro`）：用一到四段参考音频克隆，每段都带参考文本；行内标签；说话人之间的对话（`<|speaker:i|>`）。模型目录中有 `config.json`、权重（`model.safetensors.index.json` 及其分片、`model.safetensors` 或 `model.pth`）、`codec.pth` 和 BPE 分词器文件。音色缓存是 `codes.pt`，即每段参考音频的编码。
+
+精度：与上游相同，CUDA GPU 上用 bf16；其他设备用 fp32（bf16 在 CPU 上是模拟的，慢得多）；`engines.fishspeech.dtype` 可以覆盖。
+
+## 工作原理
+
+提示是一段 ChatML 对话：一条系统消息，包含每段参考音频的文本及其编码，然后是要说的文本。**慢 transformer**（Qwen3-4B 的形状：36 层，q/k RMSNorm，一个融合的 `wqkv`）生成每帧的语义 token；**快 transformer**（4 层）根据慢模型归一化后的隐藏状态生成其余九个码本。**编解码器**（改造过的 44.1 kHz DAC：因果卷积、窗口化 transformer、下采样残差量化器，含一个 4096 的语义码本和九个 1024 的码本；约每秒 21.5 帧）编码参考音频，并把帧解码成音频。文本按说话人轮次分批生成，每批完成即解码。
+
+| 模块 | 内容 |
+| --- | --- |
+| `engine.py` | 读取参考音频、重采样到 44.1 kHz 并编码；按说话人轮次分批生成；编解码器解码；`codec_encode` 和 `codec_decode` 操作 |
+| `model.py` | 双自回归 transformer |
+| `generate.py` | 对话提示、按上游顺序采样、轮次分组、带 CUDA 图的解码器（`Decoder`） |
+| `codec.py` | 44.1 kHz 编解码器 |
+| `train.py`、`finetune.py` | `FishSpeechTrainer`（方法 `lora`）及其计算 |
+
+共享：`text/tokenize/bpe.py`、`runtime/lm/cache.py`、`runtime/graphs.py`、`nn/dsp/`（`resample`、`wav`、`flac`）。
+
+## 与上游一致的做法
+
+- **提示**是上游的对话，每个文本部分单独分词；每帧的主 token 是 `semantic_begin_id + code`。
+- **采样**按上游的顺序从请求的生成器抽样：主 token 抽两次（先用请求的温度和 top-p，再用 1.0 和 0.9 做重复感知采样），然后是快 transformer 的九次抽样。一次抽样就是 `argmax(probs / -log(u))`。top-k 固定为 30，与上游相同。
+- **数值**：Fish 的 RMSNorm 在 float32 中计算；RoPE 作用于相邻元素对，频率表舍入到 bfloat16；预填充用带布尔因果掩码的 SDPA，解码步骤用 SDPA 的 math 内核（直接调用，不改进程级设置）；快 transformer 用手写的 softmax。权重归一化保留检查点的两种格式，并在每次前向时重新计算，与上游相同。
+- **参考音频**用 torchaudio 的内核重采样到 44.1 kHz。
+- **WAV 输出。** `codec_decode` 用 `nn.dsp.wav.write_wav` 写 WAV，与 `soundfile.write` 逐字节相同：libsndfile 1.2 存储裁剪后的 `lrint(x × 2³¹) >> 16`，也就是 `floor(x × 32768)`，只有略低于一个台阶的值例外。`codec_encode` 只读 WAV。
+
+## 有意的差异
+
+- **没有守护线程，也没有预分配 32 768 个位置的缓存。** 缓存通过拼接增长；经过 `repeat_interleave` 后，键和值就是上游构造的那些张量。注意力掩码按调用生成，而不是上游那 4 GiB 的掩码缓冲。
+- **不构建上游从不运行的编解码器模块。** 上游的编解码器为解码器第一个块构建了一个 transformer，却从不接上它（没有权重，从不运行）。`codec.pth` 里还有旧版上游保存的 RoPE 表和掩码，上游已不再加载，这里也忽略。
+- **接受但无效果**：`normalize` 和 `repetition_penalty` 在上游的推理路径中不起任何作用，所以这里也不起作用。
+
+## 显存与速度
+
+阶段：编解码器编码参考音频并解码每批帧；语言模型（`kind="sequence"`，快 transformer 为 `hot`）生成每一批，生成继续时重新放置。每批的工作内存是慢模型缓存的真实上限：参考音频的编码、每个文本 token、之前各批的帧和 `max_new_tokens`，不超过 `max_seq_len`。模型完整运行需要约 22 GB 显存；不够时运行时会流式加载部分权重。
+
+一帧是一次慢 transformer 步骤加十个码本。原本的循环每帧约等待设备 22 次：轮次结束检查；把非语义 token 的码本嵌入置零的掩码赋值（`vq_sum[~mask] = 0` 会把掩码读回）；用列表下标取快 transformer 的掩码和旋转编码行（每个码本两次拷贝到设备）；采样器中把 Python 布尔值存入设备张量，每次抽样两次。它们都换成了完全等价的写法（`torch.where`、切片、`fill_`），解码步骤的掩码直接按它本来的样子生成为一行全真。每帧只剩一次等待。
+
+开启 `compute.cuda_graphs`（NVIDIA，模型完整位于设备上）时，`generate.Decoder` 为每个已加载的模型保留固定张量：慢步骤在两次注意力调用之间的每一段作为一个 CUDA 图运行（`LayerSteps`），该帧的抽样、重复感知采样和快 transformer 作为一个 CUDA 图。采样设置是按请求填充的设备张量，所以一套 CUDA 图服务所有请求。编码完全相同，解码循环每帧快 2.2–2.5 倍。
+
+## 训练
+
+方法 `lora`（阶段 `tokens`、`train`、`export`）：上游的 `extract_vq`、`build_dataset`，以及基于 Lightning + Hydra、使用 loralib 的 `train.py` 和 `merge_lora`，但不需要这些库，也不需要 protobuf。以相同方式播种时，它在 CPU 上的编码、损失、LoRA 权重和导出的 `model.pth` 与 0.1 逐位相同，导出的其他文件逐字节相同。（0.1 从不播种，所以只有第一步能复现。）它在所有设备类型上都能运行。
+
+- **跳过初始化抽样。** 上游在加载检查点之前先用随机权重构建模型，并在抽取 `A` 之前把每个 loralib 层初始化两次：约 18 G 次抽样。`initial_lora` 只根据形状算出这些抽样让生成器前进多少（float32 的 `normal_` 或 `uniform_` 前进其大小，大小不是 16 的倍数时 `normal_` 再多 16），然后在 GF(2) 中把 MT19937 向前跳（`mizuoto.training.rng`）：用 2 秒而不是 40 秒的抽样得到同样的状态，在加载权重的同时在另一个线程中计算。随后是加载器的基础种子和每一步的 LoRA dropout 掩码。
+- **与上游相同的混合精度。** 检查点中的张量按上游的方式赋值，所以 S2 的归一化层保持 bfloat16，而 LoRA 层持有 float32 副本。
+- **保留**：上游的训练前向不像推理那样把码本嵌入乘以 1/√11；预热让第一步的学习率为 0，`B` 从零开始，所以前两步的损失相同。
+- **填充。** 整理器用 `<|end_of_text|>` 填充，而 S2 的词表里没有它：上游实际以 0 填充，Mizuoto 也是。
+- **导出**是上游扁平的 `dual_ar` 形式（`config.json` + `model.pth`），0.1 和 Mizuoto 都能加载。最后一轮验证被跳过（它不改变任何保留下来的东西）。
+- `training.memory`：上游的逐层检查点保持原样；在 `bf16-true` 下，LoRA 层冻结的副本直接以 bfloat16 生成（数值相同，内存少约 9 GB），导出的键顺序从一个在 meta 设备上构建的模型中读取。
+
+## 对照结果
+
+在 CPU 上以 fp32 运行时，编码与上游带种子的 `generate_long` 相同；分词器、参考音频的重采样和编码以及编解码器的解码也都相同。两个完整链路用例（英文和中文克隆）逐采样相同；另外两个用例让每种实现加载另一种实现的导出，结果也相同。契约套件通过（6 项测试）。
+
+## 限制
+
+- 完整运行模型需要约 22 GB 显存；在 CPU 上以 fp32 运行，速度慢。
+- `normalize` 和 `repetition_penalty` 没有效果（与上游相同），top-k 不能更改。
+- 结果受 Fish Audio Research License 约束：不可商用，也不能用于训练其他引擎。

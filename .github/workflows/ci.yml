@@ -1,0 +1,101 @@
+# What every push must pass: Mizuoto with every engine on three platforms and four Python
+# versions, on a CPU build of torch; the oldest torch it supports and the newest; the web UI's tests and types; the
+# generated API types; the documentation site's types, tests and build.
+name: CI
+
+on:
+  push:
+  pull_request:
+
+env:
+  # torch's build is the user's choice; CI takes the CPU build (macOS: the index's arm64 wheels, MPS included).
+  TORCH_INDEX: https://download.pytorch.org/whl/cpu
+
+jobs:
+  host:
+    name: host · ${{ matrix.os }} · Python ${{ matrix.python }}
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        # bash on Windows too, so a failed install stops the step.
+        shell: bash
+    strategy:
+      fail-fast: false
+      matrix:
+        # The CPU index has torch wheels for every cell (Linux x86_64, Windows x86_64, macOS arm64; CPython 3.10–3.13),
+        # and every compiled dependency publishes wheels for them too (checked with uv pip compile --only-binary).
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        python: ["3.10", "3.11", "3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Environment
+        run: |
+          python -m pip install torch --index-url ${{ env.TORCH_INDEX }}
+          python -m pip install -e . -e packages/native/fishspeech -e packages/native/indextts pytest pytest-cov ruff ty httpx tomli
+      - name: Lint and types
+        if: matrix.os == 'ubuntu-latest' && matrix.python == '3.11'
+        run: |
+          python scripts/dev.py lint
+          python scripts/dev.py typecheck-py
+      - name: Tests
+        run: python -m pytest -q
+
+  torch:
+    # API drift: the oldest torch Mizuoto supports (pyproject: torch>=2.8) and the newest release.
+    name: torch ${{ matrix.torch }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        torch: ["2.8.0", "latest"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Environment
+        run: |
+          if [ "${{ matrix.torch }}" = latest ]; then spec=torch; else spec="torch==${{ matrix.torch }}"; fi
+          python -m pip install --upgrade "$spec" --index-url ${{ env.TORCH_INDEX }}
+          python -m pip install -e . -e packages/native/fishspeech -e packages/native/indextts pytest httpx tomli
+          python -c "import torch; print('torch', torch.__version__)"
+      - name: Tests
+        run: python -m pytest -q
+
+  web:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - uses: oven-sh/setup-bun@v2
+      - name: Environment
+        # The API's schema comes from the Python package (torch's CPU build: Mizuoto depends on torch).
+        run: |
+          python -m pip install torch --index-url ${{ env.TORCH_INDEX }}
+          python -m pip install -e .
+      - name: Web UI tests, types, and the API types it is built against
+        run: |
+          python scripts/dev.py web-install
+          python scripts/dev.py test-web
+          python scripts/dev.py typegen-check
+
+  site:
+    name: Documentation site
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+      - name: Environment
+        run: bun install --frozen-lockfile
+        working-directory: site
+      - name: Types, tests and build
+        run: |
+          bun run check
+          bun run test
+          bun run build
+        working-directory: site

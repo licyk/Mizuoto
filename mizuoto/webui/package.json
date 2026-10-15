@@ -1,0 +1,36 @@
+{
+  "name": "mizuoto-webui",
+  "private": true,
+  "version": "0.2.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vue-tsc --noEmit && vite build",
+    "build:only": "vite build",
+    "typecheck": "vue-tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@fontsource-variable/roboto-flex": "^5.3.0",
+    "@lucide/vue": "^1.47.0",
+    "@material/material-color-utilities": "^0.4.0",
+    "@material/web": "^2.5.0",
+    "@tanstack/vue-query": "^5.103.1",
+    "openapi-fetch": "^0.17.0",
+    "pinia": "^4.0.3",
+    "socket.io-client": "^4.8.3",
+    "vue": "^3.5.43",
+    "vue-router": "^5.3.1"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.2",
+    "@vitejs/plugin-vue": "^6.0.9",
+    "@vue/test-utils": "^2.5.1",
+    "happy-dom": "^20.14.5",
+    "openapi-typescript": "^7.13.0",
+    "typescript": "^6",
+    "vite": "^8.3.0",
+    "vitest": "^5.0.1",
+    "vue-tsc": "^3.3.11"
+  }
+}

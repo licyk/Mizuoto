@@ -1,0 +1,13 @@
+/*
+ * Shared full-page section primitives.
+ *
+ * Both the homepage and the download page are built from these: viewport-sized
+ * snap sections, the right-hand section rail, and the two motion channels.
+ * Page-specific styling lives in `../home` and `../download`.
+ */
+
+@import "./tokens.css";
+@import "./section.css";
+@import "./motion.css";
+@import "./rail.css";
+@import "./glow.css";

@@ -1,0 +1,254 @@
+---
+title: "Using Mizuoto from Python"
+description: "Call Mizuoto's core services from Python without HTTP, or embed Mizuoto's server and web UI in your own program."
+icon: Puzzle
+---
+
+Mizuoto's web UI, command line and HTTP API are built on one core (`mizuoto.core`). A Python program can use that core directly, or start a whole Mizuoto server inside its own process.
+
+<Callout type="info" title="What it needs">
+Your program needs the `mizuoto` package in the same Python environment (Python 3.10–3.13), and torch for the engines (see [Installation](/docs/installation)). The engines run in your program's process. Importing `mizuoto.core.context` loads neither torch nor FastAPI: torch loads when the first model does.
+</Callout>
+
+## Calling the core
+
+### Opening the services
+
+```python
+from mizuoto.core.context import open_services
+
+with open_services() as services:
+    print(services.settings.view().data_dir)
+```
+
+`open_services(**kwargs)` builds every service and closes them when the `with` block ends (it stops the jobs, unloads the models and closes the database). Its arguments go to `build_services()`:
+
+| Argument | Meaning | Default |
+| --- | --- | --- |
+| `data_dir` | The data folder (database, models, voices, outputs, caches) | `MIZUOTO_DATA_DIR`, or the platform's default |
+| `config_dir` | The folder holding `settings.toml` | `MIZUOTO_CONFIG_DIR`, or the data folder |
+| `settings_path` | The settings file itself; wins over `config_dir` | none |
+| `settings_overrides` | Pinned settings, shaped like `settings.toml`; never written to the file | none |
+| `start_background` | Start the job scheduler and the unloading of idle models | `False` |
+
+The path arguments are `pathlib.Path`s. Without `with`, call `build_services()` yourself and `services.close()` when done.
+
+### The services
+
+| Attribute | Responsible for |
+| --- | --- |
+| `settings` | Settings: `settings.settings` (the effective ones), `update(patch)`, `view()` |
+| `events` | The event bus: `subscribe(handler)` |
+| `db` | The database |
+| `compute` | Devices and GPU memory |
+| `jobs` | Jobs: `get`, `wait`, `cancel`, `retry` |
+| `engines` | The engine catalogue and states: `status(id)` says whether an engine is available |
+| `runtime` | The loaded models: `status()`, `unload(model_id)`, `doctor(engine_id)` |
+| `models` | Models: `list_models`, `get`, `download`, `verify` |
+| `audio` | Registered audio files |
+| `outputs` | Results: `get`, `path_of` |
+| `presets` | Parameter presets |
+| `datasets` | Datasets |
+| `training` | Experiments and training |
+| `tts` | Synthesis: `plan`, `speak`, `convert`, `edit` |
+| `asr` | Speech recognition: `transcribe` |
+| `voices` | The voice library: `list_voices`, `get`, `create_from_audio` |
+| `projects` | Projects |
+| `remote` | Remote hosts |
+
+The methods match the HTTP API one to one; they take and return the API's JSON shapes as pydantic models.
+
+### Speaking
+
+```python
+from mizuoto.core.context import open_services
+from mizuoto.core.tts.models import CommonParams, SpeakRequest, StyleInput, VoiceInput
+
+with open_services() as s:
+    req = SpeakRequest(
+        model="qwen3tts/1.7b-custom-voice",
+        text="Hello, and welcome to Mizuoto.",
+        voice_spec=VoiceInput(preset="vivian"),
+        style=StyleInput(instruct="Cheerful"),
+        params=CommonParams(seed=42),
+    )
+    print(s.tts.plan(req).segments)        # check only, run nothing
+    job = s.tts.speak(req, wait=True)      # runs on this thread; returns the finished job
+    if job.state != "completed":
+        raise RuntimeError(job.error)
+    out = s.outputs.get(job.result["output_id"])
+    print(out.path, out.duration, out.sample_rate)
+```
+
+`job.result` holds `output_id`, `output_ids` (one per text in a batch), `warnings` and `applied_params`.
+
+Other calls:
+
+```python
+from pathlib import Path
+
+s.models.list_models(engine="qwen3tts", installed=True)   # list[ModelInfo]
+s.models.download(["qwen3tts/1.7b-base"], wait=True)       # the download job, finished
+s.runtime.doctor().findings                                # torch and each engine on this machine, as mizuoto doctor
+voice, warnings = s.voices.create_from_audio("Kobayashi", [Path("ref.wav")], ["What the clip says."], language="en")
+s.voices.list_voices(q="Kobayashi")
+s.asr.transcribe(Path("clip.wav"), language="en").text     # needs the speech recognition model downloaded
+```
+
+### Where jobs run
+
+| `start_background` | Behaviour |
+| --- | --- |
+| `False` (default, as the command line) | A call with `wait=True` runs the job on the calling thread and returns it finished. <kbd>Ctrl</kbd>+<kbd>C</kbd> while it runs cancels it (the job comes back with `state == "cancelled"`). A job submitted without `wait` **does not run**: there is no scheduler |
+| `True` (as the server) | Starts the scheduler and the unloading of idle models. A call without `wait` queues the job and returns at once; jobs queue for the GPU and other resources. Wait for one with `s.jobs.wait(job.id, timeout)` |
+
+```python
+with open_services(start_background=True) as s:
+    job = s.tts.speak(req)               # returns at once, state "queued"
+    job = s.jobs.wait(job.id, 600)       # the finished job; on timeout, the job as it is then
+```
+
+### Events
+
+`events.subscribe(handler)` registers a callback and returns a function that unsubscribes it. The callback runs on the thread that raised the event, so return quickly. The event types are the socket's (see [HTTP API](/docs/advanced-api#events)), defined in `mizuoto.core.events.models`:
+
+```python
+from mizuoto.core.events.models import JobUpdatedEvent
+
+def on_event(event):
+    if isinstance(event, JobUpdatedEvent):
+        print(event.job.title, event.job.state, event.job.progress)
+
+unsubscribe = s.events.subscribe(on_event)
+...
+unsubscribe()
+```
+
+### Errors
+
+Failures raise subclasses of `mizuoto.core.errors.MizuotoError`, one for each error the API returns:
+
+```python
+from mizuoto.core.errors import MizuotoError, ModelMissingError
+
+try:
+    s.tts.speak(req, wait=True)
+except ModelMissingError as e:
+    print("Download it first:", e.detail.get("hint"))
+except MizuotoError as e:
+    print(e.code, e.message, e.detail)   # also e.http_status, e.exit_code
+```
+
+A failure **while the job runs** raises nothing: `speak(..., wait=True)` returns a job with `state == "failed"` and the cause in `job.error` (`code`, `message`, `detail`). What raises is what can be found before running (an unknown model, invalid parameters, a licence not accepted…). The error codes are listed in [HTTP API](/docs/advanced-api#errors).
+
+## Embedding the server
+
+`MizuotoServer` starts, inside your program, the server `mizuoto webui` runs: the same API, web UI and jobs. The host program chooses where the data and the settings go, which settings cannot be changed, and the path the UI sits under.
+
+```python
+from mizuoto import MizuotoServer
+
+server = MizuotoServer(data_dir="./mizuoto-data", port=0)
+url = server.start()     # returns as soon as it listens, e.g. http://127.0.0.1:54123
+print(url)
+...
+server.stop()
+```
+
+`import mizuoto` does not load FastAPI; the server part loads when `MizuotoServer` is used. `from mizuoto.embed import MizuotoServer, serve` works too.
+
+### Arguments
+
+| Argument | Meaning | Default |
+| --- | --- | --- |
+| `data_dir` | The data folder | `MIZUOTO_DATA_DIR`, or the platform's default |
+| `config_dir` | The folder for `settings.toml` (your application's configuration folder, for instance); the data stays in `data_dir` | the data folder |
+| `settings_path` | The settings file's full path; wins over `config_dir` | none |
+| `host` | The address to bind | setting `server.host` (`127.0.0.1`) |
+| `port` | `0` for any free port; a number to start from it (moving up when taken); `None` for setting `server.port` | `None` |
+| `strict_port` | Fail when the port is taken | `False` |
+| `api_prefix` | Serve the API, the socket and the web UI under this path, such as `/voice` | none |
+| `open_browser` | Open a browser once started | `False` |
+| `access_token` | Every API and socket request must carry it; the web UI asks for it once | none |
+| `extra_hosts` | Host names the server also answers to: a tunnel's or a reverse proxy's public name | none |
+| `settings` | Pinned settings, shaped like `settings.toml` | none |
+| `log_level` | uvicorn's log level | `"warning"` |
+
+`host` and `access_token` are pinned settings too (`server.host`, `server.access_token`), and `server.open_browser` is pinned to `open_browser`.
+
+### Methods and properties
+
+| Name | Meaning |
+| --- | --- |
+| `start(timeout=30)` | Start on a background thread; return the web UI's address once listening |
+| `run()` | Serve in the foreground until <kbd>Ctrl</kbd>+<kbd>C</kbd> |
+| `stop(timeout=10)` | Stop serving, unload the models, close the database and free the port; safe to call twice |
+| `allow_host(host)` | Answer to one more host name (a URL is accepted); before or after `start()` |
+| `url`, `port`, `running` | The web UI's address, the port, whether it serves |
+| `services` | The services the server uses (see above), callable once started |
+
+The object is also a context manager:
+
+```python
+with MizuotoServer(data_dir="./mizuoto-data", port=0) as server:
+    print(server.url)
+    voices = server.services.voices.list_voices()
+```
+
+`serve(block=False, **options)` creates a server with the same arguments, starts it and returns it; with `block=True` it serves in the foreground.
+
+### Pinned settings
+
+The values in `settings` sit above the settings file and the environment, are **never written to the file**, and cannot be changed through the web UI or the API:
+
+```python
+server = MizuotoServer(
+    data_dir="D:/MyApp/data/mizuoto",
+    config_dir="D:/MyApp/config/mizuoto",
+    settings={
+        "compute": {"default_device": "cuda:0"},
+        "paths": {"models_dir": "D:/MyApp/models/tts"},
+        "downloads": {"source": "hf-mirror"},
+    },
+)
+```
+
+In the web UI's **Settings**, a pinned value is marked **Set by the application Mizuoto runs in** (one set by an environment variable: **Set by an environment variable**). `settings.view().pinned` lists the pinned names.
+
+### Prefix, outside access and the token
+
+- With `api_prefix="/voice"` the web UI is at `<address>/voice/`, the API at `/voice/api/v1/...` and the OpenAI-compatible API at `/voice/v1/...`. The web UI derives the prefix from its own script's URL; nothing else to configure.
+- By default only local names are accepted in `Host` (against DNS rebinding). Behind a tunnel or a reverse proxy, add the public name with `extra_hosts=["abc.example.com"]` or `server.allow_host("https://abc.example.com")`. Requests through such names are never treated as local, so the server-machine-only features (browsing server files and so on) are closed to them.
+- Once it is reachable, anyone with the address can use it: set `access_token`, or add authentication of your own. [HTTP API](/docs/advanced-api#access-control) details the access checks.
+
+Once started, the server writes `server.json` (`host`, `port`, `url`, `pid`) into the data folder so other programs can find it; `stop()` removes it.
+
+### Mounting into an existing FastAPI app
+
+When the host program is itself a FastAPI (or other ASGI) application, it can mount Mizuoto instead of opening another port:
+
+```python
+from contextlib import asynccontextmanager
+from pathlib import Path
+
+from fastapi import FastAPI
+
+from mizuoto.api.app import create_app
+from mizuoto.core.context import build_services
+
+services = build_services(data_dir=Path("./mizuoto-data"), start_background=True)
+child = create_app(services, bound_host="127.0.0.1", api_prefix="/voice")
+
+
+@asynccontextmanager
+async def lifespan(_app):
+    async with child.router.lifespan_context(child):
+        yield
+    services.close()
+
+
+app = FastAPI(lifespan=lifespan)
+app.mount("/", child)   # the UI is at /voice/
+```
+
+The host enters the child app's `lifespan` on its own event loop (it forwards events to the socket) and calls `services.close()` on the way out. `start_background=True` starts the job scheduler and the unloading of idle models; without it, queued jobs do not run. `create_app` also takes `extra_hosts` (a set; names added to it later are accepted at once) and `serve_ui=False` (the API only).

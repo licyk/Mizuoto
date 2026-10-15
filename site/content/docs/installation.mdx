@@ -1,0 +1,172 @@
+---
+title: "安装"
+description: "系统要求，适合本机硬件的 torch，用发布构建、源码或 Docker 安装 Mizuoto，数据存放的位置，以及更新与卸载。"
+icon: Download
+---
+
+Mizuoto 是一个 Python 发行包：服务器、网页界面、命令行和所有引擎都在同一个 Python 环境中运行。先安装适合本机硬件的 **torch**，再安装 **Mizuoto**。两个需要接受许可的引擎（Fish Speech、IndexTTS）是单独的发行包，需要时与 Mizuoto 装在一起。
+
+## 系统要求
+
+| 项目 | 要求 |
+| --- | --- |
+| 操作系统 | Linux、Windows、macOS |
+| Python | 3.10–3.13 |
+| torch | 2.8 或更新版本，适合本机硬件的构建（CUDA、ROCm、XPU、Apple 芯片或 CPU） |
+| 磁盘 | torch 需要数 GB，另加模型的大小 |
+| 显卡 | 推荐 NVIDIA 显卡；AMD（ROCm，Linux）、Intel（XPU）和 Apple 芯片（MPS）也可以（尚未在真实硬件上测试），所有引擎也能在 CPU 上运行，但较慢 |
+| 网络 | 安装时需要访问 PyPI 和 PyTorch 下载站；下载模型时需要访问 Hugging Face、hf-mirror 或 ModelScope（在 **设置 › 下载** 中选择） |
+
+不需要任何系统程序：音频解码、重采样和文本前端都随 Python wheel 提供。
+
+## 安装方式
+
+<Tabs items={["发布构建", "源码", "Docker"]}>
+<Tab value="发布构建">
+
+发布构建是 `dist/` 文件夹中的一组 wheel：`mizuoto`，以及需要接受许可的引擎的 `mizuoto_fishspeech` 和 `mizuoto_indextts`。请在你自己选择的虚拟环境中安装。先从适合本机的索引安装 torch，这样安装 Mizuoto 时会保留这个构建：
+
+```bash
+pip install "torch>=2.8" --index-url https://download.pytorch.org/whl/cu128    # NVIDIA，Linux 或 Windows（cu126、cu128、cu129、cu130、cu132：按驱动支持的版本选）
+pip install "torch>=2.8" --index-url https://download.pytorch.org/whl/rocm7.2  # AMD，Linux（较旧的 ROCm 用 rocm6.4、rocm7.1）
+pip install "torch>=2.8" --index-url https://download.pytorch.org/whl/xpu      # Intel 显卡，Linux 或 Windows
+pip install "torch>=2.8"                                                       # Apple 芯片的 macOS（MPS）
+pip install "torch>=2.8" --index-url https://download.pytorch.org/whl/cpu      # 只用 CPU
+```
+
+然后一次装好 Mizuoto；需要时加上需要接受许可的引擎的 wheel：
+
+```bash
+pip install dist/mizuoto-*.whl                  # + dist/mizuoto_fishspeech-*.whl dist/mizuoto_indextts-*.whl
+mizuoto doctor
+mizuoto webui                                   # http://127.0.0.1:7869
+```
+
+Mizuoto 没有发布到 PyPI：wheel 来自发布构建的产物，或在源码目录中用 `python scripts/dev.py wheels` 构建（需要接受许可的引擎也一样）。
+
+</Tab>
+<Tab value="源码">
+
+需要 uv，以及构建网页界面用的 [bun](https://bun.sh)。
+
+```bash
+git clone <仓库地址> Mizuoto && cd Mizuoto
+uv venv .venv --python 3.11
+uv pip install --python .venv/bin/python "torch>=2.8" --index-url https://download.pytorch.org/whl/cu128   # 或适合本机硬件的构建
+uv pip install --python .venv/bin/python -e .   # 需要接受许可的引擎再加 -e packages/native/fishspeech -e packages/native/indextts
+python scripts/dev.py web-install && python scripts/dev.py web    # 首次需要构建界面
+.venv/bin/mizuoto webui
+```
+
+开发环境的完整说明见[开发环境](/docs/development-setup)。
+
+</Tab>
+<Tab value="Docker">
+
+一个镜像包含服务器、界面和所有引擎，以及 GPT-SoVITS 的日语和韩语前端；模型保存在 `/data` 卷中。
+
+```bash
+docker build -t mizuoto .                       # torch 的 CUDA 12.8 构建（NVIDIA 驱动 570 或更新）
+docker run --gpus all -p 7869:7869 -v mizuoto-data:/data \
+  -e MIZUOTO_SERVER__ACCESS_TOKEN=change-me mizuoto
+```
+
+| 构建参数 | 默认值 | 作用 |
+| --- | --- | --- |
+| `TORCH_INDEX` | `https://download.pytorch.org/whl/cu128` | torch 的构建：其他 CUDA（`cu126`…`cu132`）、ROCm（`rocm6.4`…`rocm7.2`）或 `cpu` 的索引 |
+| `TORCH` | `torch>=2.8` | torch 的版本要求，例如 `torch==2.8.0` |
+| `GATED` | `0` | `1` 加入 Fish Speech 和 IndexTTS；它们的许可仍需在界面或命令行中接受 |
+| `PYTHON` | `3.11` | 镜像中的 Python |
+
+- 容器里服务器监听 `0.0.0.0`，因此请用 `MIZUOTO_SERVER__ACCESS_TOKEN` 设置一个访问令牌。浏览器打开页面时会弹出 **访问令牌** 对话框，输入它即可。
+- 镜像带有健康检查（`/api/v1/app/health`）。
+
+更多细节见 [Docker](/docs/advanced-docker)。
+
+</Tab>
+</Tabs>
+
+## 可选扩展
+
+有些语言需要默认不安装的包。缺少时，这些语言的文本会报错，错误提示中带有安装命令；`mizuoto doctor` 也会列出缺少的扩展。
+
+| 扩展 | 用途 | 说明 |
+| --- | --- | --- |
+| `pip install 'mizuoto[gptsovits-ja]'` | GPT-SoVITS 的日语 | pyopenjtalk 0.4.1 只发布了源码包：构建它需要 CMake 和 C++ 编译器 |
+| `pip install 'mizuoto[gptsovits-ko]'` | GPT-SoVITS 的韩语 | python-mecab-ko 和 jamo |
+| `pip install 'mizuoto-indextts[ja]'` | IndexTTS-2.5 的日语 | fugashi 和 unidic-lite |
+
+## 检查安装
+
+```bash
+mizuoto doctor               # torch 与硬件是否匹配、各引擎、缺少的扩展
+mizuoto doctor gptsovits     # 只检查一个引擎
+```
+
+`mizuoto doctor` 会列出找到的 GPU（通过 `nvidia-smi`、`rocm-smi` 或 `amd-smi`，或询问 torch；见 [性能](/docs/advanced-performance)），对照它们检查 torch 的构建（不匹配时给出准确的安装命令），报告每个引擎是否可用、还缺什么（torch，或需要接受许可的引擎的发行包），以及缺少的可选扩展。在网页界面中，**设置 › 计算** 显示 torch 的检查结果，**模型 › 引擎** 中每个引擎卡片的 **检查本机** 显示该引擎的检查结果。
+
+## 启动
+
+```bash
+mizuoto webui
+```
+
+常用选项：
+
+| 选项 | 作用 |
+| --- | --- |
+| `--port <端口>` | 首先尝试的端口，默认读取设置（7869）；`0` 表示任选一个空闲端口 |
+| `--strict-port` | 端口被占用时直接失败，而不是尝试下一个端口 |
+| `--open` / `--no-open` | 是否自动打开浏览器 |
+| `--host <地址>` | 监听的地址，默认 `127.0.0.1`，即只允许本机访问 |
+| `--data-dir <文件夹>` | 本次使用的数据文件夹 |
+| `--api-prefix <路径>` | 把接口、WebSocket 和界面放在某个子路径下，例如 `/voice` |
+| `--ssl-certfile`、`--ssl-keyfile` | 用 HTTPS 提供服务（其他电脑上的浏览器只在 HTTPS 下允许录音） |
+
+<Callout type="warn" title="让其他电脑访问">
+
+把 `--host` 设为 `0.0.0.0` 等非本机地址后，局域网中的其他设备都能连上，并能使用全部功能。Mizuoto 只会打印一条警告，不会强制要求令牌，所以请设置一个访问令牌（**设置 › 常规 › 访问令牌**，或 `mizuoto config set server.access_token <令牌>`）。详见[远程访问与安全](/docs/advanced-remote)。
+
+</Callout>
+
+## 数据存放在哪里
+
+设置、数据库、音色库、结果、模型和训练实验都在一个**数据文件夹**里：
+
+| 系统 | 默认位置 |
+| --- | --- |
+| Windows | `%APPDATA%\mizuoto` |
+| macOS | `~/Library/Application Support/mizuoto` |
+| Linux | `$XDG_DATA_HOME/mizuoto`；未设置时为 `~/.local/share/mizuoto` |
+
+设置环境变量 `MIZUOTO_DATA_DIR`（或 `mizuoto webui --data-dir`）可以换到别处；`MIZUOTO_CONFIG_DIR` 单独指定 `settings.toml` 所在的文件夹。当前的数据文件夹显示在 **设置 › 关于**。
+
+| 内容 | 说明 |
+| --- | --- |
+| `settings.toml` | 设置文件（`mizuoto config path` 打印其路径） |
+| `mizuoto.db` | 数据库：任务、结果、转写缓存等记录 |
+| `models/` | 下载的模型；`models/_assets/` 是同一引擎多个模型共用的文件 |
+| `voices/` | 音色库，每个音色一个文件夹 |
+| `outputs/` | 合成结果 |
+| `projects/`、`datasets/`、`experiments/` | 项目、训练数据集和训练实验 |
+| `cache/` | 参考音频、音色准备结果等缓存 |
+| `jobs/`、`logs/` | 任务日志与服务器日志 |
+| `trash/` | 删除的音色、项目、数据集、实验 |
+
+模型、音色、结果和缓存的文件夹可以在 **设置 › 存储** 中改到别处（例如把 `models/` 放到更大的磁盘上）。
+
+## 更新
+
+1. 用同样的方式安装新版本，例如 `pip install --upgrade dist/mizuoto-*.whl`（如果用到需要接受许可的引擎，也带上它们的 wheel：它们的版本与 Mizuoto 同步）；源码则 `git pull` 后重新执行安装命令，并重新构建界面。Docker 则重新构建镜像，`/data` 卷保持不变。
+2. 重启服务器。准备好的音色会在下次使用时自动重建一次。
+
+<Callout title="远程主机">
+
+远程主机需要与本机相同的 Mizuoto 版本：两边一起更新。
+
+</Callout>
+
+## 卸载
+
+1. 卸载 Mizuoto：`pip uninstall mizuoto mizuoto-fishspeech mizuoto-indextts`（torch 可以保留或自行卸载），或直接删除虚拟环境。
+2. 如果不再需要任何数据，删除数据文件夹。**注意**：其中有你的音色库、合成结果、项目和训练数据；Docker 则是 `docker volume rm mizuoto-data`。

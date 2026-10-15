@@ -1,0 +1,90 @@
+---
+title: "Qwen3-TTS"
+description: "Mizuoto 中实现的 Qwen3-TTS 引擎：变体与文件，talker、code predictor、说话人编码器和 12 Hz 编解码器，哪些做法与上游完全一致，显存与 CUDA 图解码，说话人微调，以及对照结果。"
+icon: AudioLines
+---
+
+阿里通义千问的 12 Hz 语音语言模型（[QwenLM/Qwen3-TTS](https://github.com/QwenLM/Qwen3-TTS)，Apache-2.0）。代码：`mizuoto/engines/qwen3tts`。在 CPU 上以 fp32、同一种子运行时，它在全部 8 个对照用例中逐采样给出 Mizuoto 0.1（适配层后面的上游 `qwen_tts`）的音频，它的训练器也逐字节给出 0.1 的检查点。各变体能做什么见[引擎详解](/docs/advanced-engines#qwen3-tts)。
+
+## 变体与文件
+
+| 变体 | 目录中的模型 | 作用 |
+| --- | --- | --- |
+| `base` | `qwen3tts/1.7b-base`、`qwen3tts/0.6b-base` | 克隆：有参考文本时在上下文中克隆，没有时用说话人嵌入（x-vector）克隆 |
+| `custom_voice` | `qwen3tts/1.7b-custom-voice` | 九个预置说话人，可用指令控制 |
+| `custom_voice_lite` | `qwen3tts/0.6b-custom-voice` | 没有指令的预置说话人（上游对 0.6B 静默丢弃指令，所以这个变体不声明指令） |
+| `voice_design` | `qwen3tts/1.7b-voice-design` | 按自由文本描述生成音色 |
+
+变体由 `config.json`（`tts_model_type`、`tts_model_size`）决定；只接受 `tokenizer_type = qwen3_tts_tokenizer_12hz`。模型目录包含 `config.json`、`model.safetensors`、分词器文件（`tokenizer.json`，或 `vocab.json` + `merges.txt` + `tokenizer_config.json`）和 `speech_tokenizer/`（`config.json`、`model.safetensors`）。Base 模型的音色缓存是 `prompt.pt`，即克隆提示（参考音频的编码和说话人嵌入）。
+
+精度：支持 bf16 的 CUDA GPU 上用 bf16（否则 fp16），其他设备用 fp32；`engines.qwen3tts.dtype` 可以覆盖。
+
+## 工作原理
+
+每 80 毫秒的一帧音频是 16 个编码。**talker** 是一个在文本和编解码器嵌入上运行的 28 层 Qwen3 解码器，预测一帧的第一个编码；**code predictor** 是一个 5 层 transformer，依次预测其余 15 个；16 个编码嵌入之和（加上下一个文本 token 的嵌入）是 talker 的下一个输入。**12 Hz 编解码器**把编码还原成 24 kHz 音频（每帧 1920 个采样），克隆时还把参考音频编码。Base 模型另有一个**说话人编码器**（ECAPA-TDNN），它的嵌入放在提示里。
+
+| 模块 | 是什么 |
+| --- | --- |
+| `engine.py` | 按 `Qwen3TTSForConditionalGeneration.generate` 的方式构建提示、talker 循环、分块解码、音色缓存 |
+| `decode.py` | `FrameDecoder`：在固定张量上运行一帧（采样、code predictor、talker 一步），eager 或 CUDA 图 |
+| `config.py` | 不经 transformers 读取 `config.json` |
+| `talker.py` | talker 和 code predictor，基于 `runtime/lm/qwen.py` |
+| `speaker.py` | Qwen2.5-Omni 所带的 ECAPA-TDNN：没有 BatchNorm、反射填充，输入 24 kHz 的 128 维 log-mel，输出 2048 维嵌入 |
+| `codec.py` | 12 Hz 语音分词器：Mimi 式编码器（transformers `MimiModel` 的编码路径）和因果解码器（72 帧注意力窗口、SnakeBeta 上采样） |
+| `train.py`、`sft.py` | `Qwen3Trainer`（方法 `speaker`）及其计算 |
+
+共享：`runtime/lm/qwen.py`（解码器、`hf_sdpa`、`mask_for`）、`runtime/lm/cache.py`、`runtime/sampling.py`、`runtime/graphs.py`、`text/tokenize/bpe.py`、`nn/dsp/mel.py`（`matcha_mel`）、`nn/dsp/resample.py`、`nn/dsp/wav.py`、`nn/dsp/flac.py`。
+
+## 与上游一致的做法
+
+- **分词器的切分。** 上游用 `fix_mistral_regex=True` 加载处理器，transformers 4.57.3 对配置中版本号介于 4.57.2 和 5.0 之间的本地模型，会换用它的 “Mistral fix” 预分词正则。`load_bpe(mistral_fix=…)` 根据模型的 `config.json` 做出同样的判断；不这样做，少数文本的分词会不同。
+- **相同的张量形状。** 提示按上游 `generate` 的方式构建：三个特殊嵌入在一次调用里查出，编解码器头作用于整个预填充。拆成更小的调用，值虽相同，浮点求和却不同。
+- **按 transformers 的方式调用注意力**（`hf_sdpa`）：没有掩码时，多 token 查询用带 `enable_gqa` 和 `is_causal` 的 SDPA；有掩码时重复 KV 头。缓存像 `DynamicCache` 那样靠拼接增长。
+- **采样器。** talker 依次经过 transformers 的处理器链（重复惩罚、min-new-tokens、屏蔽控制 id、温度、top-k、top-p），再在请求的生成器上做 `multinomial`；批量中已结束的行被喂入 EOS，与 transformers 的填充方式相同。每帧接着是 code predictor 的 15 次抽样。
+- **编解码器。** 编码器的 transformer 用普通的因果掩码（忽略配置中的 250 帧窗口，与上游的编码路径一样）；解码器的 transformer 应用 72 帧窗口。解码按上游的分块进行（300 帧，左侧 25 帧上下文），在上下文中克隆时，联合解码之后再切掉参考音频那一段。
+- **说话人编码器的 mel** 是 Matcha-TTS 的（`nn.dsp.mel.matcha_mel`），与上游的计算相同。
+
+## 有意的差异
+
+- **没有实现 25 Hz 分词器。** 没有已发布的模型使用它，上游的封装也无法解码它的输出。
+- **流式按段进行**，与 0.1 相同：先生成模型的整段，再解码。
+- **帧率是 12.5**（0.1 用的是 12.0；只影响进度估计）。
+- **上游的 `attn_implementation` 不是加载选项**：注意力经过 Mizuoto 的注意力分派器，由 `compute.attention` / `engines.qwen3tts.attention` 选择。
+
+## 显存
+
+四个句柄，按阶段放置：talker（`kind="sequence"`，它的 code predictor 标为 `hot`，因为每帧要运行 15 次）、说话人编码器和编解码器的编码器（只用于 Base 模型的音色提示），以及编解码器的解码器。
+
+talker 的工作内存按请求估算：每行的提示（指令、参考文本和编码、文本）加上每个文本 token 16 帧（实际语音约 3–4 帧），不超过 `max_new_tokens`，缓存峰值按比其大小多一层计，再加 256 MB。所以在 1.7B 模型上一句话只预留约 300–400 MB，而不是按最坏情况（8192 帧）要求的数 GB，显存紧张时 talker 也不会被无谓地流式加载。`compute.kv_cache = static` 为 talker 和 code predictor 提供预分配的缓存（CPU 上结果相同）。
+
+## 速度
+
+一帧是 talker 的一步加 code predictor 的十五步：约 6 000 个小内核，由 CPU 逐个启动。普通循环每帧还要等待设备约 35 次（`torch.multinomial` 每次抽样的两项有效性检查、每步把被屏蔽的 id 复制到设备上、填充检查、EOS 检查），每次等待都会清空 GPU 的队列。`decode.py` 在不改变任何结果的前提下去掉了这些：
+
+- **每帧只等待一次。** 单样本抽样采用 `multinomial` 本身的计算（`argmax(p / Exp(1))`），去掉它的检查（`runtime.sampling.multinomial1`；概率为 NaN 仍是错误，在每帧那一次等待时读取）；掩码每个设备只构建一次；重复惩罚作用于已抽取 id 的掩码（`repetition_penalty_seen`，算术相同）；填充情况在主机端已知。
+- **CUDA 图**（`compute.cuda_graphs`，默认开启；NVIDIA，且 talker 完整位于设备上）。采样和 code predictor 的 15 步各是一个图；talker 的一步在两次注意力调用之间各为一个图，注意力在不断增长的缓存上以 eager 方式运行。图从自己的生成器抽样，该生成器从请求的生成器载入状态并写回。图按批大小和采样设置保存，权重移动时丢弃。
+- **更少的内核，相同的比特**（仅在不需要自动求导时，所以训练不受影响）：q 和 k 一起归一化和旋转；code predictor 的旋转表只生成一次；在设备上的自检表明 `F.rms_norm` 给出与 float32 归一化相同的比特时使用它。
+
+与 eager 的编码相同；在 1.7B 规模的解码循环上，比带等待的循环快 2.7–3.4 倍。
+
+**快速模式**（加载选项 `fused_projections`，默认关闭）：加载时把每层的 q/k/v 和 gate/up 投影各自合成一个带堆叠权重的线性层（它们仍像普通层一样可以流式加载）。在 GPU 上每帧快约 3–4 %，但矩阵乘法会选用其他内核，音频不再逐位相同；在 CPU 对照用例中相同。开启时输出会列出 `fused_projections`。参数名会改变，所以只用于推理。
+
+## 训练
+
+方法 `speaker`（Base 模型；阶段 `prepare`、`train`、`export`）：模型学会一个说话人，成为一个唯一预置说话人就是新音色的 CustomVoice 模型，与上游的 `finetuning/sft_12hz.py` 相同。在真实的 1.7B Base 上，两边用同样的种子时，它在 CPU 上逐字节给出 0.1 的编码、损失和检查点，不需要 transformers 或 accelerate。
+
+- 音频每次编码八段、补零，与 `Qwen3TTSTokenizer.encode` 的批处理方式相同。
+- 顺序来自进程级生成器上的普通打乱数据加载器（训练阶段自己的进程）。Accelerate 的梯度累积复现为：损失按步累加，每 N 个批次以及每个 epoch 结束时执行一次优化器步。
+- 两个损失都是 transformers 的 `ForCausalLMLoss`，它会把已经移位的标签再移一次；保留。
+- 上游把原始的文本嵌入直接加到编解码器嵌入上，没有经过推理时会用的 `text_projection`；保留，这样权重才与上游相同。由此只有文本嵌入宽度与 talker 相同的模型能训练：1.7B Base 可以，不满足的模型会在训练阶段开始前被拒绝（`capability_not_supported`）。
+- 每次训练前向都用新的缓存：`DynamicCache` 第一次更新时会拼接，所以注意力看到的是连续的键和值，与上游相同。
+- `training.memory`：对 talker 和 code predictor 的层做梯度检查点，结果相同；`lowest` 把 AdamW 的状态放在内存里（在那里是 float32）。
+
+## 对照结果
+
+全部 8 个完整链路用例在 CPU 上以 fp32 与 0.1 逐采样相同：预置说话人、指令、音色设计、上下文克隆、x-vector 克隆、语音识别得到的参考文本、方言说话人和微调后的模型。另有两个用例用一种实现合成另一种实现的训练导出，都相同。分词器在分词语料上给出与 transformers 相同的 id。契约套件通过（24 项）。CUDA 图在 GPU 上用小型模型和真实的 0.6B Base 与 eager 路径对照过。
+
+## 限制
+
+- `fused_projections` 以 GPU 上的逐位一致换取速度。
+- CUDA 图要求 talker 完整位于一块 NVIDIA GPU 上；部分加载的 talker 以 eager 方式解码。

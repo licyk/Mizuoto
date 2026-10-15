@@ -1,0 +1,18 @@
+---
+title: "概览"
+description: "进阶部分面向已经会用 Mizuoto、想进一步了解引擎、接口、远程主机、性能、下载、容器部署和 Python 调用的用户。"
+icon: Compass
+---
+
+<Cards>
+  <Card title="引擎详解" href="/docs/advanced-engines" description="七个语音合成引擎和语音识别引擎：模型目录、能力、音色方式、语言、许可、训练方法，以及各自需要安装什么。" />
+  <Card title="HTTP 接口" href="/docs/advanced-api" description="/api/v1 下的 REST 接口、访问令牌与来源检查、任务与 ?wait=true、/ws 事件、流式合成，以及兼容 OpenAI 的 /v1/audio/speech。" />
+  <Card title="远程主机" href="/docs/advanced-remote" description="在另一台机器上运行 mizuoto agent，让引擎在那里运行；音色、结果和界面留在本机。" />
+  <Card title="性能与加速" href="/docs/advanced-performance" description="已加载的模型与内存、显存不足的处理、设备与精度、torch.compile 和微批处理。" />
+  <Card title="模型下载与镜像" href="/docs/advanced-downloads" description="下载来源及其顺序、续传与 SHA-256 校验、HF_TOKEN、共享文件、导入模型文件夹，以及 mizuoto-model 镜像和自建镜像。" />
+  <Card title="Docker" href="/docs/advanced-docker" description="Dockerfile 的各构建阶段与参数、使用 GPU、数据卷、访问令牌和镜像中的环境变量。" />
+  <Card title="在 Python 中使用" href="/docs/advanced-embed" description="用 open_services() 直接调用核心服务，或用 MizuotoServer 把服务器和网页界面嵌入你的程序。" />
+  <Card title="常见问题" href="/docs/advanced-faq" description="端口、访问令牌、首次运行、torch 与缺失的引擎、显存不足、CPU 速度、许可、下载、日志和远程主机。" />
+</Cards>
+
+命令行的设置项与环境变量见 [配置与环境变量](/docs/cli-config)；网页界面中的设置见 [设置](/docs/guide-settings)。

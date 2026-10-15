@@ -1,0 +1,199 @@
+---
+title: "训练器"
+description: "训练方法怎样在清单里声明，数据集怎样添加、准备和检查，各阶段怎样作为 Mizuoto 自身解释器的子进程依次运行，指纹怎样决定哪些阶段过期，训练器怎样编写，以及导出会登记什么。"
+icon: GraduationCap
+---
+
+每个可训练的引擎都以原生方式训练，在 Mizuoto 自己的环境里，用的就是它推理时的那些模块。每个训练器都复现了上游的训练方案：在 CPU 上用同一个种子，它的损失、学习率和保存的权重与上游脚本（Mizuoto 0.1 运行它们的方式；VoxCPM 则是上游自己的脚本）逐字节相同。不需要单独的训练环境或训练用的附加依赖：训练器只用推理也用的模块和依赖，不依赖 transformers、accelerate、peft、Lightning、Hydra、datasets 或 webdataset。主机一侧是 `mizuoto/core/training/service.py`（`TrainingService`）；引擎一侧是 `mizuoto/training/`（`Trainer`、`StageContext`、`stage.py`）加上各引擎的训练器模块。训练界面的用法见[训练](/docs/guide-train)。
+
+<Mermaid chart={`sequenceDiagram
+    participant S as TrainingService
+    participant J as train 任务
+    participant P as 阶段进程（同一解释器）
+    participant T as Trainer
+    S->>J: run()：选出阶段，提交 train 任务
+    loop 每个阶段
+        J->>P: python -m mizuoto.training.stage request.json
+        P->>T: 给进程播种，load_trainer()，stage_ID(ctx)
+        T-->>J: ProgressEvent / MetricEvent / OutputEvent / LogEvent（JSON 行）
+        P-->>J: 每 10 秒一次 HeartbeatEvent
+        T-->>J: ResultEvent(result)
+        J->>S: 记录指纹和结果；导出时登记产物
+    end`} />
+
+## 清单里的训练方法
+
+训练方法是引擎清单里的 `[training.<id>]`（`TrainingMethod`）。OmniVoice 的 LoRA：
+
+```toml
+[training.lora]
+title = "Fine-tune with LoRA"
+export = "model"
+min_seconds = 30.0
+stages = [
+    { id = "tokens", title = "Audio tokens", uses = [] },
+    { id = "train", title = "Train", uses = ["steps", "learning_rate", "batch_tokens", "grad_accumulation", "lora_rank"] },
+    { id = "export", title = "Merge and export", uses = ["preview_text"] },
+]
+
+[training.lora.hyperparams.lora_rank]
+type = "int"
+default = 16
+min = 1
+max = 256
+help = "The adapters' rank (alpha is twice it, as upstream)."
+```
+
+| 字段 | 含义 |
+| --- | --- |
+| `stages` | 静态声明，每个阶段有 `id`、`title`、`help` 和 `uses`（它读取的超参数；省略表示全部）。界面和指纹不必运行任何东西就知道有哪些阶段 |
+| `hyperparams` | 若干 `OptionSpec`；`group = "basic"` 的排在前面，`variants` 把某个超参数限定到部分变体 |
+| `export` | `voice_weights`（音色自有的权重，GPT-SoVITS）或 `model`（一个新的用户模型） |
+| `variants` | 只能从这些变体的模型开始 |
+| `min_seconds` | 数据集至少要有多少音频 |
+| `assets` | 按变体列出只有训练才用的共享资源（GPT-SoVITS 的预训练判别器）；`"*"` 表示所有变体 |
+| `devices` | 训练所用的设备类型；训练器自己的 `DEVICES` 优先 |
+| `enabled`、`note` | 关闭某个方法并说明原因 |
+
+训练器类是引擎的 `TRAINER = "模块:类"`（见[接入引擎](/docs/development-engine)）。`TrainingService.methods(model)` 对每个方法说明能否从这个模型开始，不能时给出 `reason`：已禁用、变体不对、引擎运行在远程主机上、模型没装、引擎不可用、没有训练器、设备类型不符、训练器的 `REQUIRES` 导入不了、缺训练用的共享资源。每条原因都附带解决它的命令。
+
+目前的方法：
+
+| 引擎 | 方法 | 阶段 | 导出 |
+| --- | --- | --- | --- |
+| GPT-SoVITS | `speaker` | `text`、`speech`、`semantic`、`sovits`、`gpt`、`export` | `voice_weights` |
+| F5-TTS | `full` | `prepare`、`train`、`export` | `model` |
+| Qwen3-TTS | `speaker` | `prepare`、`train`、`export` | `model` |
+| OmniVoice | `full`、`lora` | `tokens`、`train`、`export` | `model` |
+| VoxCPM | `full`、`lora` | `prepare`、`train`、`export` | `model` |
+| CosyVoice | `llm`、`llm_flow` | `features`、`llm`、（`flow`）、`export` | `model` |
+| Fish Speech | `lora` | `tokens`、`train`、`export` | `model` |
+| dummy | `speaker`、`full` | `prepare`、`train`、`export` | `voice_weights`、`model` |
+
+## 数据集
+
+训练从数据集开始。数据集是 `datasets/<slug>/`：`dataset.json`、`manifest.jsonl`（每段音频一行：`id`、`audio`、`text`、`speaker`、`language`、`duration`、采样率、`excluded`、来源和 `licence_tags`）和 `audio/<id>.flac`（不超过 48 kHz）。数据集的指纹是 `manifest.jsonl` 的 SHA-256。
+
+- **添加。** 音频可以来自文件（旁边同名的 `.lab` 或 `.txt` 是它的文本）、上传、某个音色的参考音频、已有的输出（保留它们的许可标签），或已知布局的文件夹（GPT-SoVITS 的 `.list`、LJSpeech、CSV、普通文件夹）。
+- **准备。** `prepare`（`dataset_prepare` 任务，资源 `cpu`）按 GPT-SoVITS 的默认参数用 slicer2 在静音处切分，经 ASR 转写，并做峰值归一化。
+- **检查。** `check` 给出 `DatasetReport`：时长直方图、过短或过长的片段、空文本、削波、采样率和许可标签；可以按报告里的问题筛选行，逐条排除或删除。
+- **许可。** 交给训练器的行是 `training_rows(数据集, 目标引擎)`：排除被标记的和没有文本的行；如果某些行的许可标签不允许用来训练目标引擎（引擎清单的 `trains_others = false`），整个请求被拒绝。
+
+## 实验、指纹与过期阶段
+
+一个实验是 `experiments/<引擎>/<名字>/`：`experiment.json`（基础模型、数据集、方法、超参数、各阶段状态）、训练器的工作目录 `work/` 和 `metrics.jsonl`。
+
+每个完成的阶段都记录一个指纹，由 `fingerprints()` 按阶段顺序链式计算：
+
+```python
+used = hp if stage.uses is None else {k: hp.get(k) for k in stage.uses}
+source = json.dumps({"previous": previous, "stage": stage.id, "dataset": dataset_fp,
+                     "model": [exp.base_model, revision], "method": exp.method,
+                     "hp": used, "language": exp.language}, sort_keys=True)
+previous = out[stage.id] = hashlib.sha256(source.encode()).hexdigest()[:20]
+```
+
+数据集的指纹是它 `manifest.jsonl` 的 SHA-256；`hp` 是方法的默认值与实验设定值的合并。读取状态时（`_with_status`），指纹与当前不同的已完成阶段是 `stale`，它之后的每个已完成阶段也是。所以改学习率只会让读取它的训练阶段及其后续过期，之前的特征提取仍然算完成。
+
+还有一条规则：某个阶段**重新运行**后，它之后那些不在同一次运行里的已完成阶段会丢掉指纹。它们读的是旧阶段的文件，所以即使输入（和指纹）相同，也已经过期。
+
+`run()` 选择要运行的阶段：带 `restart` 时全部；给了 `stages` 时就是这些（前提是它们之前的阶段都已完成）；否则从第一个未完成的阶段一直到最后。全部完成时它会拒绝，并提示 `mizuoto train run <exp> --restart`。
+
+## 训练任务
+
+一次运行是一个 `train` 任务，它的步骤就是选中的阶段：
+
+- **资源**：`engine:<引擎>:<设备>` 和 `gpu:<设备>`（CPU 上是 `cpu`），所以它会等引擎自己的推理和 GPU 上的其他任务。设备取 `training.devices[0]`，没有就用引擎的设备。GPU 上的运行整个占用 `gpu:<设备>`（`JobSpec.exclusive`，不受 `compute.gpu_jobs` 限制）；开始前卸载该引擎已加载的模型（`runtime.unload_engine`），并把该设备上其他空闲模型的权重移到内存（`runtime.release_device`），运行期间没有模型回到这个设备。随后估算这次运行的显存峰值，超出空闲显存时在日志里警告，并给出能放下的预设。
+- **每个阶段一个进程**：`host_target("mizuoto.training.stage", cwd=work)` 通过 `JobContext.run_worker`，用服务器自己的解释器运行 `python -m mizuoto.training.stage <request.json>`。阶段进程看得到所有设备，名字不变。心跳超时是 30 分钟（`STAGE_HEARTBEAT_TIMEOUT`）；任何一行输出都会重置它，而阶段本身每 10 秒也会发一次心跳。
+- **请求内容**：`trainer`、`stage`、`engine`、`method`、`experiment`、`workdir`、`dataset_dir`、`rows`（绝对音频路径、文本、说话人、语言、时长、采样率；已经在 `training_rows` 里按许可过滤过）、`base_model`（`id`、`dir`、`variant`）、`assets`、`device`、`precision`（`training.precision`）、`hyperparams`、`language`、`results`（已完成阶段的返回值），以及设置 `training.previews` 和 `training.keep_checkpoints`。
+- **事件**：`MetricEvent` 每秒批量写进 `metrics.jsonl`，并以 `train_metrics` 发布（界面的损失曲线实时跟随）；`ProgressEvent` 变成步骤的进度和消息；`OutputEvent(kind="sample")` 复制为一个 `sample` 类型的输出。重新运行的阶段会先从 `metrics.jsonl` 里删掉它以前的点。
+
+### 为什么用子进程
+
+阶段在自己的进程里运行，而不在服务器进程里：一次运行结束时把内存全部还回去，阶段崩溃也拖不垮服务器，而且阶段可以给进程级随机数生成器播种（上游方案里的 dropout 掩码和数据打乱都从它们抽取），不会影响任何别人的随机数。
+
+`mizuoto/training/stage.py` 就是这个进程：
+
+1. 它把真正的 stdout 留给事件，把文件描述符 1 指向 stderr，于是各种库打印的东西进入日志，而不会混进事件流。事件是带 `@mizuoto ` 前缀的 JSON 行（`mizuoto/core/jobs/jsonl.py`），`mizuoto` 日志记录器的记录会变成 `LogEvent`。
+2. 一个线程每 10 秒发一次 `HeartbeatEvent`（`HEARTBEAT_SECONDS`）。
+3. `stage_main` 给 Python、NumPy 和 torch 的生成器播种（`seed_everything`，用请求里的 `seed`，没有则为 1234；训练服务目前不传种子，所以每次运行都以 1234 播种，结果可以复现），构建 `StageContext`，用 `load_trainer(request["trainer"])` 加载训练器并调用 `run_stage(stage, ctx)`；结果必须能序列化为 JSON，以 `ResultEvent` 送回。
+4. 失败映射为事件和退出码（`mizuoto.core.codes`）：`Cancelled` 或 SIGTERM → `EXIT_CANCELLED`（130）；`EngineError` → 带其错误码的 `ErrorEvent`；内存不足 → `compute_unavailable`；其他 → 把回溯作为日志行，并报 `engine_error`。
+
+`python -m mizuoto.training.stage --entry 模块:函数 <request.json>` 以同样的方式运行别的任务函数。
+
+<Callout type="warn" title="事件和进度条共用一条管道">
+
+任务 worker 的 stdout（事件）和 stderr（库的输出）经同一条管道到达主机，所以一个事件可能紧贴在进度条某个未换行的 `\r` 行后面。主机在事件前缀处切分行（`mizuoto/core/jobs/jsonl.py` 的 `parse_lines`）；在这之前，进度条重绘之后的每个指标都会丢失。
+
+</Callout>
+
+## Trainer 与 StageContext
+
+```python
+class Trainer:
+    ENGINE: ClassVar[str] = ""
+    REQUIRES: ClassVar[tuple[str, ...]] = ()             # 训练在推理之外需要的模块，通过导入探测
+    DEVICES: ClassVar[tuple[str, ...] | None] = None     # 设备类型；None 表示用清单方法里的
+
+    def run_stage(self, stage: str, ctx: StageContext) -> dict[str, Any]:
+        return getattr(self, f"stage_{stage}")(ctx) or {}  # 阶段 id → stage_<id>
+```
+
+训练器是 `mizuoto.training.Trainer` 的子类，它的各方法声明的每个阶段 id 都对应一个 `stage_<id>(ctx)` 方法；`ctx.request["method"]` 说明正在运行哪个方法。训练器模块顶层不导入 torch：主机会导入它来读取 `REQUIRES` 和 `DEVICES`（`InferenceService.trainer_needs`），所以数学部分放在阶段方法内部才导入的模块里。例如 CosyVoice 的训练器设置了 `DEVICES = ("cuda", "cpu")`：上游用 torchrun 只在 CUDA 上训练，而原生移植没有任何地方需要 CUDA。
+
+阶段方法返回一个可序列化为 JSON 的字典，存为该阶段的 `result`；后面的阶段从 `ctx.results` 读取。`StageContext`（`mizuoto/training/context.py`）提供：
+
+| 成员 | 用途 |
+| --- | --- |
+| `workdir`、`rows`、`base_model`、`assets`、`device`、`precision`、`results`、`hyperparams`、`name`、`engine`、`request` | 解析后的请求；`rows` 是 `Row`（`id`、`audio`、`text`、`speaker`、`language`、`duration`、`sample_rate`）；数据集里的音频是 FLAC（用 `mizuoto.nn.dsp.flac.read_audio` 读取） |
+| `hp(name, default)` | 生效的超参数值，为 `None` 时取 `default` |
+| `progress(value, message)` | 0–1，或 `None`（不确定） |
+| `metric(epoch, step, values, lr)` | 一个损失点 |
+| `output(path, label, kind)` | 阶段产出的文件：`sample` 是预览，`checkpoint` 是权重 |
+| `log(message, level)` | 一行日志 |
+| `preview(text, reference, label, weights=…, model_dir=…, variant=…, preset=…)` | 在阶段进程里加载引擎自己的实现（一个私有的 `Runtime`），用新权重（`weights`，套在基础模型上）或新模型（`model_dir`）以种子 1234 说出 `text`，存为样例。失败只是一条警告，绝不会让阶段失败；`training.previews` 关闭时跳过 |
+
+阶段必须可以重跑：每个阶段先清空自己的输出目录。
+
+### 显存
+
+训练的显存预设（`training.memory`：`standard`、`low`、`lowest`）和工具都在 `mizuoto/training/memory.py`：梯度检查点在反向重算时还原全局生成器和训练器自己的生成器，所以损失和权重不变；`low` 只加不改变结果的工具，`lowest` 再加轻微改变结果的工具；方法自己的超参数优先。GPU 上的阶段在指标里附带 `memory/peak_mb`，`MethodInfo.memory_mb` 按预设估算一次运行的峰值。详见[显存管理](/docs/development-memory)。
+
+## 导出
+
+`export` 阶段返回 `{"artifacts": [...]}`，由主机的 `_register` 接收：
+
+- `{"kind": "voice_weights", "files": {"gpt": …, "sovits": …}}`：移进实验所属音色的 `Voice.weights[engine]`；实验没有音色时，用数据集中最多三段 3–10 秒、带文本、最接近 6 秒的音频新建一个音色。
+- `{"kind": "model", "folder": …, "variant": …, "title": …, "speakers": …}`：通过 `register_user_model` 成为一个用户模型，其 `model.json` 记录 `trained_from` 和实验（以及 Qwen3 的 `speakers`）。
+
+同一个音色或模型再次导出只列一次，以最新的那次为准。`mizuoto train export <exp>` 单独运行 `export` 阶段。导出沿用上游方案的格式和权重的键名，所以上游的实现（以及 Mizuoto 0.1）也能加载它们，反之亦然。
+
+## 以 OmniVoice 的训练器为例
+
+`mizuoto/engines/omnivoice/train.py`，方法 `full` 和 `lora`，导出 `model`，依照上游的 `examples/run_finetune.sh` 和 `run_finetune_lora.sh`，不依赖 transformers、peft、accelerate 或 webdataset：
+
+- `tokens`：以种子 42 打乱各段音频，逐段读取、转单声道、重采样到 24 kHz、峰值归一化，再用模型自己的 HiggsAudio 分词器编码（用推理引擎的 `load_audio_tokenizer` 加载），写成 WebDataset 风格的分片，由 `data.lst` 列出。
+- `train`：上游的微调循环及其 SDPA 配置：分片由数据加载 worker 读取，worker 的播种方式与上游相同；按长度分组成批，使用四维掩码；带掩码的交叉熵、带余弦调度的 AdamW、梯度裁剪和梯度累积。LoRA 就是 peft 的那种，但不依赖 peft 实现。每次更新的损失记为一次 `ctx.metric`。最后以上游的目录结构写出 `out/checkpoint-<步数>`。
+- `export`：即 `merge_lora`：把适配器合并进基础权重（全量微调的权重则原样使用），存为 `model.safetensors`，旁边放基础模型的配置、分词器和聊天模板，然后用 `ctx.preview` 克隆数据集里的一段音频。
+
+上游在构建模型之后会用配置里的种子把一切重新播种；原生训练器把之后的那些抽样放在以同样方式播种的私有生成器上进行（数据加载 worker 的种子、LoRA 的 dropout 掩码），只有 LoRA 的初始化从阶段进程的全局生成器按模块顺序抽取，与上游相同，所以带种子的运行能得到与上游相同的损失和权重。
+
+## 添加一个训练器
+
+<Steps>
+<Step>
+
+在清单里写 `[training.<id>]`：各阶段及其 `uses`、超参数、`export`，需要时加 `assets` 和 `devices`。在引擎类上设置 `TRAINER = "mizuoto.engines.<id>.train:<类>"`。
+
+</Step>
+<Step>
+
+写一个 `Trainer` 子类，每个阶段一个 `stage_<id>(ctx)`，重依赖在方法内导入。按上游的顺序从进程级生成器抽随机数，上游重新播种过的地方改用私有生成器；用 `ctx.progress`、`ctx.metric` 和 `ctx.log` 汇报。训练在推理之外需要的包写进 `REQUIRES`。
+
+</Step>
+<Step>
+
+`export` 返回 `artifacts` 并调用 `ctx.preview`。加上 `tests/engines_native/test_<id>_train_tiny.py`（小型随机模型、几段音频、每个阶段），然后用一个小数据集完整地训练一遍（界面的训练页面，或 `mizuoto train new` / `mizuoto train run`），并与上游对照（`scripts/parity/train.py`，见[测试](/docs/development-testing#与参照实现对照)）。为得到相同结果复现了哪些上游行为，记进设计记录 `AGENTS.md` 和该引擎的说明。
+
+</Step>
+</Steps>

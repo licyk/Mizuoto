@@ -1,0 +1,576 @@
+---
+title: "命令参考"
+description: "按用途分组列出 mizuoto 的每个命令组和命令：用途、主要参数与选项和一个示例，内容来自各命令的 --help。"
+icon: SquareTerminal
+---
+
+本页按用途分组；`mizuoto --help` 和各组的帮助按字母顺序列出命令。约定和退出码见 [概览](/docs/cli)，设置项见 [配置与环境变量](/docs/cli-config)。
+
+所有命令都接受下面的选项，表格里不再重复：
+
+| 选项 | 说明 |
+| --- | --- |
+| `--debug` | 打印调试日志 |
+| `--help` | 显示帮助并退出 |
+
+很多命令还接受 `--json`：打印与对应 HTTP 接口相同结构的 JSON，表格中列出了它。参数写作 `{名称}` 为必填，`[名称]` 为可选。重复选项（如 `--ref`、`-p`）可以写多次。`key=value` 形式的值按 JSON 解析（数字、`true`/`false`），解析不了时作为文本。
+
+## 合成
+
+### `speak`
+
+用一个模型和一个音色朗读文本。结果保存到结果文件夹，`-o` 再复制一份。
+
+```text
+mizuoto speak [OPTIONS] {text}
+```
+
+| 参数 / 选项 | 说明 |
+| --- | --- |
+| `{text}` | 文本；`-` 表示从标准输入读取 |
+| `-m, --model <str>` | 模型 id，如 `qwen3tts/1.7b-base`（默认：`tts.default_model`） |
+| `-o, --output <path>` | 再复制一份到这里；扩展名决定格式 |
+| `-v, --voice <str>` | 音色库中的音色（id 或 slug） |
+| `--ref <path>` | 要克隆的参考音频（可重复） |
+| `--ref-text <str>` | 每段 `--ref` 说的内容，按顺序 |
+| `--preset <str>` | 模型的预置说话人 |
+| `--describe <str>` | 按这段描述设计音色 |
+| `--attr <str>` | 音色属性 `key=value`（可重复），如 OmniVoice 的 `gender=female` |
+| `-l, --lang <str>` | 语言代码（`zh`、`en`、`ja`……）或 `auto` |
+| `--instruct <str>` | 怎么说（风格指令） |
+| `--emotion <str>` | 情感权重 `name=value`（可重复） |
+| `--emotion-audio <path>` | 借用这段音频的情感 |
+| `--emotion-text <str>` | 用文字描述情感 |
+| `-p, --param <str>` | 通用参数 `name=value`（可重复） |
+| `-O, --option <str>` | 引擎选项 `name=value`（可重复） |
+| `--seed <int>` | 随机种子 |
+| `--speed <float>` | 语速，1.0 为正常 |
+| `-f, --format <str>` | `wav`、`flac`、`mp3`、`ogg` 或 `m4a` |
+| `--sample-rate <int>` | 把结果重采样到这个采样率 |
+| `--batch` | 每行文本生成一个结果 |
+| `--split` | 由 Mizuoto 而不是引擎切分长文本 |
+| `--lenient` | 丢弃模型不接受的参数并给出警告（默认报错） |
+| `-P, --use-preset <str>` | 参数预设（`mizuoto preset list`）；`--param` 和 `--option` 优先于它 |
+| `--stream` | 边生成边把 WAV 写到标准输出（如 `\| ffplay -`） |
+| `--plan` | 只显示将要执行的计划，不运行 |
+| `--json` | 打印 JSON |
+
+音色只能选一种方式：`-v`、`--ref`、`--preset` 或 `--describe`/`--attr`；都不给时使用模型自带的音色（模型支持时）。
+
+```bash
+mizuoto speak "你好。" -m qwen3tts/1.7b-custom-voice --preset vivian --instruct "温柔地"
+mizuoto speak - -m cosyvoice/cosyvoice2-0.5b -v 我的声音 -o out.flac < chapter.txt
+```
+
+### `design`
+
+用按描述设计出的音色朗读，可以把这个音色保存到音色库。
+
+| 参数 / 选项 | 说明 |
+| --- | --- |
+| `{text}` | 设计出的音色要说的话 |
+| `-m, --model <str>` | 支持音色设计的模型（必填） |
+| `-d, --description <str>` | 音色描述 |
+| `--attr <str>` | 音色属性 `key=value`（可重复） |
+| `-l, --lang <str>` | 语言 |
+| `--seed <int>` | 随机种子 |
+| `-o, --output <path>` | 再复制一份到这里 |
+| `--save-as <str>` | 以这个名称保存到音色库 |
+| `--json` | 打印 JSON |
+
+```bash
+mizuoto design "欢迎收听。" -m qwen3tts/1.7b-voice-design -d "年轻女声，明亮，语速稍快" --save-as 主持人
+mizuoto design "Hello." -m omnivoice/omnivoice --attr gender=male --attr age=elderly
+```
+
+### `convert`
+
+用另一个音色说出一段录音的内容（音色转换）。
+
+| 参数 / 选项 | 说明 |
+| --- | --- |
+| `{source}` | 要转换的录音 |
+| `-m, --model <str>` | 支持音色转换的模型，如 `cosyvoice/cosyvoice2-0.5b`（必填） |
+| `-v, --voice <str>` | 目标音色（音色库中的音色） |
+| `--ref <path>` | 或者目标音色的一段音频 |
+| `-o, --output <path>` | 再复制一份到这里 |
+| `--seed <int>` | 随机种子 |
+| `--json` | 打印 JSON |
+
+```bash
+mizuoto convert line.wav -m cosyvoice/cosyvoice2-0.5b -v 我的声音 -o line-converted.wav
+```
+
+### `edit`
+
+用同一个音色的新语音替换录音中的几段（语音编辑）。
+
+| 参数 / 选项 | 说明 |
+| --- | --- |
+| `{source}` | 要编辑的录音 |
+| `-m, --model <str>` | 支持语音编辑的模型，如 `f5tts/v1-base`（必填） |
+| `-t, --text <str>` | 编辑后整段录音的完整文本（必填） |
+| `--span <str>` | 要替换的一段 `START:END[:SECONDS]`，单位为秒（可重复，必填）；`SECONDS` 为新内容的时长 |
+| `-o, --output <path>` | 再复制一份到这里 |
+| `--seed <int>` | 随机种子 |
+| `--json` | 打印 JSON |
+
+```bash
+mizuoto edit take.wav -m f5tts/v1-base -t "我们明天上午十点见。" --span 2.10:2.60
+```
+
+### `asr`
+
+用语音识别引擎转写一段音频。
+
+| 参数 / 选项 | 说明 |
+| --- | --- |
+| `{audio}` | 音频文件 |
+| `-l, --lang <str>` | 语言代码；默认自动检测 |
+| `-m, --model <str>` | 语音识别模型（默认：`tts.asr_model`） |
+| `--json` | 打印 JSON |
+
+```bash
+mizuoto asr clip.wav -l zh
+```
+
+## 音色
+
+### `voice list` · `voice info`
+
+`voice list` 列出音色库（slug、名称、类型、语言、片段数、秒数）；`voice info {voice}` 显示一个音色和它的参考音频。
+
+| 选项 | 说明 |
+| --- | --- |
+| `-q, --search <str>` | 在名称、描述和标签中查找（`list`） |
+| `--kind <str>` | `reference`、`designed`、`preset` 或 `trained`（`list`） |
+| `-l, --lang <str>` | 只列出这种语言的音色（`list`） |
+| `--json` | 打印 JSON |
+
+```bash
+mizuoto voice list --kind designed
+```
+
+### `voice add`
+
+用参考音频新建一个音色；缺少的文本由语音识别补全。
+
+| 参数 / 选项 | 说明 |
+| --- | --- |
+| `{name}` | 音色名称 |
+| `--ref <path>` | 参考音频（可重复，必填） |
+| `--text <str>` | 每段 `--ref` 说的内容，按顺序 |
+| `-l, --lang <str>` | 音色的语言 |
+| `--consent <str>` | 这是谁的声音、你可以怎样使用：可选的说明，随音色保存，不是必需的 |
+| `--description <str>` | 备注 |
+| `--tag <str>` | 标签（可重复） |
+| `--no-transcribe` | 不用语音识别补全缺少的文本 |
+| `--json` | 打印 JSON |
+
+```bash
+mizuoto voice add 我的声音 --ref a.wav --ref b.wav --text "第一段" --text "第二段" -l zh
+```
+
+### `voice design`
+
+按描述设计一个音色并保存；它的示例音频让所有能克隆的模型都能使用这个音色。
+
+| 参数 / 选项 | 说明 |
+| --- | --- |
+| `{name}` | 音色名称 |
+| `-m, --model <str>` | 支持音色设计的模型（必填） |
+| `-d, --description <str>` | 音色描述 |
+| `--attr <str>` | 音色属性 `key=value`（可重复） |
+| `--sample-text <str>` | 示例音频里说的话（默认：`Hello! This is how I sound when I read a few sentences aloud.`） |
+| `-l, --lang <str>` | 示例文本的语言 |
+| `--seed <int>` | 随机种子 |
+| `--json` | 打印 JSON |
+
+```bash
+mizuoto voice design 旁白 -m qwen3tts/1.7b-voice-design -d "沉稳的中年男声" --sample-text "从前有一座山。" -l zh
+```
+
+### `voice from-preset` · `voice from-output`
+
+| 命令 | 用途 | 选项 |
+| --- | --- | --- |
+| `voice from-preset {model} {speaker}` | 把模型的一个预置说话人加入音色库 | `--name <str>` 名称；`--json` |
+| `voice from-output {output_id} {name}` | 把一段合成结果保存为音色（来自设计时为设计音色） | `--consent <str>`；`--json` |
+
+```bash
+mizuoto voice from-preset qwen3tts/1.7b-custom-voice vivian --name Vivian
+```
+
+### `voice edit` · `voice remove`
+
+| 命令 | 用途 | 选项 |
+| --- | --- | --- |
+| `voice edit {voice}` | 修改名称、语言、描述、标签或同意说明 | `--name`、`-l, --lang`、`--description`、`--tag`（可重复，替换全部标签）、`--consent` |
+| `voice remove {voices}...` | 把音色移到回收站 | — |
+
+### 参考音频
+
+| 命令 | 用途 | 选项 |
+| --- | --- | --- |
+| `voice add-ref {voice} {clip}` | 添加一段参考音频 | `--text <str>`、`-l, --lang <str>`、`--primary`（设为主音频） |
+| `voice remove-ref {voice} {sha}` | 删除一段参考音频（SHA-256，写前缀即可） | — |
+| `voice set-transcript {voice} {sha} {text}` | 修正一段参考音频的文本 | — |
+| `voice retranscribe {voice} [sha]` | 用语音识别重新转写全部（或这一段）参考音频 | — |
+
+```bash
+mizuoto voice set-transcript 我的声音 3fa2 "更正后的文本"
+```
+
+### `voice add-weights` · `voice remove-weights`
+
+给音色添加或删除它专属的微调权重（用于该引擎同版本的模型，如 GPT-SoVITS）。
+
+| 选项 | 说明 |
+| --- | --- |
+| `-e, --engine <str>` | 权重所属的引擎，如 `gptsovits`（必填） |
+| `-f, --file <str>` | `role=path`，每个文件一次（GPT-SoVITS：`gpt=x.ckpt sovits=y.pth`；`add-weights` 必填） |
+| `--move` | 移动文件而不是复制（`add-weights`） |
+| `--json` | 打印 JSON（`add-weights`） |
+
+```bash
+mizuoto voice add-weights alice -e gptsovits -f gpt=alice-e15.ckpt -f sovits=alice_e8_s200.pth
+```
+
+### `voice fit` · `voice prepare`
+
+| 命令 | 用途 | 选项 |
+| --- | --- | --- |
+| `voice fit {voice}` | 说明模型能否使用这个音色、以哪种方式（克隆、无文本克隆、预置说话人、设计、训练），以及先要做什么（转写、裁剪） | `-m, --model`（必填）；`--json` |
+| `voice prepare {voice}` | 提前为模型准备音色（参考提示、嵌入等缓存） | `-m, --model`（必填） |
+
+```bash
+mizuoto voice fit 我的声音 -m f5tts/v1-base
+```
+
+### `voice export` · `voice import`
+
+| 命令 | 用途 | 选项 |
+| --- | --- | --- |
+| `voice export {voice}` | 把音色（参考音频和设置）写成 zip | `-o, --output <path>`（必填） |
+| `voice import {archive}` | 从 `voice export` 写出的 zip 添加音色 | `--name <str>` 换一个名称 |
+
+```bash
+mizuoto voice export 我的声音 -o my-voice.zip
+```
+
+## 模型与共享文件
+
+### `model list` · `model info` · `model spec` · `model speakers`
+
+| 命令 | 用途 | 选项 |
+| --- | --- | --- |
+| `model list` | 列出 Mizuoto 知道的模型及其状态 | `-e, --engine <str>`；`--installed / --missing`；`--json` |
+| `model info {model_id}` | 显示一个模型 | `--json` |
+| `model spec {model_id}` | 模型接受什么：音色模式、语言、参数和选项 | `--json` |
+| `model speakers {model_id}` | 列出模型的预置说话人 | `--json` |
+
+```bash
+mizuoto model list -e cosyvoice --installed
+mizuoto model spec indextts/v2
+```
+
+### `model download` · `model verify` · `model delete`
+
+| 命令 | 用途 | 选项 |
+| --- | --- | --- |
+| `model download {model_ids}...` | 下载目录中的模型（续传中断的下载，校验每个文件；需要的共享文件一并下载） | `--json` |
+| `model verify {model_id}` | 按 SHA-256 检查已安装模型的每个文件 | `--json` |
+| `model delete {model_ids}...` | 删除下载或导入的模型 | — |
+
+```bash
+mizuoto model download qwen3tts/1.7b-base gptsovits/v2pro-base
+```
+
+下载来源见 [模型下载与镜像](/docs/advanced-downloads)。
+
+### `model import`
+
+添加一个别处的模型文件夹（之前的下载、微调结果）。与目录中的模型文件大小一致时按 SHA-256 核对后作为该模型导入，否则成为用户模型 `<引擎>/<名称>`。
+
+| 参数 / 选项 | 说明 |
+| --- | --- |
+| `{path}` | 包含模型的文件夹 |
+| `--name <str>` | 以 `<engine>/<name>` 导入，而不是作为它匹配的目录模型 |
+| `--move` | 移动文件夹而不是复制 |
+| `--json` | 打印 JSON |
+
+```bash
+mizuoto model import ~/Downloads/CosyVoice2-0.5B
+```
+
+### `asset list` · `asset download` · `asset delete`
+
+共享文件：同一引擎的多个模型共用的文件。
+
+| 命令 | 用途 | 选项 |
+| --- | --- | --- |
+| `asset list` | 列出共享文件和需要它们的模型 | `-e, --engine <str>`；`--json` |
+| `asset download {asset_ids}...` | 下载共享文件（模型需要的会随模型下载） | `--json` |
+| `asset delete {asset_id}` | 删除一个共享文件（需要它的模型在重新下载前无法使用） | `-y, --yes` 不询问 |
+
+```bash
+mizuoto asset download gptsovits/s2d-v2pro
+```
+
+## 引擎与运行时
+
+### `doctor`
+
+列出找到的 GPU（NVIDIA、AMD、Intel、Apple）及查找方式；检查 torch 与它们是否匹配，并打印安装正确版本的命令；逐个列出引擎可用或缺失（以及缺什么：torch、`mizuoto-fishspeech`、`mizuoto-indextts`），以及没有安装的可选依赖。有检查失败时以退出码 1 结束。
+
+| 参数 / 选项 | 说明 |
+| --- | --- |
+| `[engine_id]` | 只检查这个引擎（默认：全部） |
+| `--json` | 打印 JSON |
+
+```bash
+mizuoto doctor
+mizuoto doctor gptsovits
+```
+
+### `runtime`
+
+列出已加载的模型（设备、内存、上次使用、忙碌或空闲），并卸载它们。模型在服务器的进程中：服务器（`mizuoto webui`）在运行时，命令会询问它（通过数据文件夹中的 `server.json`）；否则命令自己的进程里没有加载任何模型。
+
+| 参数 / 选项 | 说明 |
+| --- | --- |
+| `[model]` | 与 `--unload` 一起用：要卸载的模型（默认：所有未在使用的模型） |
+| `--unload` | 卸载一个模型，或所有未在使用的模型 |
+| `--json` | 打印 JSON |
+
+```bash
+mizuoto runtime
+mizuoto runtime --unload qwen3tts/1.7b-base
+```
+
+### `engine list` · `engine info`
+
+| 命令 | 用途 | 选项 |
+| --- | --- | --- |
+| `engine list` | 列出引擎、是否可用、许可、是否启用、模型数 | `--json` |
+| `engine info {engine_id}` | 引擎的变体、能力、参数和模型 | `--json` |
+
+### `engine licence` · `engine accept-licence`
+
+| 命令 | 用途 | 选项 |
+| --- | --- | --- |
+| `engine licence {engine_id}` | 打印引擎的许可全文 | `--json` |
+| `engine accept-licence {engine_id}` | 显示需要接受许可的引擎的许可，并在确认后接受 | `--yes` 不询问 |
+
+```bash
+mizuoto engine licence fishspeech
+mizuoto engine accept-licence fishspeech
+```
+
+### `engine enable` · `engine disable`
+
+启用或停用引擎（`engine disable {engine_id}` 后其模型仍保留）。
+
+### `engine op`
+
+运行引擎声明的专用操作（如 GPT-SoVITS 的 `switch_weights`、Fish Speech 的 `codec_encode`）。
+
+| 参数 / 选项 | 说明 |
+| --- | --- |
+| `{model}` | 要加载的模型，如 `gptsovits/v2pro-base` |
+| `{op}` | 引擎声明的操作（`mizuoto engine info <engine>`） |
+| `-s, --set <str>` | 载荷中的值 `key=value`（可重复） |
+| `--json` | 打印 JSON |
+
+## 预设
+
+### `preset list` · `preset save` · `preset delete` · `preset default`
+
+参数预设：命名的一组参数，用于某个模型，或不指定模型时只含通用参数。
+
+| 命令 | 用途 | 选项 |
+| --- | --- | --- |
+| `preset list` | 列出预设 | `-m, --model <str>` 只列出该模型能用的；`--json` |
+| `preset save {name}` | 保存一组参数 | `-m, --model`（不给：适用于任何模型的通用参数）；`-p, --param`、`-O, --option`（可重复）；`-v, --voice` 默认状态针对的音色；`--default` 在网页界面选中该模型时应用；`--json` |
+| `preset delete {preset}` | 删除预设（id 或名称） | — |
+| `preset default {preset}` | 把预设设为模型的默认预设 | `--off` 取消默认 |
+
+```bash
+mizuoto preset save 有表现力 -m qwen3tts/1.7b-custom-voice -p temperature=1.1 -O subtalker_temperature=1.0 --default
+mizuoto speak "……" -m qwen3tts/1.7b-custom-voice --preset vivian -P 有表现力
+```
+
+## 项目
+
+项目由一组角色逐句朗读书、剧本或对话。脚本是纯文本：`#` 开头为一章，`名字: 文本` 是该角色的一句，空行分隔段落。
+
+| 命令 | 用途 | 主要选项 |
+| --- | --- | --- |
+| `project list` | 列出项目 | `--json` |
+| `project new {name}` | 新建项目（旁白和可选的脚本） | `-m, --model` 未指定模型的角色所用模型；`-v, --voice` / `--preset` 旁白的音色；`-l, --lang`；`-s, --script <path>`；`--split line\|sentence`（默认 `line`）；`--json` |
+| `project show {project}` | 显示角色和每一句的状态 | `--json` |
+| `project import {project} {script}` | 从脚本添加章节和句子；新的角色名加入角色表 | `--split line\|sentence`；`--replace` 替换全部章节；`--chapter <str>` 追加到这一章；`--json` |
+| `project script {project}` | 把项目打印为纯文本脚本 | — |
+| `project cast {project} {speaker}` | 添加、修改或删除一个角色（新 id 即添加） | `--name`；`-m, --model`；`-v, --voice`；`--preset`；`-l, --lang`；`--instruct`（传 `''` 表示清除或沿用项目的）；`-p, --param`、`-O, --option`（可重复，整体替换）；`--remove`（其台词归旁白）；`--json` |
+| `project set {project}` | 修改项目设置 | `--name`；`-m, --model`；`-l, --lang`；`--line-pause`、`--paragraph-pause`、`--chapter-pause`（毫秒）；`-f, --format`；`--sample-rate`；`--normalize none\|peak\|loudness`；`--json` |
+| `project render {project}` | 生成还没有当前录音的句子 | `-c, --chapter`、`--line`（可重复）；`--force` 已是最新的也重新生成；`--json` |
+| `project export {project}` | 把录音拼接成一个文件 | `-o, --output`；`-c, --chapter`（可重复）；`-f, --format`；`--srt <path>`（`.srt` 或 `.vtt`）；`--allow-missing` 跳过没有录音的句子；`--json` |
+| `project delete {project}` | 把项目连同录音移到回收站 | `-y, --yes` |
+
+```bash
+mizuoto project new 广播剧 -m qwen3tts/1.7b-custom-voice --preset uncle_fu -l zh -s 剧本.txt
+mizuoto project show 广播剧                 # 章节和句子的 id
+mizuoto project render 广播剧
+mizuoto project export 广播剧 -o 广播剧.m4a --srt 广播剧.srt
+```
+
+## 数据集与训练
+
+### `dataset`
+
+| 命令 | 用途 | 主要选项 |
+| --- | --- | --- |
+| `dataset list` | 列出数据集 | `--json` |
+| `dataset create {name}` | 新建空数据集 | `-l, --lang`；`--consent`；`--description`；`--json` |
+| `dataset info {dataset}` | 显示数据集 | `--json` |
+| `dataset import {dataset} {path}` | 按已知布局添加一个文件夹 | `--layout auto\|plain\|gptsovits_list\|ljspeech\|csv`（默认 `auto`）；`--json` |
+| `dataset add {dataset} [files]...` | 添加音频文件或文件夹（旁边的 `.lab`/`.txt` 为其文本）、音色的参考音频或合成结果 | `--voice <str>`；`--output <str>`（可重复）；`--speaker`；`-l, --lang`；`--json` |
+| `dataset prepare {dataset}` | 切分、转写和归一化 | `--slice / --no-slice`；`--max-seconds`（默认 12.0）；`--min-seconds`（默认 1.0）；`--threshold`（静音阈值 dB，默认 -34.0）；`--transcribe / --no-transcribe`；`--normalize / --no-normalize`（峰值到 -1 dBFS）；`-l, --lang`；`--json` |
+| `dataset check {dataset}` | 报告训练会看到什么：时长、空文本、削波、采样率、说话人 | `--json` |
+| `dataset rows {dataset}` | 列出片段和文本 | `-q, --search`；`--offset`（默认 0）；`--limit`（默认 50）；`--json` |
+| `dataset edit-row {dataset} {row}` | 修正、排除或删除一个片段 | `--text`；`--speaker`；`-l, --lang`；`--exclude / --include`；`--remove` |
+| `dataset delete {dataset}` | 把数据集移到回收站 | `-y, --yes` |
+
+```bash
+mizuoto dataset import alice ./GPT-SoVITS/output/asr_opt --layout gptsovits_list
+mizuoto dataset prepare alice --max-seconds 10 -l zh
+```
+
+### `train`
+
+实验以 `<引擎>/<名称>` 标识，名称唯一时也可以只写名称。
+
+| 命令 | 用途 | 主要选项 |
+| --- | --- | --- |
+| `train methods {model}` | 列出模型的微调方式、阶段和超参数 | `--json` |
+| `train new {name}` | 新建实验 | `-m, --base`（必填）；`-d, --dataset`（必填）；`--method`（默认该模型的第一种）；`--hp key=value`（可重复）；`--voice` 把权重导出到这个音色（默认新建）；`-l, --lang`；`--json` |
+| `train list` | 列出实验 | `--json` |
+| `train status {experiment}` | 显示各阶段和导出 | `--json` |
+| `train run {experiment}` | 运行阶段：默认从第一个未完成的阶段开始 | `-s, --stage`（可重复；之前的阶段须已完成）；`--restart` 从第一阶段全部重跑；`--json` |
+| `train metrics {experiment}` | 打印各阶段上报的损失（首个、最后、最低） | `-s, --stage`；`--json` |
+| `train edit {experiment}` | 修改超参数（读取它们的阶段变为过期） | `--hp key=value`（`key=` 恢复默认）；`--voice`；`-l, --lang` |
+| `train export {experiment}` | 重新运行导出：把权重登记为音色的或一个模型 | `--json` |
+| `train delete {experiment}` | 把实验和工作文件移到回收站（导出结果保留） | `-y, --yes` |
+
+```bash
+mizuoto train new alice-v1 -m gptsovits/v2pro-base -d alice --hp sovits_epochs=8
+mizuoto train run alice-v1 -s gpt
+```
+
+超参数的名称因方法而异，以 `mizuoto train methods <模型>` 的输出为准。
+
+## 结果与任务
+
+### `output`
+
+| 命令 | 用途 | 选项 |
+| --- | --- | --- |
+| `output list` | 列出结果，最新的在前 | `--voice`；`-m, --model`；`-s, --search`（文本包含）；`--limit`（默认 30，`[1, 500]`）；`--json` |
+| `output info {output_id}` | 显示结果和它是怎样生成的 | `--json` |
+| `output delete {ids}...` | 删除结果（文件移到回收站） | `-y, --yes` |
+
+### `job`
+
+| 命令 | 用途 | 选项 |
+| --- | --- | --- |
+| `job list` | 列出任务，最新的在前 | `--state <str>`（一个状态，或 `active`、`finished`）；`--kind <str>`（`speak`、`design`、`train`……）；`--limit`（默认 30，`[1, 200]`）；`--json` |
+| `job show {job_id}` | 显示一个任务 | `--json` |
+| `job log {job_id}` | 打印任务日志 | — |
+| `job cancel {job_id}` | 取消任务（只能取消本进程中的任务，见 [概览](/docs/cli#在服务器运行时使用)） | — |
+| `job retry {job_id}` | 在前台重新运行失败、已取消或已中断的任务 | `--json` |
+
+```bash
+mizuoto job list --state failed
+mizuoto job log j_abc123
+```
+
+## 远程主机
+
+详见 [远程主机](/docs/advanced-remote)。
+
+### `agent`
+
+把本机的引擎提供给另一台 Mizuoto（在 GPU 机器上运行）。
+
+| 选项 | 说明 |
+| --- | --- |
+| `--host <str>` | 监听地址（默认取自设置：`127.0.0.1`；`0.0.0.0` 监听所有网卡） |
+| `--port <int>` | 端口（默认取自设置：`7870`） |
+| `--token <str>` | 主机必须给出的令牌（默认取自设置；没有时生成一个并保存） |
+| `--ssl-certfile <file>` | PEM 证书：使用 TLS（默认取自设置 `remote.agent.ssl_certfile`） |
+| `--ssl-keyfile <file>` | 证书的私钥 |
+
+```bash
+mizuoto agent --host 0.0.0.0
+```
+
+### `remote`
+
+| 命令 | 用途 | 选项 |
+| --- | --- | --- |
+| `remote list` | 列出远程主机：地址、状态、版本、设备、引擎、使用它的引擎 | `--json` |
+| `remote add {name} {address}` | 添加或修改远程主机并检查它是否响应；`address` 为 `host` 或 `host:port`（默认端口 7870） | `--token`（修改时不给则保留原令牌）；`--tls`；`--ca-file <file>`（CA 证书，或 agent 的自签名证书）；`--json` |
+| `remote remove {name}` | 删除远程主机；使用它的引擎回到本机运行 | — |
+| `remote use {engine} [name]` | 在远程主机上运行引擎 | `-d, --device`（那台主机上的设备：`auto`、`cuda:0`、`cpu`……，默认 `auto`）；`--local` 回到本机运行 |
+
+```bash
+mizuoto remote add gpu-box 192.168.1.20 --token <令牌>
+mizuoto remote use qwen3tts gpu-box -d cuda:0
+```
+
+## 设置与系统
+
+### `config`
+
+| 命令 | 用途 | 参数 |
+| --- | --- | --- |
+| `config show` | 显示生效的设置（访问令牌只显示是否已设置） | `--json` |
+| `config get {key}` | 打印一个设置，键用点分隔，如 `server.port` | — |
+| `config set {key} {value}` | 修改一个设置并保存；值按 JSON 解析，`null` 清除 | — |
+| `config path` | 打印设置文件的路径 | — |
+
+```bash
+mizuoto config set downloads.source hf-mirror
+mizuoto config set engines.cosyvoice.device cuda:1
+```
+
+### `version`
+
+显示 Mizuoto 及其主要组件（torch、fastapi、uvicorn、pydantic、typer、httpx、numpy、av、`mizuoto-fishspeech`、`mizuoto-indextts`；未安装的组件没有版本号）的版本和 Python 版本。选项：`--json`。
+
+### `env vars`
+
+列出 Mizuoto 读取的环境变量，以及当前已设置的 `MIZUOTO_*` 变量（名称含 `TOKEN` 的值显示为 `***`）。选项：`--json`。
+
+### `webui`
+
+启动服务器并打开网页界面。
+
+| 选项 | 说明 | 默认值 |
+| --- | --- | --- |
+| `--host <str>` | 绑定的地址 | 设置 `server.host`（`127.0.0.1`） |
+| `--port <int>` | 第一个尝试的端口，`[0, 65535]`；`0` 由系统任选 | 设置 `server.port`（`7869`） |
+| `--strict-port / --no-strict-port` | 端口被占用时直接失败，而不是尝试下一个 | 设置 `server.strict_port`（关） |
+| `--open / --no-open` | 在浏览器中打开网页界面 | 设置 `server.open_browser`（开） |
+| `--data-dir <directory>` | 数据文件夹（设置、数据库、模型、结果） | `MIZUOTO_DATA_DIR` 或系统默认位置 |
+| `--config-dir <directory>` | 存放 `settings.toml` 的文件夹 | 数据文件夹 |
+| `--api-prefix <str>` | 把接口、socket 和网页界面放到这个路径下，如 `/voice` | 无 |
+| `--ssl-certfile <file>` | PEM 证书：以 HTTPS 提供服务 | 设置 `server.ssl_certfile` |
+| `--ssl-keyfile <file>` | 证书的私钥 | 设置 `server.ssl_keyfile` |
+
+端口被占用时依次尝试后面的端口（最多 20 个），全部失败时以退出码 3 结束；证书文件不存在时以退出码 4 结束。绑定到非本机地址时日志会警告服务器可被其他机器访问。启动后标准输出打印一行 `SERVER_READY url=http://...`。
+
+```bash
+mizuoto webui
+mizuoto webui --host 0.0.0.0 --port 8000 --no-open
+```

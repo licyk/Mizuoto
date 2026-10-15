@@ -1,0 +1,17 @@
+{
+ "repo": "charactr/vocos-mel-24khz",
+ "revision": "0feb3fdd929bcd6649e0e7c5a688cf7dd012ef21",
+ "files": [
+  {
+   "path": "config.yaml",
+   "size": 461,
+   "sha256": "da9033922f969a47f0c160010226919e59f27761fd5066f3828d46de6650b0fc"
+  },
+  {
+   "path": "pytorch_model.bin",
+   "size": 54365991,
+   "sha256": "97ec976ad1fd67a33ab2682d29c0ac7df85234fae875aefcc5fb215681a91b2a"
+  }
+ ],
+ "into": "vocos"
+}

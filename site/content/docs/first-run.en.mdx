@@ -1,0 +1,97 @@
+---
+title: "First run"
+description: "Where you start, checking torch and the engines, downloading models, licence-gated engines, and the first real synthesis."
+icon: Play
+---
+
+With Mizuoto installed and `mizuoto webui` running, this page takes you through the first use: where to start, checking torch and the engines, what a model download does, the licence-gated engines, and finally the first synthesis. Each step is given for the web UI and the command line.
+
+## Where you start
+
+The UI opens on **Speak**. Nothing has to be set up first: the dummy engine works right away (it speaks in tones), so you can look around before downloading anything. Three places matter for a real engine:
+
+| Where | What to do there |
+| --- | --- |
+| **Settings › Downloads** | Choose the **Download source**: **Hugging Face**, **hf-mirror.com** or **ModelScope** (the last two are often faster in mainland China), or **Custom** |
+| **Settings › Compute** | This machine's devices, each GPU's memory, and the torch in use with its build, such as `torch 2.8.0 (cu128)`. When torch is missing or its build does not suit this computer, it names the right build and shows the command that installs it (`mizuoto doctor` says the same) |
+| **Models** | Every catalogue model with its engine, size, GPU memory and state, and a **Download** button; see [Downloading models](#downloading-models) |
+
+On **Speak**, a model that is not downloaded yet replaces the **Speak** button with the one that downloads it. Downloads are jobs, so you can leave the page at any time.
+
+<Callout type="info" title="Licence-gated engines">
+
+The models of Fish Speech and IndexTTS cannot be downloaded until their licences are accepted. See [Licence-gated engines](#licence-gated-engines) below.
+
+</Callout>
+
+## Torch and the engines
+
+Every engine is part of Mizuoto and runs in the server's own process: there is nothing to install per engine. An engine is **Available** when torch is installed (the dummy engine needs none) and its implementation is there: built in, or for Fish Speech and IndexTTS their own distribution (`mizuoto-fishspeech`, `mizuoto-indextts`). Otherwise its card under **Models › Engines** says **Not available** and what it needs, and the model picker marks its models **Not available**.
+
+To fix it, install what is missing into Mizuoto's Python, then restart Mizuoto:
+
+- torch: the build `mizuoto doctor` names, such as `pip install "torch>=2.8" --index-url https://download.pytorch.org/whl/cu128` (the commands for each platform are in [Installation](/docs/installation#ways-to-install)).
+- A licence-gated engine: its wheel, such as `pip install dist/mizuoto_indextts-*.whl`.
+
+On **Speak**, a model whose engine is not available replaces the button at the bottom with the command that installs what it needs. The command line:
+
+```bash
+mizuoto doctor               # torch against the hardware, each engine, missing optional extras
+mizuoto engine list          # the engines, with an Available column
+```
+
+Some languages need an optional extra (GPT-SoVITS's Japanese and Korean, IndexTTS-2.5's Japanese); `mizuoto doctor` lists the missing ones with their install command, see [Optional extras](/docs/installation#optional-extras).
+
+### Speech recognition
+
+To clone a voice, models usually need the reference clip's transcript. With the speech recognition model downloaded, missing transcripts are filled in:
+
+```bash
+mizuoto model download asr/whisper-large-v3-turbo
+```
+
+In the UI it is the engine marked **Used by Mizuoto itself** under **Models › Engines**; its model is under **Models › Models**.
+
+## Downloading models
+
+Under **Models › Models** the models are grouped by engine, one row each with its size, GPU memory and state: **Not downloaded**, **Downloading**, **Partly downloaded**, **Installed** or **Damaged**. Click **Download**; while it runs the row shows the amount done, the speed and the time left.
+
+- Files are downloaded into `.part` files and resume after an interruption; each finished file is checked against its size and SHA-256.
+- When a source lacks a file or serves it wrong, the next source is tried (the one in the settings first, then Hugging Face, hf-mirror and ModelScope).
+- Files several models of an engine share (GPT-SoVITS's encoders, for example) are downloaded with the first model that needs them; the **Shared files** tab lists them.
+- On **Speak**, after choosing a model, the button at the bottom offers **Download** *model* *(size)*.
+
+The command line:
+
+```bash
+mizuoto model list
+mizuoto model download qwen3tts/1.7b-custom-voice
+```
+
+## Licence-gated engines
+
+The licences of Fish Speech (Fish Audio Research License) and IndexTTS (bilibili Model Use License) restrict their use. Each is a distribution of its own (`mizuoto-fishspeech`, `mizuoto-indextts`, see [Installation](/docs/installation)), and downloading its models and shared files and speaking both need the licence accepted first.
+
+1. Open **Models › Engines** and click **Accept the licence** on the engine's card (or, on **Speak** with one of its models chosen, **Accept the** *engine* **licence** at the bottom).
+2. The dialog shows the licence's full text and a link to the original. Read it, then check **I have read and accept this licence**.
+3. Click **Accept the licence**. The card shows **Licence accepted** and its models can be downloaded.
+
+The command line:
+
+```bash
+mizuoto engine licence indextts            # print the full licence
+mizuoto engine accept-licence indextts     # accept it
+mizuoto model download indextts/v2
+```
+
+You accept a specific version of the licence; a new version must be accepted again. Also:
+
+- IndexTTS results show the licence's notice beneath them: cloning a voice without its owner's permission is forbidden by the IndexTTS disclaimer.
+- Fish Speech results show "Built with Fish Audio" beneath them, and cannot be used as training data for other engines.
+- F5-TTS needs no acceptance, but its pretrained weights (CC-BY-NC-4.0) are for non-commercial use; its results carry that licence's tag.
+
+## The first synthesis
+
+Once the model is downloaded, open **Speak**, choose it and a voice, type some text and click **Speak**. [Speak](/docs/guide-speak) explains every option.
+
+The first synthesis loads the model into the server's process, which takes a while; then the model stays in memory until it has been idle for the time set under **Settings › Compute**. When the GPU has less free memory than the model needs, Mizuoto fails at once with **The GPU is not available or ran out of memory**, and **What to do** says how to fix it, such as another device or freeing GPU memory.

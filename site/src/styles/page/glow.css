@@ -1,0 +1,98 @@
+/*
+ * Ambient page glow.
+ *
+ * Two fixed light pools in the project's accent drift across the viewport
+ * behind the content. Their periods are deliberately non-harmonic (21s / 29s),
+ * so the combined pose only returns to its start after about ten minutes and
+ * the background never looks like it is repeating.
+ *
+ * Only `transform` and `opacity` animate, so the layers stay on the compositor
+ * and never trigger paint. They are `fixed`, so scrolling costs nothing either.
+ */
+
+.paged::before,
+.paged::after {
+  position: fixed;
+  z-index: -1;
+  /* Generous bleed: the layers scale past 1.2 and drift ~9%, and the gradient
+   * edge must never enter the viewport. */
+  inset: -32vmax;
+  content: "";
+  pointer-events: none;
+  will-change: transform, opacity;
+}
+
+.paged::before {
+  background: radial-gradient(
+    42vmax 34vmax at 24% 26%,
+    color-mix(in srgb, var(--page-accent) 32%, transparent),
+    transparent 66%
+  );
+  animation: page-glow-drift-a 21s ease-in-out infinite alternate;
+}
+
+.paged::after {
+  background: radial-gradient(
+    38vmax 30vmax at 76% 70%,
+    color-mix(in srgb, var(--page-accent) 26%, transparent),
+    transparent 68%
+  );
+  animation: page-glow-drift-b 29s ease-in-out infinite alternate;
+}
+
+/*
+ * The accent is far lighter in dark mode, so the same mix reads much hotter
+ * against a near-black page. Pull it back to keep the glow ambient rather than
+ * something the eye tracks.
+ */
+.dark .paged::before {
+  background: radial-gradient(
+    42vmax 34vmax at 24% 26%,
+    color-mix(in srgb, var(--page-accent) 20%, transparent),
+    transparent 66%
+  );
+}
+
+.dark .paged::after {
+  background: radial-gradient(
+    38vmax 30vmax at 76% 70%,
+    color-mix(in srgb, var(--page-accent) 16%, transparent),
+    transparent 68%
+  );
+}
+
+@keyframes page-glow-drift-a {
+  from {
+    opacity: 0.45;
+    transform: translate3d(-9%, -7%, 0) scale(0.82);
+  }
+
+  to {
+    opacity: 1;
+    transform: translate3d(8%, 8%, 0) scale(1.24);
+  }
+}
+
+@keyframes page-glow-drift-b {
+  from {
+    opacity: 1;
+    transform: translate3d(9%, 6%, 0) scale(1.2);
+  }
+
+  to {
+    opacity: 0.4;
+    transform: translate3d(-8%, -8%, 0) scale(0.8);
+  }
+}
+
+/*
+ * A still gradient still reads as depth, so the layers stay — only the drift
+ * stops. `will-change` is dropped so an idle page holds no extra layers.
+ */
+@media (prefers-reduced-motion: reduce) {
+  .paged::before,
+  .paged::after {
+    animation: none;
+    will-change: auto;
+  }
+}

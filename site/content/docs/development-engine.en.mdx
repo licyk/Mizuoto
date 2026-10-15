@@ -1,0 +1,305 @@
+---
+title: "Adding an engine"
+description: "How an engine is written and wired in, with OmniVoice as the example: the manifest and its files manifest, the Engine and LoadedEngine contract, model handles, task types, errors, assets, registration, and the tests that hold it to upstream."
+icon: Puzzle
+---
+
+An engine in Mizuoto is two things in two places, plus its tests:
+
+| Part | Where | Read by |
+| --- | --- | --- |
+| The manifest: variants, capabilities, parameters, options, catalogue models, assets, licence, training methods | `mizuoto/core/engines/manifests/<id>.toml`, files manifests in `manifests/files/` | The core (`EngineRegistry`), without importing the engine |
+| The implementation: an `Engine` subclass and its `LoadedEngine`, built on `mizuoto.runtime`, `mizuoto.nn` and `mizuoto.text` | `mizuoto/engines/<id>/`, or `packages/native/<id>/` for a distribution of its own | The runtime, in the server's process |
+| Tests | `tests/engines_native/test_<id>_tiny.py`, the contract suite, `scripts/parity/` | CI, and you |
+
+The core plans and validates every request from the manifest alone, then calls the implementation through `core/inference` (see [Runtime](/docs/development-runtime)). This page walks through OmniVoice: `mizuoto/core/engines/manifests/omnivoice.toml` and `mizuoto/engines/omnivoice/`.
+
+<Mermaid chart={`flowchart LR
+    man["manifests/omnivoice.toml<br/>+ files/omnivoice.files.json"] --> reg["EngineRegistry<br/>validation · forms · catalogue"]
+    reg --> tts["TtsService.plan"]
+    tts --> rs["RuntimeService.loaded"]
+    rs -- "get_engine('omnivoice')<br/>BUILTIN or entry point" --> eng["OmniVoiceEngine.load<br/>→ LoadedOmniVoice"]
+    eng --> rt["mizuoto.runtime<br/>ops · loading · handles"]
+    eng --> nn["mizuoto.nn · mizuoto.text<br/>HuBERT · DAC · BPE"]`} />
+
+## 1. The manifest
+
+`mizuoto/core/engines/manifests/*.toml` ships in the `mizuoto` package; `EngineRegistry` loads every file in the folder and validates it as `EngineManifest` (`mizuoto/core/engines/models.py`). The manifest of a licence-gated engine ships in `mizuoto` too, so the catalogue and the licence text are there before its distribution is installed. The top level:
+
+```toml
+id = "omnivoice"
+title = "OmniVoice"
+description = "Xiaomi's diffusion language model TTS: …"
+devices = ["cuda", "cpu"]
+languages = ["*"]
+
+[upstream]
+url = "https://github.com/k2-fsa/OmniVoice"
+commit = "08be0b4ccbac3e13e374e86fbfead4b4cac343e2"
+
+[licence]
+id = "apache-2.0"
+name = "Apache License 2.0"
+url = "https://github.com/k2-fsa/OmniVoice/blob/master/LICENSE"
+```
+
+| Field | Meaning |
+| --- | --- |
+| `id` | The engine id; the implementation is registered under the same id |
+| `devices` | Device kinds the engine runs on (`cuda`, `cpu`, `mps`, `xpu`) |
+| `languages` | Canonical language codes; `*` means any |
+| `[upstream]` | The project and commit the port reproduces (documentation, not a dependency) |
+| `ops`, `internal` | `call` operation names; a helper engine (ASR) not offered for synthesis |
+| `[weights]` | Roles and suffixes of a voice's own fine-tuned weights (GPT-SoVITS: `gpt = ".ckpt"`, `sovits = ".pth"`) |
+
+### Variants and capabilities
+
+A variant is a set of static capabilities; requests are validated against it before any job exists:
+
+```toml
+[variants.v0]
+title = "OmniVoice"
+sample_rate = 24000
+capabilities = ["clone", "voice_design", "auto_voice", "inline_tags", "pronunciation", "speed", "duration", "batch", "long_text", "seed"]
+max_batch = 8
+
+[variants.v0.design_attributes]
+gender = ["male", "female"]
+# age, pitch, style, accent, dialect …
+
+[variants.v0.reference]
+min_seconds = 1.0
+max_seconds = 20.0
+min_sample_rate = 16000
+```
+
+The full list is `Capability` in `models.py`. Some drive the pipeline: without `long_text` Mizuoto segments the text; `batch` with `max_batch > 1` enables micro-batching; `stream_audio`'s granularity comes from `stream_granularity`; `stream_text_input` allows streamed text over the WebSocket. A variant may also have `languages`, `speakers`, `emotions`, `inline_tags`, `instruct_requires` and `weights_version`.
+
+### Parameters, options and load options
+
+| Table | Model | Notes |
+| --- | --- | --- |
+| `[params.<common name>]` | `ParamSpec` | Only names from `CommonParam` (`temperature`, `top_p`, `num_steps`, `speed`, `seed`…). `target` is the engine's own name; `default` only shows the engine's default, Mizuoto never imposes it; `approximate = true` adds a warning to results; `variants` and `streaming` narrow where it applies |
+| `[options.<name>]` | `OptionSpec` | Engine-specific options (`engine_options`); unknown ones always raise; `group = "hidden"` keeps one out of forms. The engine's `OPTION_SCHEMA` must mirror them exactly |
+| `[load_options.<name>]` | `OptionSpec` | Applied when a model loads (`engines.<id>.load_options`, the engine card's Options), such as F5-TTS's `ode_method` or IndexTTS's `use_torch_compile`. They reach the engine in `LoadSpec.options` |
+
+### Models and files manifests
+
+```toml
+[[models]]
+id = "omnivoice/omnivoice"
+variant = "v0"
+title = "OmniVoice"
+vram_mb = 5000
+recommended = true
+files = { hf = "k2-fsa/OmniVoice", modelscope = "k2-fsa/OmniVoice", manifest = "omnivoice.files.json" }
+```
+
+`files` (`ModelFiles`) may also have `subdir`, `into`, `include`, `exclude` and `unpack`; `extra` lists more repositories; `assets` names shared assets; `vram_mb` is the catalogue's memory figure shown with the model (loading never refuses on it).
+
+After adding or changing a model, run `python scripts/dev.py model-manifests omnivoice`. `scripts/model_manifests.py` pins the Hugging Face revision to the current commit and lists every file with its size and SHA-256 (LFS files from their metadata, small files fetched and hashed) into `manifests/files/<manifest>`. Downloads verify against it; `test_catalogue_models_have_files_manifests` checks that every catalogue model has one.
+
+### Assets, licence and training
+
+- **`[[assets]]`**: files several models of an engine share (GPT-SoVITS's encoders and text front-end data, IndexTTS-2's w2v-BERT…), described like models, installed in `<models>/_assets/<engine>/<name>/`. A model names the ones it needs in `assets`; the engine gets their folders as `spec.options["assets"]` (asset id → folder).
+- **`[licence]`**: with `gated = true`, downloading the weights and assets and synthesis need `engines.<id>.accepted_licence == id@version`; `file` names the full text in `manifests/licences/`; `trains_others = false` refuses the outputs as training data for other engines; `notice` shows under results; `commercial` tags outputs.
+- **`[training.<id>]`**: training methods, run by the engine's `TRAINER`; see [Trainers](/docs/development-training).
+
+### Recognising model folders
+
+`mizuoto model import` identifies the engine and variant from file contents alone: `mizuoto/core/models/detect.py` reads configuration files (OmniVoice: `model_type == "omnivoice"` in `config.json`), and the engine's `detect_variant` must agree.
+
+## 2. The implementation
+
+An engine is a package under `mizuoto/engines/<id>/` whose `__init__.py` exports the `Engine` subclass, and whose modules import only what [the layer rules](/docs/development-architecture#the-layer-rules-and-their-tests) allow: `mizuoto.runtime`, `mizuoto.nn`, `mizuoto.text`, `mizuoto.training`, `mizuoto.core.codes`, `mizuoto.core.inference.tasks`, its own package, and numpy, torch and the text libraries; never another engine. Its module imports no torch at the top (`test_engine_contract_import_is_light` and `test_manifest_options_match_the_engines` import engine modules without torch): torch is imported inside the methods, and type hints go under `if TYPE_CHECKING:`.
+
+### `Engine`
+
+```python
+class OmniVoiceEngine(Engine):
+    id = "omnivoice"
+    VERSION = "1"
+    TRAINER = "mizuoto.engines.omnivoice.train:OmniVoiceTrainer"
+    OPTION_SCHEMA = {
+        "t_shift": OptionSpec("float", 0.1, 0.0, 1.0),
+        "denoise": OptionSpec("bool", True),
+        # … one entry per [options.<name>] of the manifest
+    }
+
+    def detect_variant(self, model_dir: Path) -> str | None:
+        config = json.loads((model_dir / "config.json").read_text(encoding="utf-8"))
+        return "v0" if config.get("model_type") == "omnivoice" else None
+
+    def load(self, spec: LoadSpec, runtime: Runtime, ctx: RequestContext) -> LoadedEngine:
+        return LoadedOmniVoice(spec, ctx)
+```
+
+| Member | Purpose |
+| --- | --- |
+| `id` | The engine id (the manifest's and the registry's) |
+| `VERSION` | The implementation's own version string (default `"1"`). Voice caches are keyed by Mizuoto's version, not this one |
+| `OPTION_SCHEMA` | `OptionSpec`s with exactly the manifest's `[options]`: same type, default, min, max and choices (`test_manifest_options_match_the_engines`) |
+| `TRAINER` | `"module:Class"` of the engine's `mizuoto.training.Trainer`, when it trains |
+| `EXTRAS` | Optional features: install spec → the modules it provides, e.g. GPT-SoVITS's `{"mizuoto[gptsovits-ja]": ("pyopenjtalk",), "mizuoto[gptsovits-ko]": ("mecab", "jamo")}`; `mizuoto doctor` lists the ones that do not import |
+| `detect_variant(model_dir)` | The variant from the folder's files only, without torch |
+| `load(spec, runtime, ctx)` | Build the model from `spec` (`model_id`, `model_dir`, `variant`, `device`, `dtype`, `options`) and return a `LoadedEngine`; report with `ctx.progress("loading:<part>")`, check `ctx.check_cancel()` between parts |
+| `call(op, payload, ctx)` | An operation that needs no loaded model |
+
+### `LoadedEngine`
+
+One loaded model. It is not re-entrant: the job scheduler gives it one request at a time (the `engine:<engine>:<device>` resource).
+
+| Method | Required | Purpose |
+| --- | --- | --- |
+| `describe()` | yes | A `Description`: sample rate, capabilities, speakers, languages, VRAM, `ignored_params` |
+| `synthesize(task, ctx)` | yes | A generator: `yield AudioChunk(samples, sample_rate, segment, final)` as soon as each piece is ready, calling `ctx.check_cancel()` at every step; record the values actually used in `ctx.applied` and warnings with `ctx.warn()` |
+| `prepare_voice(voice, cache_dir, ctx)` | | Derived voice state (prompt codes, embeddings) written into `cache_dir`, returned as `VoiceCache(files, meta)`; later requests get the files in `VoiceSpec.cache` |
+| `convert(task, ctx)`, `edit(task, ctx)` | | Voice conversion and speech editing, generators too; by default they raise `Unsupported` |
+| `call(op, payload, ctx)` | | Operations named in the manifest's `ops` (ASR's `transcribe`, Fish Speech's `codec_encode` / `codec_decode`) |
+| `memory_required(task)` | | Bytes of device memory a request needs beyond the weights; the model manager makes room for it |
+| `close()` | | Drop the weights (the manager has already taken the handles off their devices) |
+
+An engine returns float32 mono audio in `[-1, 1]` at the model's own rate and never encodes: joining, normalising, resampling and encoding are the core's job. It receives resolved, absolute paths that exist (references are 16-bit WAV in `cache/refs/`) and never downloads. The core has validated the request against the manifest, so an engine maps rather than checks.
+
+### Task types
+
+The requests and results are standard-library dataclasses in `mizuoto/core/inference/tasks.py`, re-exported by `mizuoto.runtime.engine`:
+
+| Type | Fields |
+| --- | --- |
+| `SynthesisTask` | `text`, `language`, `voice`, `style` (`instruct`, `emotion`), `params` (common parameters by Mizuoto's names), `options` (engine options), `texts` (a batch), `segment` / `segments`, `stream`, `text_stream` |
+| `VoiceSpec` | `references` (`Reference`: `audio_path`, `transcript`, `language`, `sample_rate`, `duration`), `preset`, `description`, `attributes`, `weights`, `cache`, `voice_id` |
+| `VoiceConversionTask`, `SpeechEditTask` | A source clip and a voice; a clip, its transcript and `EditSpan`s |
+| `LoadSpec`, `Description`, `AudioChunk`, `VoiceCache`, `OptionSpec` | What `load` gets, what `describe` returns, the audio, a voice cache, an option |
+
+### Model handles
+
+Every module with weights is wrapped in a `ModelHandle` and listed in `self.handles`, so the model manager can place it, offload it and report its size:
+
+```python
+self.handles = [
+    ModelHandle(model, name=f"{spec.model_id}:model", load_device=spec.device),
+    ModelHandle(tokenizer, name=f"{spec.model_id}:audio tokenizer", load_device=spec.device),
+]
+```
+
+Build modules from `ops.default` (no random initialisation), load weights with `mizuoto.runtime.loading` (`load_state_dict`, `load_into`, strict), and leave parameters as `nn.Module` makes them. Draw every random number from `ctx.generator_for(device)` or `ctx.rng`, in upstream's order (see [Runtime](/docs/development-runtime#global-state)).
+
+Compute attention with `mizuoto.runtime.accel.attention(q, k, v, site=SITE, …)`, never `F.scaled_dot_product_attention` (an architecture test forbids it): declare `SITE = accel.Site("<id>.<part>")` once per call site, and pass the arguments upstream passed to SDPA (`causal` is its `is_causal`). A site where upstream wrote attention by hand gives that code as its `reference`; one that only its reference may compute is `swappable=False` (attentions with relative positions inside the scores are not sites at all: they stay hand-written). Where the site builds a mask from a structure (padding on one side, causal, a window), pass `mask_info` too, so faster kernels can take the call ([Acceleration](/docs/development-acceleration#sites-and-their-references)).
+
+### Errors
+
+Raise `EngineError(message, detail, code=codes.…)` with a code from `mizuoto.core.codes` (`invalid_input`, `capability_not_supported`, `model_missing`…); put the fixing command in `detail["hint"]`. `Unsupported(message)` is `capability_not_supported`. The core rebuilds the domain error from the code; running out of memory and other exceptions are mapped for you.
+
+## 3. Registration
+
+The runtime finds an implementation by id (`get_engine` in `mizuoto/runtime/engine.py`):
+
+- **In this distribution**: add the engine to `BUILTIN`:
+
+  ```python
+  BUILTIN: dict[str, str] = {
+      ...
+      "omnivoice": "mizuoto.engines.omnivoice:OmniVoiceEngine",
+  }
+  ```
+
+- **In a distribution of its own** (a licence that cannot ship in `mizuoto`, decision D1): register the class under the entry-point group `mizuoto.engines` in its `pyproject.toml`, depend on `mizuoto`, and add the engine id → distribution name to `DISTRIBUTIONS` in `mizuoto/core/inference/service.py`, so a missing install is reported by name. Fish Speech's:
+
+  ```toml
+  [project]
+  name = "mizuoto-fishspeech"
+  dependencies = ["mizuoto", "tokenizers>=0.20", "safetensors"]
+
+  [project.entry-points."mizuoto.engines"]
+  fishspeech = "mizuoto_fishspeech:FishSpeechEngine"
+  ```
+
+  Entry points are read once per process: installing such a distribution means restarting Mizuoto. Its package follows the engines' layer rule (`test_native_engine_packages_import_like_engines`), carries Mizuoto's version (`test_gated_distributions_move_in_lockstep`) and is built by `scripts/build_wheels.py native`.
+
+An engine is *available* when torch imports (the dummy engine needs none) and its implementation is registered; otherwise `EngineStatus.missing` names what is missing and the UI and `mizuoto doctor` show the fix.
+
+## 4. Tests
+
+<Tabs items={["Tiny random model", "Contract suite", "Parity"]}>
+<Tab value="Tiny random model">
+
+`tests/engines_native/test_<id>_tiny.py` builds a tiny model of the engine's own architecture with random weights in a temporary folder (config files, a byte-level vocabulary, safetensors written by the test) and drives the real code path on the CPU: loading, voice prompts and their cache, decoding, batches, seeds that repeat, cancellation. No weights are downloaded, so CI runs it on every push (CPU torch). `test_omnivoice_tiny.py` is a complete example; trainers have `test_<id>_train_tiny.py`.
+
+</Tab>
+<Tab value="Contract suite">
+
+```bash
+MIZUOTO_TEST_DEVICE=cpu python scripts/dev.py test-engines omnivoice -- -x
+```
+
+`tests/engines/test_contract.py` (markers `engine` and `weights`, deselected by default) drives the whole stack (plan → job → runtime → engine) for every installed catalogue model of the available engines: `describe` agrees with the manifest; every declared voice mode is audible, at the right rate, about as long as the text needs, and says the text (word error rate below 0.35 when ASR is installed); a seed repeats; two segments split; cancelling mid-generation stops the engine; and no process-wide state is left behind. A new engine id goes into the suite's `engines` settings override. See [Testing](/docs/development-testing#real-engines-the-contract-suite).
+
+</Tab>
+<Tab value="Parity">
+
+Mizuoto's standard for a port is identical output to the upstream implementation on the CPU in fp32 under a seed. For the engines Mizuoto 0.1 had, `scripts/parity/` runs the same cases through 0.1's stack and the native one and compares them sample for sample (see [Testing](/docs/development-testing#parity-with-the-references)). Record what the port reproduces, where it departs and the parity result on its page in the [engine reference](/docs/engines) (`site/content/docs/engines-<id>.mdx` and `.en.mdx`), and any rule a later change must not break in `AGENTS.md`.
+
+</Tab>
+</Tabs>
+
+<Callout type="info" title="When outputs differ">
+
+Look at random numbers first: upstream may draw them while building a model or preparing a reference (HuBERT's layer drop, IndexTTS's w2v-BERT, CosyVoice 3's vocoder noise), or with tensors of other strides. Then at tensor shapes and kernels: SDPA with or without a mask, a mask's dtype, contiguity, the CPU thread count. `AGENTS.md` §2b lists such findings engine by engine.
+
+</Callout>
+
+## OmniVoice, the worked example
+
+`mizuoto/engines/omnivoice/` (about 2 900 lines in all):
+
+| Module | What |
+| --- | --- |
+| `engine.py` | `OmniVoiceEngine` and `LoadedOmniVoice`: loading, voice prompts, the iterative decoding, chunked long text, decoding and post-processing |
+| `model.py` | The diffusion language model on `mizuoto.runtime.lm.qwen`'s decoder |
+| `audio_tokenizer.py` | The HiggsAudio v2 tokenizer: `nn/codecs/dac`, `nn/ssl/hubert`, residual codebooks |
+| `audio.py`, `text.py`, `duration.py`, `voice_design.py`, `lang_map.py` | Silence removal and fades as pydub computes them; text chunking and punctuation; the duration estimate; instructions from design attributes; language names |
+| `train.py` | `OmniVoiceTrainer`: methods `full` and `lora` |
+
+What it shows:
+
+- **Loading**: `OmniVoiceModel(config, ops.default)` filled by `load_into(model, load_state_dict(folder / "model.safetensors"))`, cast to the dtype (bf16 on a GPU that has it, else fp16; fp32 on the CPU; an explicit `engines.omnivoice.dtype` wins); the audio tokenizer the same way; the text tokenizer from `mizuoto.text.tokenize.bpe.load_bpe(folder)`; two handles.
+- **Parameter mapping**: Mizuoto's common names map onto upstream's generation config (`num_steps → num_step`, `temperature → class_temperature`), engine options fill the rest.
+- **Three voice modes**: references → a voice prompt; attributes → an instruction from `instruct_from(attributes)`; neither → the model's own voice. A free-text description raises `capability_not_supported`.
+- **Voice cache**: `prepare_voice` saves the prompt as `prompt.pt`; `synthesize` prefers `voice.cache["prompt"]`.
+- **Randomness**: the Gumbel noise draws from `ctx.generator_for(self.device)`; HuBERT's layer-drop draws (made even in eval mode upstream) from `ctx.generator_for("cpu")`.
+- **Cancel and progress**: `ctx.check_cancel()` at every decoding step, `ctx.progress("generating", …)` after it.
+- **Batches**: with `task.texts` set, every text in one batch, each yielded with `segment = task.segment + index`.
+- **Memory**: `memory_required` estimates the logits' working memory per batch row.
+
+[OmniVoice's engine page](/docs/engines-omnivoice) records the parity result (identical to 0.1 on the CPU in fp32 for cloning, design, its own voice and the fine-tuned model) and what exactness took.
+
+## Checklist: what a new engine touches
+
+<Steps>
+<Step>
+
+`mizuoto/core/engines/manifests/<id>.toml`; run `dev.py model-manifests <id>`; the licence text in `manifests/licences/` when gated.
+
+</Step>
+<Step>
+
+`mizuoto/engines/<id>/` (or `packages/native/<id>/`): the `Engine` subclass with `OPTION_SCHEMA` mirroring the manifest, its `LoadedEngine`, and the modules it needs; shared parts into `mizuoto/nn` or `mizuoto/runtime`.
+
+</Step>
+<Step>
+
+Registration: `BUILTIN` in `mizuoto/runtime/engine.py`, or the `mizuoto.engines` entry point plus `DISTRIBUTIONS`. `mizuoto/core/models/detect.py` recognises its model folders; optional packages go in an extra of `pyproject.toml` and in `EXTRAS`.
+
+</Step>
+<Step>
+
+Tests: `tests/engines_native/test_<id>_tiny.py`; the engine id list in `tests/core/test_engines.py::test_registry_lookups` and the `engines` override in `tests/engines/test_contract.py`.
+
+</Step>
+<Step>
+
+`mizuoto model download <id>/<name>`, then the contract suite on the real models; record the port and its parity on the engine's page (`engines-<id>`, both languages), add it to the sidebars (`meta.json`, `meta.en.json`) and to the [engine reference](/docs/engines) table, and add rules to `AGENTS.md` if there are any.
+
+</Step>
+</Steps>

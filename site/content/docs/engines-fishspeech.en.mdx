@@ -1,0 +1,70 @@
+---
+title: "Fish Speech"
+description: "The Fish Speech S2 Pro engine as implemented in Mizuoto's separate mizuoto-fishspeech distribution: the dual-AR transformer and the 44.1 kHz codec, what reproduces upstream exactly, one wait per frame and CUDA graphs, the LoRA fine-tune, and its parity results."
+icon: Fish
+---
+
+Fish Audio S2 Pro ([fishaudio/fish-speech](https://github.com/fishaudio/fish-speech), Fish Audio Research License). The port is under the same licence, so it ships as a distribution of its own, `mizuoto-fishspeech` (`packages/native/fishspeech`, package `mizuoto_fishspeech`, with `LICENSE.md`), registered under the entry-point group `mizuoto.engines` (`fishspeech = mizuoto_fishspeech:FishSpeechEngine`). Downloading the model and speaking need the licence accepted. On the CPU in fp32 with the same seed its codes and audio are identical to upstream's seeded `generate_long` as Mizuoto 0.1 ran it, and its trainer gives 0.1's exported model bit for bit. User-facing details: [Engines in depth](/docs/advanced-engines#fish-speech).
+
+## Variants and files
+
+One variant, `s2_pro` (catalogue model `fishspeech/s2-pro`): cloning from one to four clips, each with its transcript; inline tags; dialogue between speakers (`<|speaker:i|>`). The model folder holds `config.json`, the weights (`model.safetensors.index.json` and its shards, `model.safetensors`, or `model.pth`), `codec.pth` and the BPE tokenizer files. A voice's cache is `codes.pt`, each reference's codes.
+
+Precision: bf16 on a CUDA GPU, as upstream; fp32 elsewhere (bf16 is emulated on a CPU and far slower); `engines.fishspeech.dtype` overrides.
+
+## How it works
+
+The prompt is a ChatML conversation: a system turn holding each reference's text and its codes, then the text to speak. The **slow transformer** (Qwen3-4B-shaped: 36 layers, q/k RMSNorm, one fused `wqkv`) generates a frame's semantic token; the **fast transformer** (4 layers) generates the other nine codebooks from the slow model's normed hidden state. The **codec** (a modified DAC at 44.1 kHz: causal convolutions, a windowed transformer, a downsampling residual quantiser with one semantic codebook of 4096 and nine of 1024; about 21.5 frames a second) encodes references and decodes frames into audio. Text is generated in batches of speaker turns, each batch decoded as it finishes.
+
+| Module | What it is |
+| --- | --- |
+| `engine.py` | References read, resampled to 44.1 kHz and encoded; generation by batches of speaker turns; codec decoding; the `codec_encode` and `codec_decode` operations |
+| `model.py` | The dual-AR transformer |
+| `generate.py` | The conversation prompt, sampling in upstream's order, turn grouping, the decoder (`Decoder`) with its CUDA graphs |
+| `codec.py` | The 44.1 kHz codec |
+| `train.py`, `finetune.py` | `FishSpeechTrainer` (method `lora`) and its maths |
+
+Shared: `text/tokenize/bpe.py`, `runtime/lm/cache.py`, `runtime/graphs.py`, `nn/dsp/` (`resample`, `wav`, `flac`).
+
+## What reproduces upstream
+
+- **The prompt** is upstream's conversation, each text part tokenised alone; a frame's main token is `semantic_begin_id + code`.
+- **Sampling** draws from the request's generator in upstream's order: the main token twice (with the request's temperature and top-p, then with 1.0 and 0.9 for repetition-aware sampling), then nine fast-transformer draws. A draw is `argmax(probs / -log(u))`. Top-k is fixed at 30, as upstream fixes it.
+- **Numerics**: Fish's RMSNorm in float32; RoPE over adjacent pairs with the frequency table rounded to bfloat16; the prefill on SDPA with a boolean causal mask, decoding steps on SDPA's math kernel (called directly, no process-wide setting); the fast transformer's hand-written softmax. Weight norm is kept in both checkpoint formats and recomputed every forward, as upstream does.
+- **References** are resampled with torchaudio's kernel to 44.1 kHz.
+- **WAV output.** `codec_decode` writes WAV with `nn.dsp.wav.write_wav`, byte-identical to `soundfile.write`: libsndfile 1.2 stores `lrint(x × 2³¹) >> 16`, clipped, which is `floor(x × 32768)` except for values just below a step. `codec_encode` reads WAV only.
+
+## Deviations
+
+- **No daemon thread and no 32 768-position preallocated cache.** The cache grows by concatenation; after `repeat_interleave` the keys and values are the tensors upstream builds. Attention masks are made per call instead of upstream's 4 GiB of mask buffers.
+- **A codec module upstream never runs is not built.** Upstream's codec builds a transformer for the decoder's first block but never attaches it (no weights, never run). `codec.pth` also holds RoPE tables and masks an older upstream saved, which upstream no longer loads; they are ignored.
+- **Accepted, with no effect**: `normalize` and `repetition_penalty` reach nothing in upstream's inference path, so they do nothing here either.
+
+## Memory and speed
+
+Phases: the codec encodes references and decodes each batch of frames; the language model (`kind="sequence"`, the fast transformer `hot`) generates each batch, placed again as generation resumes. Each batch's working memory is the slow model's cache for its true bound: the references' codes, every text token, the frames of the batches before it and `max_new_tokens`, within `max_seq_len`. The model needs about 22 GB of GPU memory to run whole; with less, the runtime streams part of its weights.
+
+A frame is one slow-transformer step and ten codebooks. The plain loop waited for the device about 22 times a frame: the end-of-turn check; a masked assignment zeroing the codebook embeddings of non-semantic tokens (`vq_sum[~mask] = 0` reads the mask back); the fast transformer's mask and rotary rows taken with list indices (two copies to the device per codebook); a Python boolean stored into a device tensor in the sampler, twice per draw. Each became an exact equivalent (`torch.where`, slices, `fill_`), and the decoding step's mask is made as the one all-true row it is. One wait per frame remains.
+
+With `compute.cuda_graphs` (NVIDIA, the model wholly on its device) `generate.Decoder` keeps fixed tensors per loaded model: the slow step runs as one graph per stretch between attention calls (`LayerSteps`), and the frame's draws, repetition-aware sampling and the fast transformer as one graph. The sampling settings are device tensors filled per request, so one set of graphs serves every request. The codes are identical, 2.2–2.5 times faster per frame on the decode loop.
+
+## Training
+
+Method `lora` (stages `tokens`, `train`, `export`): upstream's `extract_vq`, `build_dataset`, its Lightning + Hydra `train.py` with loralib and `merge_lora`, without any of those libraries or protobuf. Seeded alike, it gives 0.1's codes, losses, LoRA weights and exported `model.pth` bit for bit on the CPU, and every other exported file byte for byte. (0.1 never seeded, so only its first step repeats.) It runs on every device kind.
+
+- **Initialisation draws, jumped over.** Upstream builds the model with random weights before loading the checkpoint, and initialises each loralib layer twice before drawing `A`: some 18 G draws. `initial_lora` computes how far those draws advance the generator from the shapes alone (a float32 `normal_` or `uniform_` advances it by its size, `normal_` by 16 more when the size is not a multiple of 16) and jumps MT19937 ahead in GF(2) (`mizuoto.training.rng`): the same state in 2 s instead of 40 s of drawing, computed in a thread while the weights load. Then come the loader's base seed and each step's LoRA dropout masks.
+- **Mixed precision as upstream's.** The checkpoint's tensors are assigned as upstream assigns them, so S2's norms stay bfloat16 while the LoRA layers hold float32 copies.
+- **Kept**: upstream's training forward does not scale the codebook embeddings by 1/√11 as inference does; the warm-up makes the first step's learning rate 0 and `B` starts at zero, so the first two steps give the same loss.
+- **Padding.** The collator pads with `<|end_of_text|>`, which S2's vocabulary lacks: upstream pads with 0, and so does Mizuoto.
+- **The export** is upstream's flat `dual_ar` form (`config.json` + `model.pth`), which both 0.1 and Mizuoto load. The final validation pass is skipped (it changes nothing that is kept).
+- `training.memory`: upstream's per-layer checkpointing stays as it is; under `bf16-true` the LoRA layers' frozen copies are made in bfloat16 directly (the same values, about 9 GB less RAM), and the export's key order is read from a model built on the meta device.
+
+## Parity
+
+Codes identical to upstream's seeded `generate_long` on the CPU in fp32; the tokenizer, the references' resampling and codes and the codec's decoding are identical too. Both stack cases (English and Chinese cloning) are identical sample for sample; two more cases load each implementation's export in the other, identical too. The contract suite passes (6 tests).
+
+## Limitations
+
+- About 22 GB of GPU memory to run the model whole; on a CPU it runs in fp32 and is slow.
+- `normalize` and `repetition_penalty` have no effect (as upstream), and top-k cannot be changed.
+- Results are under the Fish Audio Research License: not for commercial use, and not for training other engines.

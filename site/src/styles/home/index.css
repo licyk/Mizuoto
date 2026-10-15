@@ -1,0 +1,11 @@
+/*
+ * Homepage sections. Built on the shared primitives in `../page`.
+ */
+
+@import "./hero.css";
+@import "./preview.css";
+@import "./workflow.css";
+@import "./capabilities.css";
+@import "./highlights.css";
+@import "./install.css";
+@import "./footer.css";

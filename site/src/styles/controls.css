@@ -1,0 +1,83 @@
+/*
+ * Site chrome controls: the theme toggle, and the docs sidebar footer that
+ * carries it next to the language selector.
+ */
+
+/* ------------------------------------------------------------------ */
+/* Theme toggle                                                        */
+/* ------------------------------------------------------------------ */
+
+/*
+ * A single icon button rather than the stock two-icon pill. The layout slots
+ * pass utility classes shaped for that pill (`rounded-none`, `border-y-0`,
+ * `px-1 py-0`); these rules load after Tailwind, so at equal specificity they
+ * win and the button keeps one consistent shape wherever it is rendered.
+ */
+.site-theme-toggle {
+  display: inline-flex;
+  width: 2rem;
+  height: 2rem;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 0;
+  border-radius: 0.5rem;
+  background: transparent;
+  color: var(--color-fd-muted-foreground);
+  cursor: pointer;
+  transition:
+    background-color var(--page-out) var(--page-ease-out),
+    color var(--page-out) var(--page-ease-out);
+}
+
+.site-theme-toggle svg {
+  width: 1.05rem;
+  height: 1.05rem;
+}
+
+@media (any-hover: hover) {
+  .site-theme-toggle:hover {
+    background: var(--color-fd-accent);
+    color: var(--color-fd-accent-foreground);
+    transition-duration: var(--page-in);
+    transition-timing-function: var(--page-ease-in);
+  }
+}
+
+.site-theme-toggle:focus-visible {
+  outline: 2px solid var(--color-fd-primary);
+  outline-offset: 2px;
+}
+
+/* ------------------------------------------------------------------ */
+/* Docs sidebar footer                                                 */
+/* ------------------------------------------------------------------ */
+
+/*
+ * The stock footer stacks the language selector above a bordered strip holding
+ * the theme control. Both belong on one row: the selector takes the remaining
+ * width and the toggle sits at its end.
+ *
+ * Targeted through `#nd-sidebar` and the footer's own children rather than the
+ * utility classes fumadocs happens to emit, so a class-name change upstream
+ * degrades to the stock stacked layout instead of breaking.
+ */
+#nd-sidebar > div:last-child {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+/* The language selector trigger; `mb-2` from the stock stacked layout. */
+#nd-sidebar > div:last-child > button:first-child {
+  min-width: 0;
+  flex: 1;
+  margin-bottom: 0;
+}
+
+/* The strip that holds the icon links and the theme toggle. */
+#nd-sidebar > div:last-child > div {
+  flex: none;
+}

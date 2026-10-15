@@ -1,0 +1,226 @@
+---
+title: "Acceleration"
+description: "Speed without changing results: the attention dispatcher (sites, references, policies, backends, structured masks, probes), compute.fast, compute.compile, CUDA graphs for decoding steps, sync-free sampling, and the CPU's allocator and thread placement; which opt-in features are not bit-identical."
+icon: Zap
+---
+
+Every engine gives its upstream's output sample for sample on the CPU (see [Engines in depth](/docs/advanced-engines)), and speed work keeps it that way: **a default never changes a result**. Faster paths that compute the same kernels with the same arguments (CUDA graphs, fewer waits for the device, CPU memory and thread placement) are on by default. Faster paths that change the arithmetic (other attention kernels, TF32, `torch.compile`, fused projections) are opt-in, and every output lists the ones that ran. Measurements are in [Performance record](/docs/development-performance); GPU memory is in [Memory](/docs/development-memory).
+
+## What changes results
+
+| Feature | Setting (default) | Results |
+| --- | --- | --- |
+| CUDA graphs for decoding steps | `compute.cuda_graphs` (on) | identical to eager |
+| Sync-free sampling | always | identical: the same ids and generator state |
+| CPU allocator and thread placement | `compute.cpu_allocator`, `compute.cpu_threads` (`auto`) | identical |
+| Attention as each upstream computed it | `compute.attention = auto` | identical |
+| Attention through SDPA or its math kernel | `compute.attention = sdpa` / `math` | identical where a site's reference is SDPA with the same arguments; slightly different at the others (grouped heads, Fish Speech's math kernel, hand-written softmaxes) |
+| `fast`, a fused SDPA kernel, FlashAttention, xFormers, SageAttention | `compute.attention`, `engines.<id>.attention`, `training.attention` | different (fp16/bf16 kernels; SageAttention quantises) |
+| Process-wide GPU switches | `compute.fast` (none) | different |
+| `torch.compile` | `compute.compile` (off) | slightly different on most engines (below) |
+| Qwen3-TTS's fused projections | load option `fused_projections` (off) | identical on the CPU in the parity cases; different on CUDA |
+| Static KV cache | `compute.kv_cache = static` | identical on the CPU; see [Memory](/docs/development-memory#static-kv-cache-and-the-cuda-allocator) |
+
+Native code never changes process-wide state: no `torch.backends` assignments, no `sdpa_kernel` (it switches SDPA's kernels for every thread), no global seeding. `runtime/accel/features.py` is the one exemption, called by the host and by a training stage (an architecture test enforces both).
+
+## Attention
+
+Every attention computation in `runtime`, `nn`, the engines, the trainers and the gated packages goes through one entry point, after ComfyUI's attention backends and `comfy_kitchen`'s registry:
+
+```python
+from mizuoto.runtime import accel
+
+SITE = accel.Site("qwen3tts.mimi")  # once per call site
+
+out = accel.attention(q, k, v, site=SITE, mask=mask, causal=False, scale=None,
+                      enable_gqa=False, dropout_p=0.0, mask_info=None)
+```
+
+- `q`, `k`, `v` are `(batch, heads, length, head_dim)`; `mask` is boolean (True attends) or additive, broadcastable to `(batch, heads, q_length, k_length)`.
+- `causal` is SDPA's `is_causal`: aligned top-left. Sites pass it as upstream passed `is_causal` (CosyVoice's streamed-text steps feed several tokens over a cache with it). Bottom-right causality, a KV cache's, comes through `mask_info`.
+- An architecture test forbids `F.scaled_dot_product_attention` and its aten kernels anywhere outside `runtime/accel/`.
+
+| Code | Role |
+| --- | --- |
+| `runtime/accel/dispatch.py` | `attention`, `Site`, `MaskInfo`, `Masked`; the reference forms `sdpa`, `math_kernel`, `softmax_attention` |
+| `runtime/accel/registry.py` | `Backend`, `Constraints`, `Call`, the registry and its per-device probes |
+| `runtime/accel/policy.py` | `AccelPolicy` (the chain, resolution, fallbacks), `Run` (what a request used), `bind`, `policy_for` |
+| `runtime/accel/backends/torch_sdpa.py` | `sdpa`, `math`, `sdpa_flash`, `sdpa_efficient`, `sdpa_cudnn` |
+| `runtime/accel/backends/optional.py` | `flash`, `xformers`, `sage`, `sage3`: guarded imports, probes, self-tests |
+| `runtime/accel/features.py` | `compute.fast` |
+| `runtime/accel/__main__.py` | `python -m mizuoto.runtime.accel`: each backend on each device, as JSON |
+| `core/compute/accel.py` | Installed packages from their metadata and install commands that keep torch (standard library only) |
+
+### Sites and their references
+
+A `Site` names one computation and holds its **reference**: exactly what upstream computed there, with the same arguments. Mizuoto declares 19, the dummy engine's included.
+
+| Reference | Sites |
+| --- | --- |
+| `sdpa`: SDPA with the call's arguments (the default) | most: the Qwen decoder (`qwen`), F5-TTS's DiT, the CosyVoice U-Net and v3 DiT, Seed-VC, HuBERT, BERT, Whisper, GPT-SoVITS's T2S and v4/v5 DiT, Qwen3-TTS's Mimi encoder, VoxCPM's MiniCPM, Fish Speech's prefill and codec, IndexTTS's GPT-2 |
+| `math_kernel`: SDPA's math kernel called directly | Fish Speech's decode steps (`fishspeech.step`) |
+| a hand-written softmax | Fish Speech's fast transformer (`fishspeech.fast`), IndexTTS's perceiver (`indextts.perceiver`) |
+
+The attentions that add relative positions inside the scores, or need the probability matrix, are not sites: wenet's relative attention, IndexTTS's Conformer, w2v-BERT, VITS, plus the s3tokenizer (q and k each scaled by d^-¼), MelStyle and G2PW's BERT. They stay hand-written, since no fused kernel computes them. `Site(swappable=False)` keeps a site on its reference whatever the policy; `approx_ok=False` refuses every backend that is not exact.
+
+### Policies
+
+| Setting | Values | Default |
+| --- | --- | --- |
+| `compute.attention` | `auto`, `fast`, `sdpa`, `math`, `sdpa_flash`, `sdpa_efficient`, `sdpa_cudnn`, `flash`, `xformers`, `sage`, `sage3` | `auto` |
+| `engines.<id>.attention` | the same, or `inherit` | `inherit` |
+| `training.attention` | the backends with a backward pass (not `sage`, `sage3`) | `auto` |
+| `compute.attention_strict` | a named backend that cannot take a call raises `compute_unavailable` instead of falling back | off |
+
+- **`auto` binds nothing**: `attention()` reads one context variable, finds no policy and calls the site's reference (about 1 µs a call).
+- Otherwise the model's `AccelPolicy` is resolved when it loads (`policy_for(name, strict)`: one per value, so models share resolutions) and reported as `LoadedModelInfo.attention`. `LocalHandle` binds it for each step of a request with `RequestContext.accel` (the context variable lives in `runtime/context.py`, so binding loads no torch), so a stream suspended between steps never leaks its policy to another thread.
+- A training stage binds its policy process-wide (`dispatch.PROCESS_POLICY`), because autograd runs backward passes, and gradient checkpointing's recomputed forwards, on threads of its own.
+- A change applies to models loaded afterwards; a change to `engines.<id>.attention` unloads that engine.
+
+### Backends and the chain
+
+| Backend | Source | Devices | dtypes | Masks | Backward |
+| --- | --- | --- | --- | --- | --- |
+| `sdpa` | `F.scaled_dot_product_attention` | all | all | bool, additive | yes, with dropout |
+| `math` | SDPA's math kernel (aten op) | all | all | bool, additive | yes, with dropout |
+| `sdpa_flash` | `aten._scaled_dot_product_flash_attention` | CUDA (sm ≥ 8.0), ROCm | fp16, bf16 | causal only | yes |
+| `sdpa_efficient` | `aten._scaled_dot_product_efficient_attention` | CUDA, ROCm | fp16, bf16, fp32 | as an additive bias | yes |
+| `sdpa_cudnn` | `aten._scaled_dot_product_cudnn_attention` | CUDA (sm ≥ 8.0) | fp16, bf16 | as an additive bias | yes |
+| `flash` | flash-attn ≥ 2.6 (`flash_attn_func`, `flash_attn_with_kvcache`) | CUDA (sm ≥ 8.0), ROCm | fp16, bf16 | structured: causal, keys padded on one side, a window | yes |
+| `xformers` | `memory_efficient_attention` | CUDA (sm ≥ 7.5), ROCm | fp16, bf16, fp32 | additive bias; causal and local masks | yes |
+| `sage` | SageAttention 2 (or 1) | NVIDIA (sm ≥ 8.0), head dims 64/96/128 | fp16, bf16 | causal only | no |
+| `sage3` | SageAttention 3 | NVIDIA Blackwell (sm ≥ 10.0), more than 1024 queries | fp16, bf16 | none | no |
+
+The pinned SDPA kernels are called through their aten operators and ask torch's own eligibility test (`can_use_*_attention`) before they take a call. The optional packages' kernels are called directly: flash-attn and xFormers register their own operators and autograd; SageAttention has no backward and is never used under autograd.
+
+**The chain.** A named backend comes first, then `fast`'s chain for the call, then the site's reference:
+
+| Call | `fast`'s chain |
+| --- | --- |
+| CUDA, fp16/bf16 | `sage3`, `sage`, `flash`, `xformers`, `sdpa` |
+| ROCm, fp16/bf16 | `flash`, `xformers`, `sdpa` |
+| fp32, or XPU, MPS, CPU | `sdpa` |
+
+**Resolution.** Each call is described by a `Call` (device kind, capability, dtype, head dims, GQA, one query or many, equal lengths, more than 1024 queries, mask kind, `mask_info`'s structure, a custom scale, causal, dropout, whether a gradient is needed), hashable, so a decode loop resolves once per `(site, Call)`. A backend is skipped when:
+
+- its probe says it cannot run on the device (not installed, wrong version, no kernels, self-test failed);
+- the call needs a backward pass or dropout it lacks;
+- the site needs exact attention and the backend is not exact;
+- its constraints refuse the call (device, capability, dtype, head dim, mask, causal over unequal lengths, scale).
+
+A kernel that raises (anything but running out of memory or a cancel) is marked broken for that call, and the next backend takes it. Running out of memory propagates to the [exact retry](/docs/development-memory#running-out-of-memory). Each fallback is logged once per (site, backend, reason). The request's `Run` counts what it used, and the output records it with a warning when anything fell back:
+
+```json
+"attention": {"policy": "fast", "used": {"flash": 11264, "sdpa": 320},
+              "fallbacks": {"sage→flash": {"head dim 80": 11264}}}
+```
+
+### Structured masks
+
+Fused kernels take masks as structure, not as a dense tensor (flash: `cache_seqlens`, `cache_leftpad`, `window_size`; xFormers: bottom-right causal and local masks). A site that builds its mask from a structure passes `mask_info=MaskInfo(keys, causal, window, padding)` beside the dense mask:
+
+- `keys`: `(batch, k_length)` booleans, the real keys; `padding`: `right` or `left` when each row is one run of real keys;
+- `causal`: aligned bottom-right (query *i* sees key *j* when `j ≤ i + n_k − n_q`); `window`: `j > i' − window`.
+
+The reference ignores it and uses the dense mask, so `auto` is unchanged. Qwen's `mask_for` returns `Masked(dense, info)`; VoxCPM's steps, Seed-VC, GPT-SoVITS v4/v5 and Fish Speech's codec give theirs. With `dispatch.DEBUG` on (the tiny engines' tests), every call checks that `mask_info` describes its dense mask; `MIZUOTO_TEST_ACCEL=count` checks that every site of every tiny engine and trainer goes through the dispatcher.
+
+### Probes and the doctor
+
+Each optional backend imports its package the first time a policy asks for it on a device, then checks it:
+
+- the version: flash-attn ≥ 2.6; xFormers outside 0.0.21–0.0.26 (broken for large batches) and with its C++ kernels (`_has_cpp_library`: a wheel for another torch imports without them);
+- the device and compute capability;
+- a **self-test**: a 1 × 2 × 64 × D attention in fp16 against SDPA's math kernel in fp32, finite and within 2e-3 (2e-2 for SageAttention), which catches a wheel built for another torch or GPU.
+
+Results are cached per process and device. `mizuoto doctor` has an `acceleration` finding: the settings, each package (read from its metadata, without importing it), whether it runs on each GPU (`python -m mizuoto.runtime.accel` in a child process, when a GPU is there), and an install command that keeps torch (`--no-deps`; xFormers pinned to the release built for the installed torch).
+
+<Callout type="info" title="What is checked">
+
+The registry, policies, fallbacks, strict mode and binding are tested on the CPU, with real models through every site (identical audio, metrics and weights with `auto`) and the optional backends' glue against fake packages computing the same maths. The optional kernels themselves, their speed and their quality are not measured yet.
+
+</Callout>
+
+### `compute.fast`
+
+Process-wide GPU switches after ComfyUI's `--fast`, set once by the host when its runtime starts and by each training stage before its trainer loads (`features.apply`); outputs list them (`params.fast`). Each changes results; a change applies at the next start.
+
+| Feature | Effect |
+| --- | --- |
+| `tf32` | TensorFloat-32 matrix products and cuDNN convolutions (NVIDIA, Ampere on) |
+| `fp16_accumulation` | fp16 products sum in fp16 (torch ≥ 2.7) |
+| `cudnn_benchmark` | cuDNN tries kernels per shape |
+| `sdpa_reduced_precision` | SDPA's math kernel sums fp16/bf16 in their own precision (torch ≥ 2.5) |
+
+## `torch.compile` (`compute.compile`)
+
+`mizuoto.runtime.compile.Compiled` wraps one hot module in `torch.compile(dynamic=True)`: no shape buckets, so a new length does not recompile. Engines call `compiled or module`, so with the setting off the code path is the eager one. The setting is read at each load (`RuntimeOptions.compile`) and reaches models loaded after a change.
+
+| Engine | Compiled module |
+| --- | --- |
+| F5-TTS | the DiT, or E2's UNetT |
+| CosyVoice | the flow estimator |
+| GPT-SoVITS v4, v5 Turbo | the CFM estimator (each SoVITS model loaded, a voice's own too) |
+| IndexTTS 2, 2.5 | the s2mel DiT and BigVGAN (also turned on by its load option `use_torch_compile`) |
+| VoxCPM | the local DiT |
+
+- `Compiled` is a plain attribute, not a submodule: state dicts and handles are unchanged.
+- Any error from compiling or running the compiled code (no C++ compiler, an unsupported op) logs one warning and runs eagerly from then on; running out of memory still raises. It runs eagerly on MPS (`EAGER_DEVICES`) and above a streamed unit.
+- It traces with its policy's `trace_run` (a compiled graph cannot read a context variable), one compiled call at a time while a policy other than `auto` is active.
+- wenet's `add_optional_chunk_mask` takes a branch-free form under `torch.compiler.is_compiling()`: its `.item()` broke CosyVoice's graph.
+- Inductor caches its code in `/tmp/torchinductor_<user>`. The Docker image has no C compiler, so it runs eagerly there.
+
+**Not exact.** Against eager on the CPU in fp32, the audio differs by at most 9e-5 for F5-TTS, 6e-5 for IndexTTS and 3e-5 for GPT-SoVITS. CosyVoice's mel stays within 5.7e-6, but HiFT's F0-driven source amplifies that to about 1e-2 in the audio (eager with another thread count does the same). For VoxCPM, float differences can move where the speech ends. The first request after a load pays the compilation (30 to 160 s on the CPU); the gains are in [Performance record](/docs/development-performance#torchcompile-on-the-cpu).
+
+## CUDA graphs (`compute.cuda_graphs`)
+
+An autoregressive model on a GPU launches thousands of small kernels per step (Qwen3-TTS: about 6 000 per 80 ms frame), and every wait for the device drains the queue, so the CPU's launch time and the GPU's work add up instead of overlapping. Each decoder now waits for the device once per frame or token, and with `compute.cuda_graphs` (on by default; NVIDIA only, ROCm's HIP graphs unchecked) its step's kernels are captured once and replayed at once. A graph replays exactly the kernels the eager code launched, with the same arguments, so its results are the eager code's bit for bit.
+
+`mizuoto/runtime/graphs.py`:
+
+- **`Graphs`**: the graphs of one model on one device, with their own stream and generator.
+  - `capture(fn, state, pool)` runs `fn` once first (lazy initialisation), puts back the tensors it changes (`state`) and the generator, then captures it. It calls `capture_begin`/`capture_end` itself: `torch.cuda.graph`'s `gc.collect()` and `empty_cache()` cost tens of milliseconds per capture, and a 24-layer step is 25 captures.
+  - After a capture the current stream waits for the capture stream: beginning a capture resets the generator's seed and offset tensors on the capture stream, and a first replay that overtook those kernels would draw from offset 0.
+  - A failed capture swaps in a fresh generator in the same state (an aborted capture leaves the old one unusable), and the caller runs eagerly; it is logged once.
+  - `drawing(generator)` loads the request's generator into the graphs' own and writes it back after, so seeded requests draw the same numbers as eagerly.
+- **`LayerSteps`**: a layer stack's one-token step as one graph per stretch between two attention calls, given each layer's `before`, `attend` and `after`. Attention runs eagerly between the graphs, over keys whose length grows each step, so the cache and the attention kernel are the eager code's; norms, projections, rotary embeddings and MLPs are replayed.
+- **`DecoderSteps`**: `LayerSteps` for a `QwenDecoder`.
+- **`signature(modules)`**: where the weights are. Graphs hold their addresses, so they are only for a model wholly on its device (no streamed units) and are dropped when its weights move.
+
+| Engine | Waits per step, before → after | Captured |
+| --- | --- | --- |
+| Qwen3-TTS (`qwen3tts/decode.py`) | ~35 a frame → 1 | sampling and the code predictor's 15 steps one graph each; the talker's step per stretch between attention calls (`DecoderSteps`) |
+| Fish Speech (`mizuoto_fishspeech/generate.py`) | ~22 a frame → 1 | the slow step around its attention (`LayerSteps`); the draws and the fast transformer one graph; kept per loaded model |
+| CosyVoice 2/3 (`cosyvoice/llm.py`) | 50–80 a token → 1 | the one-token steps (`DecoderSteps`) and the draw, a graph per EOS mask; upstream's nucleus loop replayed on the device (`nucleus_device`) |
+| VoxCPM (`voxcpm/model.py`) | 3 a patch → 1 | a whole patch per attention span and setting (`PatchDecoder`); the static caches kept with the model |
+| GPT-SoVITS (`gptsovits/t2s.py`) | 2 a step → 1 | the T2S's one-token steps around each layer's attention, a set per number of rows; sampling eager |
+| IndexTTS (`mizuoto_indextts/gpt.py`) | ~10 a beam step → 1 | the GPT-2's one-token steps around each layer's attention; the cache, its beam reorder and the sampling eager |
+
+The waits were removed with exact equivalents of upstream's idioms (masked assignments, list indices, Python scalars stored into tensors, `.item()` checks), and the stop flag is read once per step. `dispatch.DEBUG`'s mask check is skipped while a stream captures (it reads back; the warm-up checked).
+
+## Sync-free sampling
+
+`mizuoto/runtime/sampling.py` reproduces transformers' logits processors in their order (repetition penalty, min new tokens, suppression, temperature, top-k, top-p) with nothing that waits for the device:
+
+- **`multinomial1(probs, generator)`** is `torch.multinomial`'s own one-sample computation, `argmax(p / Exp(1))`, without its two validity checks (each a wait). The same ids and generator state on the CPU and CUDA; elsewhere it calls `torch.multinomial`. NaN probabilities are flagged in a tensor (`invalid`) the caller reads at its one wait, and raise `torch.multinomial`'s error then.
+- **`multinomial_draws(probs, n, generator)`**: the draw of several without replacement, `topk(p / Exp(1), n)` (IndexTTS's beams).
+- Suppression and EOS masks are built once per device; `repetition_penalty_seen` applies the penalty over a mask of the drawn ids, so shapes do not grow.
+- The shared Qwen decoder, without autograd, norms and rotates q and k together and uses `F.rms_norm` where a self-test on the device shows the same bits as the float32-upcast norm (`_fused_norm_exact`: one kernel instead of eight on CUDA in bf16/fp16 with recent torch). `mask_for(padded=…)` skips its device check when the caller knows there is no padding.
+
+**Fused projections** (`engines.qwen3tts.load_options.fused_projections`, off) stack each layer's q/k/v and gate/up weights into one linear layer each at load (`QwenDecoder.fuse`; real `ops.Linear`s, so they still stream). Inference only. cuBLAS picks other kernels for the wider matrices, so the bits differ on CUDA; outputs list `fused_projections`.
+
+## CPU settings
+
+`mizuoto/core/compute/cpu.py` (standard library only) is applied by the host before torch is imported (`cpu.apply`, when the runtime is built) and handed to the processes it starts (`child_env`: training stages, job workers). Neither changes a result. Variables the environment sets itself win; off glibc and off Linux nothing changes.
+
+| Setting | `auto` on Linux | What it does |
+| --- | --- | --- |
+| `compute.cpu_allocator` | `tuned` | glibc's `mmap` threshold fixed at 32 MB and up to 512 MB of free heap kept for reuse (`mallopt` here, `GLIBC_TUNABLES` for children); torch's large tensors on transparent huge pages (`THP_MEM_ALLOC_ENABLE`). A forward allocates and frees tensors of a few to tens of megabytes per layer; with glibc's defaults each is mapped fresh and its pages zeroed. `system` keeps the defaults |
+| `compute.cpu_threads` | `cores` | OpenMP threads bound to distinct physical cores (`OMP_PLACES=cores`, `OMP_PROC_BIND=close`). Left to the scheduler two threads sometimes share a core, and that process runs a third slower for its whole life. `off` leaves placement to the scheduler (better when other busy programs share the cores) |
+
+## For engine authors
+
+- Route every attention through `accel.attention` with a `Site` per call site; give a hand-written upstream attention as the site's `reference`; pass `mask_info` where the mask is built from a structure.
+- Draw with `multinomial1` / `multinomial_draws` and keep decoding steps free of waits (no `.item()`, `tolist()`, Python scalars into tensors, masked assignment) except one per step.
+- For CUDA graphs: run the step over fixed tensors, capture with `Graphs` / `LayerSteps` only when `graphs.usable(device, runtime.options.cuda_graphs)` and the model is whole on its device, keep the graphs with the loaded model and drop them when `signature` changes; draw inside `drawing(ctx.generator_for(device))`.
+- Wrap a heavy, repeatedly called module with `compile_module(module, runtime.options.compile, name)` and call `compiled or module`.
+- Check: the tiny engine's audio is identical with graphs on and off on CUDA, with a capture made to fail, and with `MIZUOTO_TEST_ACCEL=count`. See [Adding an engine](/docs/development-engine) and [Testing](/docs/development-testing).

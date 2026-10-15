@@ -1,0 +1,352 @@
+---
+title: "整体架构"
+description: "Mizuoto 的目录布局与模块边界、由测试守住的分层规则、服务的组装、一个合成请求的路径、通往模型代码的入口、引擎注册表、模型与音色、远程主机、数据目录与兼容性，以及贯穿各层的设置、事件、任务和错误。"
+icon: Layers
+---
+
+本页给出 Mizuoto 的全貌：有哪些包、每个包能导入什么，`tests/test_architecture.py` 守住的分层规则，`build_services()` 怎样组装服务，一个合成请求从浏览器到引擎再回来的路径，核心通往模型代码的唯一入口，引擎、模型、音色和远程主机怎样组织，数据目录怎样跨版本延续，以及设置、事件、任务、错误这几样基础设施。运行时内部的细节在[运行时](/docs/development-runtime)，路由和命令在 [API 与命令行](/docs/development-api)。
+
+## 目录布局
+
+<Mermaid chart={`flowchart TB
+    webui["mizuoto/webui<br/>Vue 3 + Material 3，构建到 dist/"]
+    api["mizuoto.api<br/>FastAPI 路由 · socket.io /ws · 静态文件"]
+    cli["mizuoto.cli<br/>Typer 命令"]
+    subgraph core["mizuoto.core（模块顶层不导入 torch）"]
+        services["settings · events · db · jobs · compute · engines · models<br/>audio · tts · voices · asr · presets · outputs<br/>datasets · training · projects · remote"]
+        inference["core/inference<br/>InferenceService · RuntimeService · EngineHandle · tasks"]
+    end
+    subgraph native["模型代码（torch）"]
+        runtime["mizuoto.runtime<br/>引擎契约 · 上下文 · 设备 · 管理器 · ops · attention · lm"]
+        nn["mizuoto.nn<br/>dsp · flow · transformer · vocoder · codec · ssl · speaker"]
+        text["mizuoto.text<br/>分词器 · 文本规范化"]
+        engines["mizuoto.engines.*<br/>packages/native/*（需要接受许可）"]
+        training["mizuoto.training<br/>Trainer · StageContext · stage.py"]
+    end
+
+    webui -- "REST /api/v1/* · socket.io /ws" --> api
+    api --> core
+    cli --> core
+    services --> inference
+    inference -- "在函数内导入" --> runtime
+    inference -. "在函数内" .-> engines
+    inference -. "在函数内" .-> training
+    engines --> runtime
+    engines --> nn
+    engines --> text
+    nn --> runtime
+    training --> engines`} />
+
+```
+mizuoto/
+  core/        服务；context.py 负责组装，errors.py 是全部错误类型，codes.py 是错误码（只用标准库），
+               record.py 是 Record，process.py 管子进程与进程树
+    settings/ events/ db/ net/   设置、事件总线、SQLite、端口绑定与 server.json
+    compute/   设备探测（不用 torch）、显存持有者、torch 构建与安装命令、CPU 分配器与线程、可选注意力包
+    jobs/      任务队列与命名资源；events.py、jsonl.py：任务 worker 的事件（只用标准库）
+    inference/ 通往模型代码的唯一入口：InferenceService、RuntimeService、EngineHandle/EngineRequest、
+               LocalEngine/LocalHandle、tasks.py（任务类型，只用标准库）
+    engines/   引擎清单（manifests/*.toml 与 files/*.files.json）、注册表、参数、语言、许可
+    models/    模型目录、共享资源、下载、校验、导入、按文件识别引擎与变体
+    audio/ text/ tts/ asr/ voices/ presets/ outputs/   合成及其周边
+    datasets/ training/ projects/ remote/              数据集与训练、长篇项目、远程主机
+  api/         FastAPI：每种资源一个路由模块，加安全、socket、静态文件、流式、OpenAI 兼容路由。很薄
+  cli/         Typer：app.py 注册一切，commands/ 是普通函数。很薄
+  runtime/     引擎契约与注册表（engine.py）、RequestContext、设备、模型管理器与句柄、显存单元与流式加载、
+               ops、loading、sampling、graphs（CUDA 图）、compile、accel/（注意力后端）、lm/（Qwen 解码器及其缓存）、
+               convert/onnx.py、snapshot
+  nn/          共用构件：dsp/、flow/、transformer/、vocoders/、codecs/、ssl/、speaker/
+  text/        tokenize/（BPE、Whisper 词表）、normalize/（基于 kaldifst 的 wetext 规范化器）
+  engines/     每个引擎一个包：dummy、qwen3tts、f5tts、omnivoice、cosyvoice、gptsovits、voxcpm、asr
+  training/    Trainer、StageContext、stage.py（训练阶段的子进程）、memory.py（训练显存工具）
+  embed.py     MizuotoServer：把 API 和界面嵌进别的应用
+  webui/       Vue 项目；dist/ 不入库，作为包数据随 wheel 发布
+packages/native/
+  fishspeech/  mizuoto-fishspeech（mizuoto_fishspeech），通过 mizuoto.engines 入口点注册
+  indextts/    mizuoto-indextts（mizuoto_indextts），同上
+scripts/       dev.py、build_wheels.py、smoke_wheels.py、model_manifests.py、mirror_models.py、mirror_fetch.py、mirror_readme.py、generate_openapi.py
+  parity/      把原生引擎与参照实现对照的工具（见[测试](/docs/development-testing)）
+site/          本文档站
+```
+
+### 分层规则及其测试
+
+`tests/test_architecture.py` 用 `ast` 遍历每个模块的绝对导入，对照下表检查；标准库总是允许的。
+
+| 层 | 可导入的第一方模块 | 可导入的第三方模块 |
+| --- | --- | --- |
+| `mizuoto/core` | `mizuoto.core`、`mizuoto.version`、`mizuoto.logger`；`mizuoto.runtime`、`mizuoto.nn`、`mizuoto.engines`、`mizuoto.training` **只能在函数内** | pydantic、httpx、numpy、av、tomli、tomli_w、send2trash、typing_extensions |
+| `mizuoto/api` | `mizuoto.api`、`mizuoto.core`、`mizuoto.version`、`mizuoto.logger`、`mizuoto.webui` | fastapi、starlette、socketio、uvicorn、pydantic、anyio |
+| `mizuoto/cli` | `mizuoto.cli`、`mizuoto.core`、`mizuoto.api`、`mizuoto.version`、`mizuoto.logger` | typer、click、rich、pydantic、uvicorn、httpx |
+| `mizuoto/runtime` | `mizuoto.runtime`、`mizuoto.core.codes`、`mizuoto.core.inference.tasks` | numpy、torch、safetensors，以及可选的注意力包 flash_attn、flash_attn_interface、xformers、sageattention、sageattn3（只在 `runtime/accel` 里按需导入） |
+| `mizuoto/nn` | `mizuoto.nn`、`mizuoto.runtime` | numpy、torch、soxr |
+| `mizuoto/text` | `mizuoto.text` | tokenizers、sentencepiece、tiktoken、kaldifst、numpy |
+| `mizuoto/engines` | `mizuoto.runtime`、`mizuoto.nn`、`mizuoto.text`、`mizuoto.engines`、`mizuoto.training`、`mizuoto.core.codes`、`mizuoto.core.inference.tasks` | numpy、torch、safetensors、tokenizers、sentencepiece、tiktoken、soxr、yaml、inflect、regex，以及各文本前端的包（pypinyin、rjieba、jieba、opencc、wordsegment、budoux、fasttext、ToJyutping、fugashi、pyopenjtalk、jamo、mecab） |
+| `mizuoto/training` | 同引擎，另加 `mizuoto.core.jobs.events` 和 `mizuoto.core.jobs.jsonl` | numpy、torch |
+
+其他检查：
+
+- `test_only_core_inference_reaches_model_code`：`mizuoto/core` 里除 `core/inference` 之外，没有模块导入运行时、`nn`、引擎或训练器。
+- `test_shared_modules_are_standard_library_only`：`core/codes.py`、`core/jobs/events.py`、`core/jobs/jsonl.py`、`core/remote/frames.py` 和 `core/inference/tasks.py` 只导入标准库（以及彼此）。运行时、引擎和训练阶段都要用它们。
+- `test_native_engine_packages_import_like_engines`：`packages/native/*/mizuoto_*` 遵守引擎的规则（另可导入自己的包）。
+- `test_engines_import_no_other_engine`：`mizuoto/engines/<a>` 永远不导入 `mizuoto/engines/<b>`；两个引擎共用的东西应放进 `nn` 或 `runtime`。
+- `test_native_code_leaves_global_state_alone`：`runtime`、`nn`、`text`、各引擎和需要接受许可的包里，不允许出现改动进程级状态的调用（见[运行时](/docs/development-runtime#全局状态)）。
+- `test_attention_goes_through_the_accel_entry_point`：`runtime/accel` 之外，运行时、`nn`、引擎、训练器和需要接受许可的包都不直接调用 SDPA 或它的 aten 内核；每次注意力计算都经过 `accel.attention`，`compute.attention` 才能切换它（见[注意力加速](/docs/development-acceleration)）。
+- `test_host_never_imports_model_code`：`core`、`api`、`cli` 里没有任何地方导入 torch、torchaudio、transformers、onnxruntime、`mizuoto_fishspeech` 或 `mizuoto_indextts`，函数内也不行。
+- 三个子进程测试：`import mizuoto.core.context` 不加载 torch、fastapi 和 typer；`import mizuoto.cli.app` 不加载 torch 和 fastapi；导入引擎契约、请求上下文、dummy 引擎、`core.inference.local` 和 `core.inference.runtime` 不加载 torch。这让 `mizuoto version` 和 `mizuoto --help` 保持快速，也让核心的测试能只靠 dummy 引擎运行。
+- `test_one_distribution`：`pyproject.toml` 依赖 torch，不依赖任何其他 `mizuoto-*` 发行包，且 `packages/` 下除 `packages/native` 外没有 worker 包和引擎包。
+
+每条规则都有原因：
+
+- **核心启动不需要 torch。** 列出模型、改设置、提供界面都不加载模型；运行时在第一次加载模型时才建立。
+- **`core/inference` 是唯一的入口**，于是核心对模型代码的了解集中在一个包里，而且每处导入都一眼可见是延迟的。
+- **共用模块只用标准库**，因为训练阶段、远程 agent 的帧和引擎都要用它们，而不带核心的 pydantic 模型。
+- **引擎之间互不导入**：共用代码进 `nn` 或 `runtime`，在那里只测一次。
+
+### 一个操作，一个核心方法
+
+每个操作恰好对应一个核心方法，接收并返回 `Record` 模型（`mizuoto/core/record.py`）。路由和命令只做三件事：解析输入、调用它、整理输出。以列出预设为例：
+
+```python
+# mizuoto/api/routers/presets.py
+@router.get("", operation_id="list_presets")
+def list_presets(services: ServicesDep, model: str | None = None) -> list[Preset]:
+    return services.presets.list_presets(model)
+
+# mizuoto/cli/commands/presets.py
+with open_services() as services:
+    presets = services.presets.list_presets(model)
+    if json_output:
+        print_json(presets)
+```
+
+所以 API 的 JSON 和 CLI 的 `--json` 形状相同。`Record` 设置了 `json_schema_serialization_defaults_required`：有默认值的字段在输出模式里是必填的，生成的 TypeScript 类型与服务器实际发送的一致。
+
+## 组装：`build_services()`
+
+`mizuoto/core/context.py` 的 `build_services()` 按依赖顺序构建全部服务，返回 `Services` 数据类：
+
+| 字段 | 类 | 职责 |
+| --- | --- | --- |
+| `settings` | `SettingsService` | `settings.toml`、`MIZUOTO_` 环境变量覆盖、解析后的各目录 |
+| `events` | `LocalEventBus` | 进程内发布/订阅 |
+| `db` | `Database` | `mizuoto.db`（SQLite，带编号的迁移） |
+| `compute` | `ComputeService` | 设备探测（nvidia-smi 等，不用 torch）、显存持有者、释放（显存不足后：所有 GPU） |
+| `jobs` | `JobService` | 队列、命名资源、持久化的请求、重试、任务 worker |
+| `engines` | `EngineRegistry` | 引擎清单（`core/engines/manifests/*.toml`）、许可接受、各引擎是否可用 |
+| `inference` | `InferenceService` | 原生运行时（延迟建立）、本机实现了哪些引擎、它们的附加依赖和训练器 |
+| `runtime` | `RuntimeService` | 每个（引擎，设备）一个引擎，在本进程或远程主机上；`loaded()` 给出模型的 `EngineHandle`；卸载、空闲回收、doctor |
+| `models` | `ModelService` | 模型目录、共享资源、下载、校验、导入 |
+| `audio` | `AudioService` | 上传、参考音频（按内容登记） |
+| `outputs` | `OutputService` | 每个合成文件及其来历 |
+| `presets` | `PresetService` | 参数预设 |
+| `asr` | `AsrService` | 通过 `asr` 引擎转写，按音频 SHA-256 和模型缓存 |
+| `tts` | `TtsService` | 规划，`speak` / `convert` / `edit` 任务，流式 |
+| `voices` | `VoiceService` | 音色库（文件夹）、适配、设计、导出导入 |
+| `datasets` / `training` | `DatasetService` / `TrainingService` | 数据集、实验和训练任务 |
+| `projects` | `ProjectService` | 长篇项目：角色、章节、台词和版本 |
+| `remote` | `RemoteService` | 运行 `mizuoto agent` 的远程主机 |
+
+服务之间的相互引用（`runtime.remote`、`runtime.model_options = models.load_options`、`models.before_remove = runtime.unload_model`、`engines.inference`、`voices.tts` 等）在构造之后再挂上，构造函数因此没有循环依赖。最后注册一个设置监听器：`engines.<id>.*` 的任何改动都会卸载该引擎的模型（`runtime.unload_engine`；下一个请求用新设置重新加载），`remote.hosts.*` 的改动会结束与旧主机的会话，并发布 `settings_changed` 和 `engines_changed`。
+
+| | 服务器（`mizuoto webui`） | 命令行与 Python |
+| --- | --- | --- |
+| 入口 | `build_services(start_background=True)`，存在 `app.state.services`；路由通过 `ServicesDep` 取得 | `open_services()` 上下文管理器（CLI 经 `cli/output.py` 调用），每条命令建一次、结束后关闭 |
+| 后台 | `jobs.start()`（调度线程）、`runtime.start()`（空闲回收与限频的 `runtime_changed` 事件） | 无 |
+| 任务 | `jobs.submit()` 入队，调度器按资源运行 | `jobs.run_now()` 在调用线程前台运行，Ctrl+C 取消；模型在 `Services.close()` 时卸载 |
+
+测试用 `environ=`（代替 `os.environ`）、`data_dir=` 和 `settings_overrides=` 构建完全隔离的服务（`tests/conftest.py` 的 `make_services`）。dummy 引擎和所有引擎一样，运行在测试自己的进程里。
+
+## 一个请求的路径
+
+在 Web UI 点 **合成**：
+
+<Mermaid chart={`sequenceDiagram
+    participant B as 浏览器
+    participant R as routers/tts.py
+    participant T as TtsService
+    participant J as JobService
+    participant RS as RuntimeService
+    participant H as EngineHandle（LocalHandle）
+    participant E as EventBus / SocketBridge
+
+    B->>R: POST /api/v1/tts/speak
+    R->>T: speak(SpeakRequest)
+    T->>T: plan()：对照清单检查模型、许可、语言、音色、参数
+    T->>J: submit("speak")，资源 engine:引擎:设备 和 gpu:设备
+    J-->>B: Job（排队中）
+    J->>RS: 任务线程：loaded(ModelRef, device, dtype, options)
+    RS-->>J: EngineHandle（必要时先加载模型）
+    J->>H: prepare_voice（每个音色缓存键一次）
+    J->>H: synthesize(task, EngineRequest)
+    loop 生成器每产出一个 AudioChunk
+        H-->>J: float32 采样、段号
+    end
+    J->>J: 拼接、归一化、重采样、编码、记录 Output
+    J->>E: job_updated、outputs_added
+    E-->>B: socket.io 推送`} />
+
+逐步来看：
+
+1. **先规划，再排队。** `TtsService.plan()` 对照清单检查模型状态、引擎是否启用且可用、许可、文本、语言、音色模式、参考音频、参数和设备，这些都在任务创建之前（不估算显存：模型总是尝试加载）；出错立刻带着错误码返回。
+2. **任务。** `speak` 占用 `engine:<引擎>:<设备>`（容量 1：一个已加载的引擎一次只服务一个请求），设备不是 CPU 时还占用 `gpu:<设备>`。请求以 JSON 保存，所以**重试**在重启后也会重新规划。
+3. **模型。** `RuntimeService.loaded(ModelRef(id, engine, variant, path), device, dtype, options, request)` 返回模型的 `EngineHandle`：本进程里是 `LocalHandle`，设备名为 `<主机>/<设备>` 时是 `RemoteEngineHandle`。模型没加载就先加载，加载前先把超出 `compute.max_resident_models` 的其他模型卸掉。
+4. **音色。** 有参考音频时，`prepare_voice` 按缓存键把引擎的音色状态（提示码、嵌入）写进音色缓存，只做一次；之后的请求通过 `VoiceSpec.cache` 传入这些文件。
+5. **合成。** `synthesize(task, request)` 是一个产出 `AudioChunk` 的生成器（float32 单声道 numpy 采样、采样率、段号）。任务逐块取出（客户端流式接收时，也把每块交给 `StreamSink`）；关闭生成器就会让引擎停下。每段一个 `SynthesisTask`，或一个批处理任务。
+6. **输出。** 各段以段间停顿拼接、归一化、重采样到输出采样率、编码（PyAV），记录为一个 `Output`，带实际参数、耗时（加载、首块、总计、RTF）和许可标签。
+
+**REST 是事实来源，socket 只负责推送。** `SocketBridge`（`mizuoto/api/sockets.py`）订阅 `EventBus`，用 `call_soon_threadsafe` 把任务线程上的事件交给事件循环，按事件名发出。事件携带的是快照，从不是活对象。
+
+同一条合成路径还有几种入口，它们都落到 `TtsService` 的同一套规划和任务上：流式输出（`StreamSink`：WebSocket `/api/v1/tts/stream`、`POST /tts/speak?stream=true`、`mizuoto speak --stream`）、流式文本输入（`TextFeed`，变体有 `stream_text_input` 能力时）、音色转换和语音编辑（`convert`、`edit` 任务），以及兼容 OpenAI 的 `POST /v1/audio/speech`（`TtsService.from_openai` 把模型、音色、`instructions`、`speed` 和格式映射成 `SpeakRequest`）。协议和示例见 [HTTP API](/docs/advanced-api)。
+
+## 通往模型代码的入口：`core/inference`
+
+核心对模型代码的了解全部集中在 `mizuoto/core/inference/`：
+
+| 模块 | 作用 |
+| --- | --- |
+| `tasks.py` | 引擎接收和产出的任务类型（`SynthesisTask`、`VoiceSpec`、`LoadSpec`、`AudioChunk`、`Description`、`OptionSpec` 等），只用标准库的数据类，由 `runtime.engine` 再导出；核心可以在模块顶层构造它们而不加载运行时 |
+| `service.py` | `InferenceService`：本机装了什么。torch 能导入且实现已注册（内置的 `BUILTIN`，或 `mizuoto.engines` 入口点）时引擎可用；否则 `missing(engine)` 列出缺什么（`torch`、`mizuoto-fishspeech`、`mizuoto-indextts`）。附加依赖和训练器的需要用 `importlib.util.find_spec` 探测，不导入 torch。原生运行时在第一次加载模型时才建立 |
+| `runtime.py` | `RuntimeService`：每个（引擎，设备）一个引擎，`loaded(ModelRef, device, dtype, options, request)` 给出模型的 `EngineHandle`；最多常驻 `compute.max_resident_models` 个模型、空闲回收、内存不足后的释放、训练前腾空设备、doctor |
+| `engine.py`、`local.py` | `EngineHandle` 与 `EngineRequest`（取消事件、超时、流式文本队列、进度回调；返回 `applied`、`warnings`、`timings`）；`LocalEngine` / `LocalHandle` 在本进程里调用引擎。设备名为 `<主机>/<设备>` 时换成 `core/remote` 的 `RemoteEngine` 会话，调用方式相同 |
+| `models.py` | `RuntimeStatus`、`LoadedModelInfo`、`DoctorReport` 等报告用的模型 |
+
+句柄的方法是 `prepare_voice`、`synthesize` / `convert` / `edit`（返回生成器：引擎只在 `next()` 里运行，每一步绑定请求上下文并进入 `torch.inference_mode()`）和 `call(op, payload)`（ASR 的 `transcribe`、Fish Speech 的 `codec_*`、`mizuoto.snapshot`）。加载在推理模式之外进行。这些细节见[运行时](/docs/development-runtime)。
+
+## 引擎注册表与清单
+
+一个引擎由两部分组成：**清单**（`mizuoto/core/engines/manifests/<id>.toml`，随 wheel 发布的包数据）和**实现**（`mizuoto.runtime.engine.Engine` 的子类）。
+
+- 清单写明变体与能力、通用参数的映射、引擎选项和加载选项、模型目录（每个模型固定的仓库版本，文件大小和 SHA-256 在 `manifests/files/*.files.json`）、共享资源（`[[assets]]`）、许可，以及训练方法（`[training.<方法>]`）。主机只读清单就能列出引擎、校验请求、渲染参数表单，不导入 torch。
+- `EngineRegistry`（`core/engines/registry.py`）加载并校验清单，记录许可是否已接受，并经 `InferenceService` 报告各引擎 `available` / `missing`。`params.py` 检查通用参数（`None` 表示引擎自己的默认值，Mizuoto 从不强加默认值），`languages.py` 把语言码规范化，`licences.py` 管许可全文。
+- 实现的注册表在 `runtime/engine.py`：内置引擎列在 `BUILTIN`（`id → 模块:类`），别的发行包通过入口点组 `mizuoto.engines` 注册。入口点在每个进程里只读一次，所以装了新的引擎包要重启 Mizuoto。
+- 引擎的 `OPTION_SCHEMA` 必须与清单的 `[options]` 完全一致，`Engine.DEVICES` 必须与清单的 `devices` 一致（`tests/core/test_engines.py` 检查这两条）；引擎的 `detect_variant()`（只看文件，不用 torch）与主机导入模型时用的 `core/models/detect.py` 得出同样的变体。
+
+写一个引擎的完整过程见[接入引擎](/docs/development-engine)。
+
+## 模型、共享资源与许可
+
+- **模型。** 目录模型下载到 `models/<引擎>/<模型>/`，`model.json` 最后写入并列出文件。状态是 `missing`、`partial`（有文件夹没有 `model.json`，或缺它需要的共享资源）、`installed`、`corrupt`（大小不符或校验失败）或 `downloading`。`model_download` 任务（资源 `io`）以 `downloads.concurrency` 个线程下载到 `<文件>.part`，用 Range 续传，校验大小和 SHA-256，按来源顺序尝试（`downloads.source` 优先，然后 Hugging Face、hf-mirror、ModelScope；`downloads.repository = "mizuoto-model"` 时先试镜像）；某个来源缺的文件从下一个取。`import_model` 按文件识别引擎和变体，大小与目录模型相符时再校验 SHA-256，否则登记为用户模型 `<引擎>/<名字>`。
+- **共享资源**（清单的 `[[assets]]`）是一个引擎的多个模型共用的文件，放在 `models/_assets/<引擎>/<名字>/`，带 `asset.json`；随第一个需要它的模型下载，也可以单独下载。压缩包部分校验后解压到原处。引擎通过 `LoadSpec.options["assets"]`（id → 文件夹）拿到它们。
+- **许可。** `licence.gated` 的引擎（Fish Speech、IndexTTS）要求 `engines.<id>.accepted_licence == "<许可 id>@<版本>"`，才能下载模型和共享资源、才能合成；许可全文随包发布（`manifests/licences/`）。`requires_consent` 让克隆需要一段同意声明，`trains_others = false` 让它的输出不能作为别的引擎的训练数据，`notice` 显示在结果下方。输出都带许可标签。
+
+## 音色
+
+音色是 `voices/<slug>/voice.json` 加 `references/<sha256>.flac`（单声道，保留原采样率）。文件夹就是事实来源，列表是一次扫描；删除进回收站。种类有 `reference`、`designed`（设计结果，生成的片段作为主参考）、`preset`（某个模型的预设说话人）和 `trained`。
+
+- `fit_voice(voice, model, variant)` 回答“这个模型能否用这个音色、怎样用”：模式（`preset`、`design`、`clone`、`clone_no_transcript`）、还需要什么（`transcribe`、`trim`）、警告，或不能用的原因。合成和界面的音色选择器都用它。
+- **音色缓存。** 加载模型之后，任务对每个键调用一次 `prepare_voice`，写入 `voices/<slug>/cache/<引擎>/<模型>/<键>/` 并记下 `cache.json`；临时参考音频写入 `cache/voices/…`。键是（模型、模型版本、参考音频的 SHA-256 与转写、音色模式、Mizuoto 版本）的哈希，所以升级 Mizuoto 会重建一次缓存。
+- **音色自有权重**（`Voice.weights[engine]`）：清单有 `[weights]` 角色的引擎（GPT-SoVITS 的 `gpt` 和 `sovits`）可以带一个音色专属的微调，存于 `weights/<引擎>/`，随音色导出导入；版本由文件判断，与变体的 `weights_version` 相同时才使用。
+- 缺少转写时，开启 `tts.auto_transcribe` 且 ASR 可用就先转写（结果按音频 SHA-256 和模型缓存在 `transcripts` 表里，并写回音色）；否则模型有 `clone_no_transcript` 就用它，没有就报 `capability_not_supported` 并提示安装命令。
+
+## 远程主机
+
+设备名为 `<主机>/<设备>` 的引擎运行在那台主机的 `mizuoto agent` 上。agent 是一个完整的 Mizuoto：自己的数据目录、模型和引擎、自己的进程。
+
+- 协议版本是 `AGENT_PROTOCOL = 2`。`hello` 时用 `hmac.compare_digest` 比较令牌并核对协议；协议不同的主机和 agent 互相拒绝，并提示升级。
+- 一个 TCP 连接（可选 TLS）是一个（引擎，设备）的会话：`open`、`load`、`prepare_voice`、`synthesize`、`convert`、`edit`、`call`、`unload`、`status` 依次进行，`cancel` 和 `text` 随时可发。帧是带长度前缀的 JSON 或二进制（`core/remote/frames.py`，只用标准库）。
+- 请求用到的文件（参考音频、音色缓存、权重）按 SHA-256 只传一次（`have` / `put`，每块 8 MB），agent 存在 `cache/remote/files` 里，30 天未用即清理；`prepare_voice` 写出的文件夹逐个文件传回。agent 每 5 秒发一次心跳。
+- 模型状态和引擎是否可用以 agent 为准（报告缓存 15 秒）；训练不能用远程引擎。
+
+用法见[远程主机](/docs/advanced-remote)，客户端一侧见[运行时](/docs/development-runtime)。
+
+## 设置
+
+`SettingsService` 管理 `settings.toml`（在数据目录，或 `MIZUOTO_CONFIG_DIR` / `config_dir` 指定的目录）。模型定义在 `mizuoto/core/settings/models.py`，分为 `server`、`paths`、`compute`、`downloads`、`tts`、`engines.<id>`、`training`、`outputs` 和 `remote` 几节。
+
+- 带 `MIZUOTO_` 前缀、层级之间用 `__` 连接的环境变量覆盖文件，如 `MIZUOTO_SERVER__PORT=8000`。`MIZUOTO_DATA_DIR` 和 `MIZUOTO_CONFIG_DIR` 例外：它们选择目录。
+- 宿主应用可以用 `settings_overrides` 钉死某些值。
+- 每秒检查一次文件是否被外部修改；无论改动来自哪里，都以点分键名（`changed_keys`）通知 `on_keys_change` 的监听器。
+- 读取文件时，模型里没有的键会被忽略。
+
+每个设置项的含义见[配置](/docs/cli-config)。
+
+## 数据目录与兼容性
+
+数据目录默认是平台用户数据目录下的 `mizuoto`（Linux 上是 `~/.local/share/mizuoto`，Windows 上是 `%APPDATA%` 下，macOS 上是 `~/Library/Application Support` 下），`MIZUOTO_DATA_DIR` 可以指定别处。它包含 `models/`（含 `_assets/`）、`voices/`、`outputs/`、`datasets/`、`experiments/`、`projects/`、`cache/`（含 `scratch/<引擎>/`，请求的临时目录）、`uploads/`、`logs/`、`jobs/`（任务日志）、`server.json`（正在运行的服务器的地址和进程号）和 `mizuoto.db`。大多数目录可以用 `paths.*` 移到别处。
+
+<Callout type="info" title="以文件夹为准">
+已安装的模型、音色、数据集、实验和项目都是带 JSON 附属文件的文件夹（`model.json`、`voice.json`、`dataset.json`、`experiment.json`、`project.json`），而不是数据库行：没人需要查询它们，扫描文件夹也不会与文件本身不一致。数据库（`mizuoto/core/db/database.py`：一个共享连接，WAL 模式，`PRAGMA user_version` 记录已运行的迁移，迁移只追加）只存需要查询的内容：任务（含请求 JSON 和所属进程号）、输出（含实际参数、耗时和许可标签）、音频文件、转写、预设和客户端状态。
+</Callout>
+
+升级时磁盘上的东西这样延续：
+
+- 模型文件夹和模型文件清单、音色（文件夹、参考音频、权重）、输出、数据集、实验、项目和预设都原样可用。只校验清单里的文件，所以清单删掉的旧文件留着也无害。
+- `settings.toml` 的键保持不变；某个版本改名或删除的键会被忽略。数据库只追加迁移。
+- 音色缓存的键含 Mizuoto 版本，升级后第一次使用时重建。
+- 主机和它的远程 agent 必须使用同一个协议版本，不同时互相拒绝。
+- 一个任务记录它所属的进程；打开数据目录时，只有进程已经不在的任务才标为 `interrupted`，所以另一条命令不会打断正在进行的渲染。
+
+## 事件
+
+`mizuoto/core/events/models.py` 里的每个事件都是带 `__event_name__` 的 `Record`：`job_updated`、`job_log`、`jobs_cleared`、`outputs_added` / `outputs_removed`、`voices_changed`、`models_changed`、`presets_changed`、`engines_changed`、`runtime_changed`（已加载的模型和各引擎的状态，即 `RuntimeStatus`）、`compute_changed`、`settings_changed`、`datasets_changed`、`projects_changed`、`experiments_changed`、`train_metrics`。`EventBase.get_events()` 收集所有子类；`mizuoto/api/openapi.py` 把它们写进 OpenAPI 模式，界面据此为 socket 生成类型。
+
+`LocalEventBus.publish()` 在发布线程上同步调用每个处理函数；需要在别处（asyncio 循环）运行的订阅者自己转交。`RuntimeService` 发布 `runtime_changed` 的频率最多每 0.5 秒一次。
+
+## 任务与命名资源
+
+每个耗时操作都是一个任务。各服务在构建时用 `jobs.register(kind, factory)` 注册工厂函数，由它把请求（纯 JSON）变成 `JobSpec`：
+
+```python
+@dataclass
+class JobSpec:
+    title: str
+    run: Callable[[JobContext], dict[str, Any] | None]
+    resources: frozenset[str] = frozenset({"cpu"})
+    steps: list[JobStep] = field(default_factory=list)
+    priority: int = 0          # 越大越先运行；预览用 10
+    group: str | None = None   # 微批处理：一个任务可以把同组的一起运行
+    payload: Any = None
+    exclusive: frozenset[str] = frozenset()  # 整个占用的资源：训练独占 gpu:<设备>，不受 compute.gpu_jobs 限制
+```
+
+已注册的种类有 `speak`、`voice_prepare`、`convert`、`edit`、`engine_op`、`transcribe`、`model_download`、`asset_download`、`dataset_prepare`、`train`、`project_render` 和 `project_export`。
+
+资源有名字和容量。调度器只在任务所需的每种资源都有空位时才运行它；否则任务处于 `waiting`，`waiting_for` 写明哪种资源满了：
+
+| 资源 | 容量 | 使用者 |
+| --- | --- | --- |
+| `cpu` | 一半的核心数 | 默认；数据集准备；在 CPU 上的训练 |
+| `io` | 4 | 模型和共享资源的下载 |
+| `gpu:<设备>` | `compute.gpu_jobs` | 该设备上的推理和训练；等它的任务可以**强制运行**（`run_anyway`） |
+| `inference` | `compute.inference_jobs` | 所有合成任务（`speak`、`convert`、`edit`），不论引擎和设备；一个微批次算一个任务 |
+| `engine:<引擎>:<设备>` | 1 | 一个已加载的引擎一次只服务一个请求；训练也占用它 |
+| `project:<id>` | 1 | 一个项目的渲染（它再提交普通的 speak 任务） |
+
+`JobContext` 是运行中的任务汇报进度、检查取消的接口：`progress`、`step`、`message`、`log`、`transfer`（5 秒窗口的下载速度）、`check_cancel`、`cancel_event`（作为 `EngineRequest.cancel` 交给引擎）、`run_worker(WorkerTarget, …)`（任务 worker，如训练阶段，读取它的 JSON 行事件；任何一行输出都会重置看门狗），以及微批处理用的 `adopt` / `complete` / `fail` / `release`。任务会记录自己的进程号；打开数据目录时，只有进程已经不在的任务才被标为 `interrupted`。
+
+### 微批处理
+
+开启 `tts.micro_batch` 时，若变体有 `batch` 能力且 `max_batch > 1`，请求只有一段、没有种子（批处理时随机数的取法不同）且不是流式，`TtsService._batch_group()` 就给 speak 任务一个 `JobSpec.group`，即除文本外所有内容的哈希。正在运行的任务在调用引擎前调用 `JobContext.adopt(max_batch - 1)`，取走同组里最早排队的任务，发一个 `texts` 包含全部文本的 `SynthesisTask`；引擎以 `segment = i` 产出第 *i* 段文本的音频块，任务为每个任务各存一份输出，并用 `complete()` / `fail()` 结束被带上的任务。批处理调用失败时，它们被 `release()` 回队列，各自运行。
+
+## 错误与退出码
+
+`mizuoto/core/errors.py` 包含全部错误类型。每个类都带 `code`、`http_status` 和 `exit_code`，两个前端机械地转换：API 把任何 `MizuotoError` 变成 `{"code", "message", "detail"}`（`mizuoto/api/errors.py`）；CLI 把它变成退出码，并把 `detail["hint"]` 作为第二行打出（`cli/factory.report_error`）。错误码字符串在 `mizuoto/core/codes.py`（只用标准库），所以引擎和训练阶段不需要 pydantic，抛出 `EngineError(message, detail, code=codes.…)` 即可，核心再用 `error_from_code()` 还原成对应的类。
+
+| 异常 | `code` | HTTP | 退出码 |
+| --- | --- | --- | --- |
+| `MizuotoError`（基类） | `internal_error` | 500 | 1 |
+| `NotFoundError` | `not_found` | 404 | 2 |
+| `ConflictError` / `BusyError` | `conflict` / `busy` | 409 | 3 |
+| `InvalidPathError` | `invalid_path` | 400 | 4 |
+| `ValidationError` | `invalid_input` | 400 | 4 |
+| `CapabilityError` | `capability_not_supported` | 422 | 4 |
+| `ParameterError` | `parameter_not_supported` / `parameter_out_of_range` | 422 | 4 |
+| `ReferenceInvalidError` | `reference_invalid` | 422 | 4 |
+| `LanguageError` | `language_not_supported` | 422 | 4 |
+| `LicenceError` | `licence_not_accepted` | 403 | 5 |
+| `NotLocalError`（只在 API，`mizuoto/api/deps.py`） | `not_local`：读服务器路径、在文件夹中显示等操作只对服务器本机的浏览器开放 | 403 | 4 |
+| `ModelMissingError` | `model_missing` | 409 | 7 |
+| `EnvMissingError` | `engine_not_installed`：引擎需要的包（torch、需要接受许可的引擎的发行包）没装 | 409 | 7 |
+| `AssetMissingError` | `asset_missing` | 409 | 7 |
+| `DeviceError` | `device_unavailable` | 409 | 8 |
+| `ComputeError` | `compute_unavailable` | 503 | 9 |
+| `WorkerError` | `worker_failed`：训练阶段的进程退出了，或远程 agent 不再应答 | 502 | 10 |
+| `EngineError` | `engine_error` | 500 | 10 |
+| `OperationTimeoutError` | `timeout` | 504 | 11 |
+| `DownloadError` | `download_failed` | 502 | 12 |
+| `InstallError` | `install_failed` | 500 | 13 |
+| `RemoteError` | `remote_unavailable` | 502 | 14 |
+| `CancelledError` | `cancelled` | 499 | 130 |
+
+`compute_unavailable` 的 `detail["reason"]` 区分 `out_of_memory` 与 `no_device`。任务 worker 的进程退出码另有约定（`codes.EXIT_*`）：`EXIT_RETRY = 75` 表示请求重跑，`EXIT_CANCELLED = 130` 表示已取消。

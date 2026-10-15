@@ -1,0 +1,104 @@
+/*
+ * Section rail.
+ *
+ * `position: fixed` rather than sticky: `.paged` clips its inline axis,
+ * and a sticky rail inside a section would also be trapped by that section's
+ * `container-type` containment.
+ */
+
+.page-rail {
+  position: fixed;
+  z-index: 30;
+  top: calc(50% + var(--page-nav) / 2);
+  right: clamp(0.75rem, 2vw, 1.75rem);
+  translate: 0 -50%;
+}
+
+.page-rail ul {
+  display: grid;
+  gap: 0.4rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.page-rail-dot {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.55rem;
+  padding: 0.3rem 0.35rem;
+  border-radius: 999px;
+  color: var(--color-fd-muted-foreground);
+  cursor: pointer;
+}
+
+/*
+ * The mark and label animate on the dot's hover, so they declare the leave
+ * timing themselves. `max-width` and `height` are cheap to animate here
+ * because both boxes are a few pixels wide and sit outside document flow.
+ */
+.page-rail-mark {
+  width: 0.42rem;
+  height: 0.42rem;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--color-fd-muted-foreground) 45%, transparent);
+  transition:
+    height var(--page-out) var(--page-ease-out),
+    background-color var(--page-out) var(--page-ease-out);
+}
+
+.page-rail-label {
+  max-width: 0;
+  overflow: hidden;
+  opacity: 0;
+  font-size: 0.7rem;
+  font-weight: 620;
+  white-space: nowrap;
+  transition:
+    max-width var(--page-out) var(--page-ease-out),
+    opacity var(--page-out) var(--page-ease-out);
+}
+
+@media (any-hover: hover) {
+  .page-rail-dot:hover .page-rail-mark,
+  .page-rail-dot:hover .page-rail-label {
+    transition-duration: var(--page-in);
+    transition-timing-function: var(--page-ease-in);
+  }
+}
+
+.page-rail-dot[aria-current="true"] .page-rail-mark {
+  width: 0.45rem;
+  height: 1.15rem;
+  background: var(--page-accent);
+}
+
+@media (any-hover: hover) {
+  .page-rail-dot:hover .page-rail-mark {
+    background: var(--page-accent);
+  }
+
+  .page-rail-dot:hover .page-rail-label {
+    max-width: 12rem;
+    opacity: 1;
+  }
+}
+
+.page-rail-dot:focus-visible {
+  outline: 2px solid var(--page-accent);
+  outline-offset: 2px;
+}
+
+.page-rail-dot:focus-visible .page-rail-label {
+  max-width: 12rem;
+  opacity: 1;
+}
+
+/* The rail is a pointer affordance; it duplicates the header nav, so it is
+ * withdrawn where it would crowd the layout or cannot be hovered. */
+@media (max-width: 900px), (any-hover: none) {
+  .page-rail {
+    display: none;
+  }
+}

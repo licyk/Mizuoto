@@ -1,0 +1,254 @@
+# Qwen3-TTS.
+id = "qwen3tts"
+title = "Qwen3-TTS"
+description = "Alibaba Qwen's 12 Hz speech LLM: voice cloning (Base), nine preset speakers with instructions (CustomVoice) and voices designed from a description (VoiceDesign), in ten languages."
+devices = ["cuda", "rocm", "xpu", "mps", "cpu"]
+languages = ["zh", "en", "de", "it", "pt", "es", "ja", "ko", "fr", "ru"]
+
+[upstream]
+url = "https://github.com/QwenLM/Qwen3-TTS"
+commit = "022e286b98fbec7e1e916cb940cdf532cd9f488e"
+
+[licence]
+id = "apache-2.0"
+name = "Apache License 2.0"
+url = "https://github.com/QwenLM/Qwen3-TTS/blob/main/LICENSE"
+
+# -- variants -------------------------------------------------------------------------
+# The upstream generate_* methods split long text not at all, so Mizuoto segments it.
+
+[variants.base]
+title = "Base (voice cloning)"
+sample_rate = 24000
+capabilities = ["clone", "clone_no_transcript", "batch", "seed"]
+max_batch = 8
+
+[variants.base.reference]
+min_seconds = 1.0
+max_seconds = 30.0
+min_sample_rate = 16000
+
+[variants.custom_voice]
+title = "CustomVoice (preset speakers, instructions)"
+sample_rate = 24000
+capabilities = ["preset_speaker", "instruct", "batch", "seed"]
+speakers = ["aiden", "dylan", "eric", "ono_anna", "ryan", "serena", "sohee", "uncle_fu", "vivian"]
+max_batch = 8
+
+[variants.custom_voice_lite]
+# The 0.6B CustomVoice model drops instructions silently upstream, so it does not declare them.
+title = "CustomVoice 0.6B (preset speakers)"
+sample_rate = 24000
+capabilities = ["preset_speaker", "batch", "seed"]
+speakers = ["aiden", "dylan", "eric", "ono_anna", "ryan", "serena", "sohee", "uncle_fu", "vivian"]
+max_batch = 8
+
+[variants.voice_design]
+title = "VoiceDesign (voice from a description)"
+sample_rate = 24000
+capabilities = ["voice_design_freeform", "batch", "seed"]
+max_batch = 8
+
+# -- common parameters ----------------------------------------------------------------
+
+[params.temperature]
+target = "temperature"
+min = 0.0
+max = 2.0
+step = 0.05
+default = 0.9
+help = "Sampling temperature of the talker. 0 decodes greedily."
+
+[params.top_p]
+target = "top_p"
+min = 0.0
+max = 1.0
+step = 0.01
+default = 1.0
+
+[params.top_k]
+target = "top_k"
+type = "int"
+min = 0
+max = 1000
+default = 50
+
+[params.repetition_penalty]
+target = "repetition_penalty"
+min = 1.0
+max = 2.0
+step = 0.01
+default = 1.05
+
+[params.max_new_tokens]
+target = "max_new_tokens"
+type = "int"
+min = 16
+max = 8192
+default = 8192
+help = "At most this many 12 Hz codec frames (8192 ≈ 11 min)."
+
+[params.seed]
+target = "seed"
+type = "int"
+min = 0
+max = 4294967295
+
+[params.segment_silence_ms]
+target = "pause"
+type = "int"
+min = 0
+max = 5000
+default = 120
+
+# -- engine options -------------------------------------------------------------------
+
+[options.subtalker_temperature]
+type = "float"
+default = 0.9
+min = 0.0
+max = 2.0
+step = 0.05
+help = "Sampling temperature of the per-frame code predictor (codebooks 1–15)."
+
+[options.subtalker_top_k]
+type = "int"
+default = 50
+min = 0
+max = 1000
+
+[options.subtalker_top_p]
+type = "float"
+default = 1.0
+min = 0.0
+max = 1.0
+step = 0.01
+
+[options.subtalker_do_sample]
+type = "bool"
+default = true
+help = "Sample the code predictor; off decodes it greedily."
+
+[options.non_streaming_mode]
+type = "bool"
+help = "Give the model the whole text at once. Upstream's default: off for cloning, on for preset and designed voices."
+
+[load_options.fused_projections]
+type = "bool"
+default = false
+help = "Fast mode: each layer's q/k/v and gate/up projections as one product each (as qwen-tts-webui). Faster on a GPU, but the audio is no longer identical to the original implementation's (the same model, slightly different rounding); outputs list it. Applies when the model next loads."
+
+# -- models ---------------------------------------------------------------------------
+
+[[models]]
+id = "qwen3tts/1.7b-base"
+variant = "base"
+title = "Qwen3-TTS 1.7B Base"
+description = "Clones a voice from a 3–20 s clip; with the clip's transcript it follows the voice more closely."
+size_mb = 4520
+vram_mb = 6500
+recommended = true
+files = { hf = "Qwen/Qwen3-TTS-12Hz-1.7B-Base", modelscope = "Qwen/Qwen3-TTS-12Hz-1.7B-Base", manifest = "qwen3tts-1.7b-base.files.json" }
+
+[[models]]
+id = "qwen3tts/0.6b-base"
+variant = "base"
+title = "Qwen3-TTS 0.6B Base"
+description = "The smaller cloning model."
+size_mb = 2510
+vram_mb = 4000
+files = { hf = "Qwen/Qwen3-TTS-12Hz-0.6B-Base", modelscope = "Qwen/Qwen3-TTS-12Hz-0.6B-Base", manifest = "qwen3tts-0.6b-base.files.json" }
+
+[[models]]
+id = "qwen3tts/1.7b-custom-voice"
+variant = "custom_voice"
+title = "Qwen3-TTS 1.7B CustomVoice"
+description = "Nine preset speakers, steered by an instruction (emotion, pace, style)."
+size_mb = 4520
+vram_mb = 6500
+recommended = true
+files = { hf = "Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice", modelscope = "Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice", manifest = "qwen3tts-1.7b-custom-voice.files.json" }
+
+[[models]]
+id = "qwen3tts/0.6b-custom-voice"
+variant = "custom_voice_lite"
+title = "Qwen3-TTS 0.6B CustomVoice"
+description = "Nine preset speakers, without instructions."
+size_mb = 2510
+vram_mb = 4000
+files = { hf = "Qwen/Qwen3-TTS-12Hz-0.6B-CustomVoice", modelscope = "Qwen/Qwen3-TTS-12Hz-0.6B-CustomVoice", manifest = "qwen3tts-0.6b-custom-voice.files.json" }
+
+[[models]]
+id = "qwen3tts/1.7b-voice-design"
+variant = "voice_design"
+title = "Qwen3-TTS 1.7B VoiceDesign"
+description = "Creates a voice from a description such as \"a warm, low male voice, slightly hoarse\"."
+size_mb = 4520
+vram_mb = 6500
+recommended = true
+files = { hf = "Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign", modelscope = "Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign", manifest = "qwen3tts-1.7b-voice-design.files.json" }
+
+[training.speaker]
+title = "Teach it a speaker"
+description = "Upstream's single-speaker fine-tuning (finetuning/sft_12hz.py): a Base model learns the dataset's voice and becomes a CustomVoice model with that voice as its preset speaker. A few minutes of one speaker; a GPU with 24 GB or more for the 1.7B model."
+variants = ["base"]
+export = "model"
+min_seconds = 30.0
+stages = [
+    { id = "prepare", title = "Encode the clips", help = "24 kHz clips and their 12 Hz codes (prepare_data.py).", uses = [] },
+    { id = "train", title = "Train", uses = ["epochs", "learning_rate", "batch_size", "grad_accumulation", "attn_implementation", "speaker"] },
+    { id = "export", title = "Export the model", uses = ["preview_text"] },
+]
+
+[training.speaker.hyperparams.epochs]
+type = "int"
+default = 3
+min = 1
+max = 100
+group = "basic"
+help = "Passes over the dataset."
+
+[training.speaker.hyperparams.learning_rate]
+type = "float"
+default = 0.00002
+min = 0.0000001
+max = 0.001
+group = "basic"
+help = "Upstream's default is 2e-5; its README suggests 2e-6 for a gentler fit."
+
+[training.speaker.hyperparams.batch_size]
+type = "int"
+default = 2
+min = 1
+max = 64
+group = "basic"
+help = "Clips per step."
+
+[training.speaker.hyperparams.grad_accumulation]
+type = "int"
+default = 4
+min = 1
+max = 64
+help = "Steps per optimiser update (upstream: 4)."
+
+[training.speaker.hyperparams.speaker]
+type = "str"
+default = ""
+help = "The new preset speaker's name (empty: the experiment's name)."
+
+[training.speaker.hyperparams.attn_implementation]
+type = "enum"
+default = "sdpa"
+choices = ["sdpa", "flash_attention_2", "eager"]
+help = "Upstream trains with flash-attention 2; here training.attention chooses the kernels (flash_attention_2 means flash when it is auto)."
+
+[training.speaker.hyperparams.preview_text]
+type = "str"
+default = ""
+help = "What the preview says (empty: a dataset clip's text)."
+
+[training.speaker.hyperparams.gradient_checkpointing]
+type = "enum"
+default = "auto"
+choices = ["auto", "off", "blocks", "every:2", "every:4"]
+help = "Keep only each block's input and run it again in the backward pass: less GPU memory for about a third more time, the same results. auto follows Settings › Training › Memory."

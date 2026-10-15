@@ -1,0 +1,180 @@
+# The dummy engine: no model, runs in the host's interpreter.
+id = "dummy"
+title = "Dummy"
+description = "A synthetic voice with no model, for trying Mizuoto out and for tests. Every feature works; nothing sounds like speech."
+devices = ["cpu"]
+languages = ["*"]
+ops = ["echo", "sleep", "transcribe"]
+
+[licence]
+id = "gpl-3.0"
+name = "GPL-3.0 (part of Mizuoto)"
+
+[weights]
+roles = { model = ".bin" }
+help = "A text file holding a pitch in Hz: the dummy engine's idea of a fine-tune."
+
+[variants.default]
+title = "Default"
+sample_rate = 24000
+capabilities = [
+    "clone", "clone_no_transcript", "multi_reference", "preset_speaker", "voice_design", "voice_design_freeform",
+    "auto_voice", "finetuned_voice", "instruct", "emotion_audio", "emotion_vector", "emotion_text", "inline_tags",
+    "pronunciation", "speed", "duration", "dialogue", "seed", "stream_audio", "stream_text_input", "batch", "voice_conversion",
+    "speech_edit", "train_full", "train_lora", "train_speaker",
+]
+stream_granularity = "segment"
+speakers = ["alto", "bass", "soprano", "tenor"]
+emotions = ["happy", "angry", "sad", "afraid", "disgusted", "melancholic", "surprised", "calm"]
+inline_tags = ["[laughter]", "[breath]", "[sigh]"]
+max_batch = 16
+design_attributes = { gender = ["female", "male"], age = ["child", "young", "adult", "elderly"], pitch = ["low", "medium", "high"] }
+
+[variants.default.reference]
+min_seconds = 0.5
+max_seconds = 60
+max_references = 4
+
+[params.temperature]
+target = "temperature"
+min = 0.0
+max = 2.0
+step = 0.05
+default = 0.0
+help = "Pitch jitter between characters."
+
+[params.speed]
+target = "speed"
+min = 0.25
+max = 4.0
+step = 0.05
+default = 1.0
+
+[params.duration]
+target = "duration"
+min = 0.1
+max = 600
+step = 0.1
+help = "Stretch each segment to this many seconds."
+
+[params.seed]
+target = "seed"
+type = "int"
+min = 0
+max = 4294967295
+
+[params.segment_silence_ms]
+target = "pause"
+type = "int"
+min = 0
+max = 5000
+default = 0
+
+[options.delay_ms]
+type = "int"
+default = 0
+min = 0
+max = 10000
+help = "Wait this long before each chunk (to watch streaming and cancellation)."
+
+[options.chunk_ms]
+type = "int"
+default = 0
+min = 0
+max = 10000
+help = "Split each segment into chunks this long; 0 sends one chunk per segment."
+
+[options.load_delay_ms]
+type = "int"
+default = 0
+min = 0
+max = 60000
+group = "hidden"
+
+[options.fail]
+type = "enum"
+default = "none"
+choices = ["none", "error", "oom", "crash", "exception"]
+group = "hidden"
+help = "Fail on purpose (tests)."
+
+[options.fail_at_segment]
+type = "int"
+default = 0
+min = 0
+max = 1000
+group = "hidden"
+
+[options.attend]
+type = "int"
+default = 0
+min = 0
+max = 1000
+group = "hidden"
+help = "Compute this many attentions through the acceleration backends (tests)."
+
+[options.brightness]
+type = "float"
+default = 0.3
+min = 0.0
+max = 1.0
+step = 0.05
+group = "basic"
+help = "How much of the second harmonic sounds."
+
+[[models]]
+id = "dummy/default"
+variant = "default"
+title = "Dummy voice"
+description = "Tones instead of speech."
+builtin = true
+vram_mb = 0
+
+# -- training -------------------------------------------------------------------------
+
+[training.speaker]
+title = "Fine-tune a voice"
+description = "Learns the dataset's pitch: a voice's own weights."
+export = "voice_weights"
+min_seconds = 1.0
+stages = [
+    { id = "prepare", title = "Prepare the data", uses = [] },
+    { id = "train", title = "Train" },
+    { id = "export", title = "Export the voice" },
+]
+
+[training.speaker.hyperparams.epochs]
+type = "int"
+default = 3
+min = 1
+max = 1000
+group = "basic"
+
+[training.speaker.hyperparams.step_ms]
+type = "int"
+default = 0
+min = 0
+max = 10000
+group = "advanced"
+
+[training.speaker.hyperparams.fail]
+type = "str"
+group = "hidden"
+
+[training.full]
+title = "Fine-tune the model"
+description = "A new model of the dummy engine."
+export = "model"
+min_seconds = 1.0
+stages = [
+    { id = "prepare", title = "Prepare the data", uses = [] },
+    { id = "train", title = "Train" },
+    { id = "export", title = "Export the model" },
+]
+
+[training.full.hyperparams.epochs]
+type = "int"
+default = 2
+min = 1
+max = 1000
+group = "basic"

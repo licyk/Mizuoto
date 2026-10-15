@@ -1,0 +1,92 @@
+---
+title: "GPT-SoVITS"
+description: "Mizuoto 中 GPT-SoVITS 引擎的实现：v2、v2Pro、v2ProPlus、v4 和 v5 Turbo，带有移植的转换器和模型的文本前端，T2S 模型、SoVITS 与流模型，哪些做法与上游完全一致，GPU 解码，写出上游文件的音色微调，以及对照结果。"
+icon: MicVocal
+---
+
+少样本克隆与音色微调（[RVC-Boss/GPT-SoVITS](https://github.com/RVC-Boss/GPT-SoVITS)，MIT）。代码：`mizuoto/engines/gptsovits`。在 CPU 上以 fp32、相同种子运行时，它在全部 15 个对照用例中都与 Mizuoto 0.1（经适配器调用上游的 `TTS_infer_pack.TTS`）完全相同，训练器写出的上游准备文件和权重也完全一致。面向用户的说明见[引擎详解](/docs/advanced-engines#gpt-sovits)。
+
+## 变体与文件
+
+| 变体 | 目录模型 | 采样率 | 第二阶段 |
+| --- | --- | --- | --- |
+| `v2` | `gptsovits/v2-base` | 32 kHz | SoVITS：VITS 解码器（耦合流、HiFi-GAN） |
+| `v2pro` | `gptsovits/v2pro-base` | 32 kHz | 同 v2，另加说话人验证嵌入（ERes2NetV2） |
+| `v2proplus` | `gptsovits/v2proplus-base` | 32 kHz | 更大的 v2Pro SoVITS |
+| `v4` | `gptsovits/v4-base` | 48 kHz | `SynthesizerTrnV3`、带 DiT 的 CFM、48 kHz HiFi-GAN 声码器 |
+| `v5turbo` | `gptsovits/v5turbo-base` | 48 kHz | 同 v4，用 `CFMV5`，四步 |
+
+变体由模型目录中的基础 GPT 与 SoVITS 权重对决定，目录结构与上游相同：`gsv-v2final-pretrained/…`、`s1v3.ckpt`、`v2Pro/s2Gv2Pro.pth` / `s2Gv2ProPlus.pth`、`gsv-v4-pretrained/{s2Gv4,vocoder}.pth`、`gsv-v5-pretrained/{s2Gv5turbo,vocoder}.pth`。音色自己的权重（`Voice.weights["gptsovits"]`：一个 GPT `.ckpt` 和一个 SoVITS `.pth`，版本从文件读出）会为该音色替换基础权重对。
+
+共享资源：`gptsovits/encoders`（chinese-hubert-base、chinese-roberta-wwm-ext-large、说话人验证检查点）、`gptsovits/g2pw`、`gptsovits/nltk-data`、`gptsovits/open-jtalk`；训练 v2、v2Pro 和 v2ProPlus 还需要预训练判别器 `gptsovits/s2d-v2`、`s2d-v2pro`、`s2d-v2proplus`。
+
+精度：在 CUDA GPU 上，`engines.gptsovits.dtype` 为 `auto` 或 `fp16` 时用 fp16，否则用 fp32。
+
+## 工作原理
+
+1. **文本前端**：先做语种切分，再按各语言做字音转换，得到音素 id；中文另有 BERT 特征（chinese-roberta 倒数第三层，按音素重复）。
+2. **参考音频**：16 kHz 的音频末尾补 0.3 秒静音；HuBERT 特征经 SoVITS 量化为提示的语义 token；线性频谱供风格编码器使用；v2Pro 另有说话人验证嵌入。v4/v5 还把最后读入的那段音频在 32 kHz 下的梅尔谱作为流模型的提示。
+3. **GPT（T2S）**：24 层自回归 transformer，根据提示的音素和 token 以及目标的音素预测 25 Hz 语义 token；批量时左侧补齐，流式时逐行生成。
+4. **SoVITS**（v2 系列）把 token、音素和风格解码为 32 kHz 音频；v4/v5 先由流模型生成梅尔谱，再由声码器生成 48 kHz 音频。
+5. **后处理**：每个片段峰值限制为 1，后接片段间停顿，整体截断为 16 位。
+
+| 模块 | 内容 |
+| --- | --- |
+| `engine.py` | 按 0.1 适配器的调用方式实现的 `TTS.run`：参考音频、文本、长度分桶、T2S、SoVITS 或流模型加声码器、片段、流式 |
+| `audio.py` | 读取参考音频；用 torchaudio 的内核或上游移植的 resampy `kaiser_best` 重采样 |
+| `checkpoints.py` | 读取 `.pth`（覆盖在 zip 魔数上的版本标记、MD5 与文件大小规则），以及针对 `HParams` 的受限反序列化器 |
+| `t2s.py` | 文本到语义模型：批量解码与逐行解码，上游的采样器 |
+| `sovits.py` | v2/v2Pro/v2ProPlus 的 `SynthesizerTrn` 解码（不构建后验编码器 `enc_q`） |
+| `sovits_v3.py` | `SynthesizerTrnV3`、`CFM`/`CFMV5`、GPT-SoVITS 的 DiT 变体、声码器路径、LoRA 合并 |
+| `vocoder.py`、`sv.py` | v4/v5 的 48 kHz HiFi-GAN；ERes2NetV2 说话人验证嵌入 |
+| `text/` | 前端：`frontend.py`（清洗、`TextPreprocessor`）、切分、语种识别（split-lang、fast-langdetect）、中文（变调、规范化、G2PW）、英文（规范化、词性标注、g2p_en）、日文、韩文（g2pk2）、粤语、符号与数据 |
+| `train.py`、`train_s1.py`、`train_s2.py`、`s2_modules.py`、`s2_lora.py` | `GptSovitsTrainer`（方法 `speaker`） |
+
+共享模块：`nn/ssl/hubert.py`、`nn/transformer/`（`bert`、`vits`、`dit`）、`nn/flow/coupling.py`、`nn/speaker/melstyle.py`、`nn/vocoders/hifigan.py`、`nn/dsp/`（`kaldi`、`mel`、`resample`、`swresample`、`wav`、`flac`）、`runtime/convert/onnx.py`（G2PW）、`runtime/graphs.py`、`runtime/compile.py`。
+
+## 与上游一致的做法
+
+- **抽样。** 一个生成器按段重新播种，先抽 T2S 的采样，再抽 SoVITS（或流模型）的噪声，与上游的 `set_seed` 加全局随机流一致。准备参考音频时不抽样（不重放 HuBERT 的层丢弃；0.1 出于同样的原因在播种之前准备参考音频）。
+- **停顿与输出。** 每个片段后的停顿无论输出采样率如何都按 32 kHz 计算，音频截断为 16 位（`(x × 32768).astype(int16)`），与上游的返回值相同。
+- **文本前端自己持有用到的一切**，从共享资源路径构建：不改 `nltk.data.path`，没有 fastText 全局变量，也不调用 `logging.basicConfig`。
+  - jieba 替代 jieba_fast（同一词典；在 20 446 条文本上结果相同）；
+  - OpenCC 用 C++ 版 `opencc==1.4.2`（纯 Python 移植版在 182 814 次转换中有 321 次不同，而这些结果会送入 G2PW）；
+  - G2PW 用其 ONNX 权重在 torch 中运行（拼音完全相同）；
+  - NLTK 的词性标注器和分词器、g2p_en、g2pk2、split-lang 和 fast-langdetect 都已移植，数据随包提供；
+  - 日语需要 `pyopenjtalk==0.4.1`（可选依赖 `mizuoto[gptsovits-ja]`）：pyopenjtalk-plus 修改了 OpenJTalk 的规则，用它时 18 % 的日语句子结果不同。韩语需要 MeCab-ko 和 jamo（可选依赖 `mizuoto[gptsovits-ko]`）。日语用户词典只编译一次，放在共享资源 `gptsovits/open-jtalk` 的 `.mizuoto/` 目录里。
+- **HuBERT 的 float16 检查点**载入 float32 参数，并在 float32 下折叠其权重归一化，与 transformers 的计算方式相同（在 float16 下折叠时特征相差 1e-4）。BERT 走 transformers 的 SDPA 路径，即 transformers 4.57 为 chinese-roberta 选用的路径。
+- **微调权重。** 序列化了上游 `utils.HParams` 的 SoVITS 检查点由受限反序列化器读取（张量、`OrderedDict`，`HParams` 作为字典）。v4/v5 的 LoRA 文件不经 peft 合并（在 float32 下 W += B·A·α/r，与 peft 的合并结果相同）。
+
+## 有意的差异
+
+- **v4/v5 的流模型提示**始终是最后一段辅助参考音频；上游的取决于之前的请求。
+- **流式时每段文本都会朗读。** 上游在流式模式下只朗读每组 `batch_size` 中的第一段文本。
+- **出错时抛出错误**，而不是像上游那样返回一秒 16 kHz 静音。
+- **未移植**：上游的 CUDA 图 T2S（`t2s_accel`，会改变结果）、`set_seed` 对进程级 TF32 的切换，以及超采样（仅 v3，不在模型目录中）。在带 bf16 矩阵单元的 CPU 上，上游的 `set_float32_matmul_precision("medium")` 可能会用到它们；Mizuoto 保持 fp32。
+
+## 显存与速度
+
+阶段：每次调用文本前端时用 BERT；为参考音频的语义编码同时用 HuBERT 和 SoVITS；说话人验证模型（v2Pro）；GPT；然后是 SoVITS（以及 v4/v5 的声码器）。GPT 整体放置（它的各层直接读取融合后的投影；模型很小，约 150 MB）。音色自己的权重用 `ModelHandle.replace` 换入。GPT 的工作内存按批次中最长的一行估算（其音素、参考音频的编码，以及每个音素 16 个编码，不超过上游的 1500 步）。开启 `compute.oom_fallback` 时，显存不足的批次会改为一次朗读一段文本。
+
+GPT 很小，瓶颈在内核启动：一步约 360 个小内核，过去还要等待设备两次（上游的两次序列结束检查），另有 top-p 把一个 Python 布尔值拷到设备上。现在两次检查一起读取（同一个布尔值），拷贝改为 `fill_`：每步只等待设备一次。开启 `compute.cuda_graphs`（NVIDIA，GPT 完整位于设备上）时，单 token 步骤以 CUDA 图运行，图围绕每层的注意力切分，每种行数一组（行在结束后退出）；按拼接增长的缓存和采样仍在请求的生成器上即时执行。音色自己的 GPT 有自己的 CUDA 图。真实的 v2、v2Pro 和 v4 模型在有无 CUDA 图时音频相同，每个请求快 1.3–2.0 倍。
+
+`compute.compile` 包装 v4/v5 的 CFM 估计器（每个加载的 SoVITS，包括音色自己的）：在 CPU 上预热后快 7 %，与即时执行相差不超过 3.1e-5（87 dB）。
+
+## 训练
+
+方法 `speaker`（阶段 `text`、`speech`、`semantic`、`sovits`、`gpt`、`export`）：上游自己的流程，不需要 Lightning、torchmetrics、transformers、pandas 或 ffmpeg 程序。导出结果是音色自己的一对权重。
+
+- **与上游完全相同的文件。** 每个阶段按上游的目录结构写出上游的文件，与其四个准备脚本的输出完全相同：`inputs.list`、`2-name2text.txt`、`3-bert/`、`4-cnhubert/`、`5-wav32k/`（逐字节）、`7-sv_cn/`、`6-name2semantic.tsv`。上游的 `load_audio` 通过 ffmpeg 程序读取音频；`nn/dsp/swresample.py` 是 libswresample 的默认重采样器，在试过的每种采样率上都与 ffmpeg 7.0.2 相同（soxr 只有 43 dB）。
+- **GPT**（`train_s1.py`）：每一步的损失、准确率、学习率、CPU 生成器状态，以及保存的 `<exp>-e<N>.ckpt`，都与以相同种子运行的 `s1_train.py` 相同（一个和两个 epoch，批大小 1 和 4，DPO）。上游在构建 GPT 时抽样（一个编码器层被深拷贝 24 次，然后是输出头），并为数据加载器的基础种子抽一次；`replay_construction_draws` 重放这些抽样。分桶采样器对全局 `random` 的重新播种改为私有的 `Random(epoch)`。`training_step` 在批次索引大于 0 且能被 4 整除时执行 ScaledAdam 的一步，所以梯度先累积五个批次，并跨越 epoch 边界；学习率调度在第一步之后把学习率锁定为 0.002，而第一步用的是 ScaledAdam 自己的 0.01。这些都保留。
+- **SoVITS**（`train_s2.py`）：在 CPU 上以相同种子运行时，每一步的损失与 `s2_train.py` 和 `s2_train_v3_lora.py` 相同，保存的权重逐张量相同（半精度、版本标记、无 `enc_q`），覆盖 v2、v2Pro、v2ProPlus、v4 和 v5 Turbo（梯度累积、梯度检查点、两个 epoch）。v4 和 v5 以 LoRA 训练 SoVITS。上游从一个 `set` 列出音频，顺序随进程变化；这里排序。WaveNet 门控与上游一样用 TorchScript 编译（其梯度与即时执行在最后几位上不同）。没有 `s2d-*` 共享资源时 SoVITS 阶段拒绝运行，与 0.1 相同。
+- 不写出 Lightning 用于续训的检查点（930 MB）。比较时请使用相同的线程数：CPU 内核按线程数拆分求和。
+- `training.memory`：speech 阶段在加载说话人模型之前释放 HuBERT；semantic 阶段只把 SoVITS 的 SSL 投影和量化器放到设备上。
+
+## 对照结果
+
+在 CPU 上走完整链路，全部 15 个用例都与 0.1 逐采样相同：克隆（中文、英文）、无参考文本、两段参考音频加语速、在每个标点处切分的批次、串行解码、流式 v2（token 分块、SOLA）和 v4（片段）、v4/v5 的批量与串行流模型，以及带自己 v2Pro 权重的音色。模块层面还包括文本前端（11 种语言模式下的 476 条文本）、HuBERT、BERT、说话人验证模型、LoRA 合并和每条解码路径。另外四个用例让每种实现加载另一种实现训练出的音色，也完全相同。契约套件全部通过（24 项测试）。
+
+## 限制
+
+- 日语和韩语文本需要对应的可选依赖；缺少时这类文本以 `capability_not_supported` 失败，提示中给出安装命令。pyopenjtalk 0.4.1 是源码包，需要 CMake 和 C++ 编译器。
+- 流式时，若中间某块短于 SOLA 重叠长度，会留下一个空片段，上游的后处理会因此报错；保持上游的行为。在 `min_chunk_length` 为 4 时出现过。

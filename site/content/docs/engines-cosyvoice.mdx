@@ -1,0 +1,97 @@
+---
+title: "CosyVoice"
+description: "Mizuoto 中实现的 CosyVoice 引擎：CosyVoice 1、2、3，由 ONNX 文件构建的语音分词器和 CAM++，语言模型、flow 与 HiFT，哪些做法与上游完全一致、为什么完整链路不是逐位一致，GPU 解码路径，LLM 与 flow 微调，以及对照结果。"
+icon: Radio
+---
+
+阿里通义的 LLM + 流匹配语音合成（[QwenAudio/CosyVoice](https://github.com/QwenAudio/CosyVoice)，Apache-2.0）。代码：`mizuoto/engines/cosyvoice`。给定相同的音色提示，它在 CPU 上与上游（torch 2.8）逐采样相同，覆盖每个模型和每种模式；在完整链路中两边各自生成音色提示，结果一致到 23–68 dB SNR，原因见下文。训练器产出的检查点与上游逐字节相同。面向用户的说明见 [引擎详解](/docs/advanced-engines#cosyvoice)。
+
+## 变体与文件
+
+| 变体 | 目录模型 | 采样率 | 语言模型 | Flow | 声码器 |
+| --- | --- | --- | --- | --- | --- |
+| `v1_base` | `cosyvoice/cosyvoice-300m` | 22.05 kHz | `TransformerLM`：Conformer 文本编码器 + transformer，Whisper 的词表 | `MaskedDiffWithXvec`：Conformer、长度调节器、Matcha U-Net | HiFT |
+| `v1_sft` | `cosyvoice/cosyvoice-300m-sft` | 22.05 kHz | 同 `v1_base`，带预置说话人 | 同 `v1_base` | HiFT |
+| `v1_instruct` | `cosyvoice/cosyvoice-300m-instruct` | 22.05 kHz | 同 `v1_base`，带指令 | 同 `v1_base` | HiFT |
+| `v2` | `cosyvoice/cosyvoice2-0.5b` | 24 kHz | 基于 Qwen2-0.5B 的 `Qwen2LM` | `CausalMaskedDiffWithXvec`：因果 U-Net | HiFT |
+| `v3` | `cosyvoice/cosyvoice3-0.5b` | 24 kHz | `CosyVoice3LM` | `CausalMaskedDiffWithDiT`：22 层 DiT | 因果 HiFT，F0 预测器用 float64 |
+
+变体由目录中的 yaml 决定（`cosyvoice.yaml`、`cosyvoice2.yaml`、`cosyvoice3.yaml`）；带 `spk2info.pt` 的 CosyVoice 1 目录是 SFT 或 Instruct。目录中有 yaml、`llm.pt`、`flow.pt`、`hift.pt`、`campplus.onnx`、`speech_tokenizer_v1.onnx` / `v2` / `v3`、`spk2info.pt`，v2/v3 还有 `CosyVoice-BlankEN` 的配置和分词器（不含其权重，`llm.pt` 会替换它们）。共享资源 `cosyvoice/wetext` 存放文本规范化用的 FST。ONNX 模型只转换一次，缓存为 `<model>/.mizuoto/converted-<key>.safetensors`（ONNX 文件旁的 `<name>.safetensors` 优先）。
+
+能力：预置说话人、指令、克隆与跨语种克隆、音色转换、流式输出，v2/v3 还有流式文本输入。精度：fp32；加载选项 `fp16` 让语言模型和 flow 在 CUDA autocast 下运行，与上游的 `fp16` 相同。
+
+## 工作原理
+
+音色提示由参考音频分三路生成：16 kHz 音频 → Whisper log-mel → **语音分词器**的 token；16 kHz 音频 → kaldi fbank → **CAM++** 的 192 维说话人嵌入；以及始终为 24 kHz 的 Matcha mel，即使是 22.05 kHz 的 CosyVoice 1 也一样。**语言模型**把文本（以及提示的文本和 token）变成语音 token；**flow** 用 10 步欧拉、引导强度 0.7 把 token 变成 mel；**HiFT**（带神经源滤波器和逆 STFT 的 HiFi-GAN）把 mel 变成音频。
+
+| 模块 | 内容 |
+| --- | --- |
+| `engine.py` | 前端、`CosyVoiceModel.tts`（token、mel、波形）、流式分块、音色转换、流式文本、音色缓存 |
+| `config.py` | 把 HyperPyYAML 文件当数据读取（`!new:`/`!name:` 读成字典，解析 `!ref` 表达式） |
+| `frontend.py` | 用 wetext 的 `text_normalize`、清理和切分 |
+| `tokenizer.py` | v2/v3：BlankEN 的 Qwen2 BPE 加 CosyVoice 新增的 token；v1：Whisper 的 tiktoken 词表 |
+| `llm.py` | 三种语言模型、重复感知采样（RAS）、流式文本的交错（5 个文本 : 15 个语音） |
+| `flow.py`、`dit.py` | 三种 flow；CosyVoice 3 的 DiT 估计器 |
+| `train.py`、`sft.py` | `CosyVoiceTrainer`（方法 `llm`、`llm_flow`）及其计算 |
+
+共享：`nn/codecs/s3tokenizer.py`（由 ONNX 文件构建的 v1–v3 语音分词器）、`nn/speaker/campplus.py`（按 ONNX 图的形式实现的 CAM++）、`nn/transformer/wenet.py`、`nn/flow/unet1d.py`、`nn/transformer/dit.py`、`nn/vocoders/hift.py`、`nn/dsp/`（`mel`、`kaldi`、`resample`、`wav`、`flac`）、`runtime/convert/onnx.py`、`runtime/lm/qwen.py`、`runtime/graphs.py`、`text/normalize/wetext.py`、`text/tokenize/`。
+
+## 与上游一致的做法
+
+- **尺寸来自 yaml。** 各模块的尺寸取自模型自己的 yaml（HyperPyYAML 的标签当数据读取），而不是写在代码里。
+- **不用 onnxruntime 的语音 token 和 CAM++。** 语音分词器是 s3tokenizer 的 torch 模型，权重从 ONNX 文件读出；在测试语料上，v1、v2、v3 的编码都与 onnxruntime 相同。CAM++ 照搬导出的计算图（卷积后的 batch norm 已折叠，与导出时一样），与 onnxruntime 的相对误差约 1e-6，并非逐位一致。
+- **提示 mel** 在每个版本都是 24 kHz 的 Matcha mel；v2/v3 严格保持每个提示 token 对应两帧 mel。v3 丢弃长于五个的静音 token 串，并加上它的系统提示（`You are a helpful assistant.<|endofprompt|>`）。
+- **按 transformers 4.51 的方式运行 Qwen2。** CosyVoice 2/3 的语言模型原本跑在 transformers 4.51 上，那里的 SDPA 路径总是重复 KV 头，并让 q、k、v 连续（`QwenConfig.sdpa_gqa=False`）。
+- **噪声。** v2/v3 的 flow 噪声是上游以种子 0 生成的缓冲（前 1×80×15000 个正态抽样）。`randn_like(x)` 保留 `x` 的步长，所以当 `x` 是转置的（HiFT 的正弦源）时，抽样落入元素的顺序与 `randn(shape)` 不同：`nn.vocoders.hift.randn_like` 用生成器填充 `empty_like(x)`。
+- **CosyVoice 3 的声码器噪声**在上游构建模型时抽取一次，位于 flow 的种子 0 噪声以及 flow 和 F0 预测器的默认初始化之后。`cosyvoice3_noise` 在私有生成器上重放这些抽样，因此数值与上游相同，而那块 259 MB 的缓冲从不真正生成。它的 F0 预测器以 float64 运行，所以权重归一化也在 float64 中折叠。
+- **抽样顺序。** 非流式时按上游的顺序抽样（语言模型、v1 的 flow 噪声、声码器噪声）。流式使用上游的分块：v1 每块 100 个 token，重叠 20 个，用 Hamming 窗交叉淡化；v2/v3 从 25 个 token 起翻倍到 100，向前看三个 token。
+- **文本规范化**是移植到 kaldifst 上的 wetext 规范化器，在语料上结果相同；它的 FST 是共享资源 `cosyvoice/wetext`（ModelScope `pengzhendong/wetext`，固定提交）。含 `<|…|>` 的文本不做规范化，与上游一样跳过。
+
+## 有意的差异
+
+- **没有语言模型线程。** 上游把语言模型放在声码器旁边的线程里运行；这里它在请求的线程中运行，token 一到就生成分块。上游流式的 v1/v2 在主线程抽取声码器噪声，同时语言模型在另一个线程采样，所以流式音频取决于线程时序；Mizuoto 的声码器从自己的生成器（种子 + 1）抽样，token 与非流式请求相同。CosyVoice 3 的噪声是固定的，流式结果完全相同。
+- **0.1 缺少的规范化。** 上游前端在运行时下载 FST；在 0.1 的 worker 中下载失败，上游便静默跳过了规范化。现在 FST 是共享资源，带数字的中文文本会读出数字，因此这类文本听起来与 0.1 不同。
+- **在没有 float64 的设备上**（Apple MPS、Intel Arc），CosyVoice 3 的 F0 预测器留在 CPU 上，模型其余部分照常移动；声码器在自己的设备上把输入交给它。
+- **TensorRT、vLLM 和 JIT**（0.1 的加载选项 `load_trt`、`trt_concurrent`、`load_vllm`）不可用。
+- 保留上游的行为：流式文本模式下参考音频较长（7 秒）时，语音开头可能是参考音频的最后几个词；用同一参考音频做普通合成则不会。流式文本需要参考文本。
+
+## 为什么完整链路不是逐位一致
+
+在完整链路中，两边各自计算音色提示，而 CAM++ 的嵌入是唯一不逐位一致的部分：与 onnxruntime 相差最多 7e-6（余弦 0.999999999997）。flow 把它放大为最多 2.7e-3 的 mel 变化，HiFT 的正弦源又把 F0 积分进相位（对整句做 float32 累加，九个谐波），误差沿着句子增长：在一个 CosyVoice 3 英文克隆上，每半秒的 SNR 从 66 dB 降到 20 dB。上游同样敏感：它自己的声码器链喂入 Mizuoto 的嵌入，得到的正是 Mizuoto 的音频；它自己的 onnxruntime CAM++ 用 8 个线程而不是 1 个，得到 31 dB；同等大小的随机扰动得到 20–33 dB。CosyVoice 2/3 的语言模型从不使用说话人嵌入，所以语音 token 相同。
+
+## 显存与速度
+
+阶段：前端（语音分词器和 CAM++）只在音色未缓存时和音色转换时使用；语言模型（`kind="sequence"`）生成 token；flow 和 HiFT 把它们说出来。流式时语言模型和 flow 同时在设备上。HiFT 的 F0 预测器标记为 `fixed`（HiFT 会读取它的设备）。语言模型的工作内存是按上游上限（300 个位置的提示之后每个文本 token 20 个语音 token）计算的缓存，按模型实际的 KV 宽度（Qwen2 的两个 KV 头），每个头组重复一层的副本，再加 512 MB。`compute.kv_cache = static` 为 Qwen2 模型预分配缓存（在 CPU 上结果相同）。
+
+**CUDA 上的解码（CosyVoice 2/3）。** 上游的采样器在排序后的概率上跑 Python 循环：每保留一个 token 就把累计和读回，把概率拷到主机再拷回，在主机上检查重复窗口：每个 token 约 50–80 次等待设备，另外还有 24 层逐个以 eager 方式启动。在 CUDA 上，`llm._Steps` 每个 token 只等待设备一次，抽出相同的 token：nucleus 循环在设备上对排序后的前 25 个 token 重放（在分数的 dtype 中做同样的 0 维加法；抽样用 `multinomial` 自己的 `argmax(p / Exp(1))`，其前 *n* 个指数抽样正是 *n* 元素抽样所用的那些），对 1 到 25 的每个 *n*、在 fp32、fp16 和 bf16 下，token 和生成器状态都与上游循环相同。出现重复后的重采样仍以 eager 方式进行。开启 `compute.cuda_graphs`（NVIDIA，语言模型完整位于设备上）时，单 token 步骤以 CUDA 图运行在注意力调用两侧，抽样作为一个 CUDA 图；每个 token 都把 CUDA 图的生成器与请求的生成器同步，因为 CosyVoice 3 的流式 flow 会在 token 之间从中抽样。真实的 CosyVoice 2 模型在有无 CUDA 图时给出相同的 token，每个 token 约快七倍。其他设备沿用上游的循环。
+
+`compute.compile` 包装 flow 估计器。在 CPU 上没有收益（U-Net 的卷积和矩阵乘法已经是库内核）；mel 与 eager 相差不超过 5.7e-6，HiFT 由 F0 驱动的源把它放大到音频中约 1e-2（47 dB），换一个线程数的 eager 运行也会如此。
+
+## 训练
+
+方法 `llm` 和 `llm_flow`（阶段 `features`、`llm`、`flow`、`export`；起点为 CosyVoice 1、2 或 3）：上游的 LibriTTS 流程和 `bin/train.py`，不需要 onnxruntime、pyarrow、pyworld、transformers、deepspeed 或 torchrun。在 CPU 上（gloo，world size 1）它与上游的损失、准确率、学习率和 `epoch_<N>_whole.pt` 逐字节相同，覆盖三代模型，数据加载 worker 为 0 或 2 个，以及在 epoch 结束时剩余未满的梯度累积；特征（语音 token 和 CAM++）给出 onnxruntime 的 token，嵌入相差不超过 6e-6。上游只在 CUDA 上训练；这个训练器在所有设备类型上都能运行。
+
+- **参考实现**是在模型构建完成后用阶段的种子给生成器播种的上游：上游在 yaml 中播种 1986（其 v2/v3 flow 在构建时又重新播种 0），然后抽取随机初始化，而这里在训练前不做任何抽样。
+- **数据加载。** 每个加载 worker 对自己的分片跑完整个流水线；分片（每片 1000 段音频）少于 worker 时，每个 worker 都读所有分片，所以默认两个 worker 时每段音频每个 epoch 出现两次，与上游相同。打乱顺序从 `Random(base_seed + k)` 抽样；批次轮流来自各 worker；特征在单线程上生成，与 worker 中一样。
+- **每个 epoch 以一轮验证结束**（在训练列表上，与上游相同），验证同样会抽样（Qwen2LM 的双流选择、flow 的流式选择、条件和噪声）。它的损失写入日志，不作为指标。
+- **裁剪顺序。** 参数按上游的顺序裁剪（`sft._ORDER`），因为总范数按这个顺序求和；检查点保持上游的键顺序，Qwen 绑定的 `lm_head` 与嵌入共享存储。
+- **Qwen2 在 transformers 4.51 的加性掩码下训练**（`causal_mask_451`）；记录的 `loss` 除以累积步数，与上游的记录方式相同；CosyVoice 1 保留流程中的 `WarmupLR`（2500 步）。
+- 0.1 无法训练 CosyVoice 2 或 3（上游需要一个任何模型都没有附带的 `speech_tokenizer_v*.batch.onnx`）。Mizuoto 的导出在两种实现中都能加载，给定相同的音色提示时两边说出的结果相同。
+- `training.memory`：对语言模型或 flow 的各个块做梯度检查点，损失和权重都相同。
+
+## 对照结果
+
+参考实现是 torch 2.8 上的上游（在它自己的 torch 2.3.1 上，它与自己在 2.8 上的结果不一致）。把上游的音色提示同时喂给两边时，克隆（英文、带数字的中文）、跨语种克隆、指令、预置说话人、流式音频和音色转换在 v1、v2、v3 上都逐采样相同。在完整链路中两边各自生成提示：
+
+- 大多数 v2 用例：45.5–68.3 dB SNR；
+- CosyVoice 3 英文克隆：约 23 dB（CAM++ 的浮点噪声，见上文）；
+- SFT 中文用例和 v2 中文克隆的长度不同，来自文本规范化；两边都关闭规范化时，前者完全相同，后者只差 CAM++ 的噪声；
+- 训练交叉加载用例（一种实现的导出由另一种实现说出）：57.4 dB 和 38.1 dB。
+
+契约套件通过（18 项测试）。
+
+## 限制
+
+- 在完整链路中，结果与上游非常接近但不逐位一致，因为 CAM++ 与 onnxruntime 不是逐位一致的。
+- 流式的 CosyVoice 1/2 音频不等于上游的流式音频（后者取决于线程时序）；这里的结果可以复现。
+- 快速解码路径仅限 CUDA。

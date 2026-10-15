@@ -1,0 +1,155 @@
+---
+title: "Docker"
+description: "Build a Mizuoto image from the repository's Dockerfile: its stages and build arguments, GPUs, volumes, the access token and environment variables, and the command line or an agent in a container."
+icon: Container
+---
+
+The `Dockerfile` at the repository's root builds one image with the Mizuoto server, its web UI and every engine, torch included; models download into the data volume.
+
+## Stages
+
+| Stage | Base image | What it holds |
+| --- | --- | --- |
+| `web` | `oven/bun:1` | The web UI, built with bun (`mizuoto/webui/dist`) |
+| `wheels` | `python:<PYTHON>-slim` | Mizuoto's wheel, built by `scripts/build_wheels.py`, the Fish Speech and IndexTTS wheels with `GATED=1`, and a pyopenjtalk wheel compiled for GPT-SoVITS's Japanese front end |
+| (final) | `python:<PYTHON>-slim` | torch from `TORCH_INDEX`, then the wheels with every optional front end; runs `mizuoto webui` |
+
+### Build arguments
+
+| Argument | Default | Effect |
+| --- | --- | --- |
+| `TORCH_INDEX` | `https://download.pytorch.org/whl/cu128` | Where torch comes from, hence its build: another CUDA (`cu126` … `cu132`), ROCm (`rocm6.4` … `rocm7.2`) or `cpu` index of download.pytorch.org |
+| `TORCH` | `torch>=2.8` | The torch requirement, such as `torch==2.8.0` |
+| `GATED` | `0` | `1`: add Fish Speech and IndexTTS (with IndexTTS-2.5's Japanese) |
+| `PYTHON` | `3.11` | The Python of the image (`python:<version>-slim`) |
+
+No GPU is visible while an image builds, so the torch build is named by its index rather than chosen from the driver. The default CUDA 12.8 build needs NVIDIA driver 570 or newer.
+
+```bash
+docker build -t mizuoto .                                                          # CUDA 12.8
+docker build -t mizuoto:cpu --build-arg TORCH_INDEX=https://download.pytorch.org/whl/cpu .
+docker build -t mizuoto --build-arg GATED=1 .                                      # with Fish Speech and IndexTTS
+```
+
+### What the image contains
+
+- No system packages: torch, PyAV and the text libraries ship their native code in their wheels.
+- torch, then Mizuoto with `mizuoto[gptsovits-ja,gptsovits-ko]` (and `mizuoto-indextts[ja]` with `GATED=1`); the rest of the dependencies come from PyPI while the image builds.
+- No C compiler, so **Compile models (torch.compile)** runs the engines as before, with one warning.
+- Environment variables:
+
+| Variable | Value | Effect |
+| --- | --- | --- |
+| `MIZUOTO_DATA_DIR` | `/data` | The data folder |
+| `MIZUOTO_SERVER__OPEN_BROWSER` | `false` | No browser is opened |
+| `PYTHONUNBUFFERED` | `1` | Logs reach `docker logs` at once |
+
+- `VOLUME /data`, `EXPOSE 7869`.
+- A health check every 30 s on `http://127.0.0.1:7869/api/v1/app/health` (which needs no token).
+- The command: `mizuoto webui --host 0.0.0.0 --port 7869 --no-open`.
+
+## Running
+
+```bash
+docker run -d --name mizuoto --gpus all -p 7869:7869 \
+  -v mizuoto-data:/data \
+  -e MIZUOTO_SERVER__ACCESS_TOKEN=a-long-random-string-of-your-own \
+  mizuoto
+```
+
+Then open `http://<host address>:7869`; the web UI asks for the **Access token** once.
+
+- `--gpus all` needs the NVIDIA driver and the NVIDIA Container Toolkit on the host. Without `--gpus` the engines run on the CPU.
+- One GPU only: `--gpus '"device=1"'`.
+- `docker exec -it mizuoto mizuoto doctor` checks the image's torch against the GPUs the container sees.
+
+<Callout type="warn" title="Set an access token">
+The server in the container binds `0.0.0.0`, where Mizuoto no longer checks the `Host` header: anyone who reaches the port can do everything (download models, delete files). Set a token with `MIZUOTO_SERVER__ACCESS_TOKEN`, or publish the port on this machine only: `-p 127.0.0.1:7869:7869`.
+</Callout>
+
+### Volumes
+
+Everything Mizuoto writes is in `/data`: `settings.toml`, the database, models, shared files, voices, outputs, datasets, experiments, projects, caches and logs. The image itself holds no state, so a rebuilt image keeps working on the same volume.
+
+### Settings and environment variables
+
+Any setting can come from a `MIZUOTO_<GROUP>__<FIELD>` variable (see [Configuration and environment variables](/docs/cli-config)). Such values live in memory only, are never written to `/data/settings.toml`, and show as **Set by an environment variable** in the web UI:
+
+```bash
+docker run ... \
+  -e MIZUOTO_DOWNLOADS__SOURCE=hf-mirror \
+  -e MIZUOTO_COMPUTE__UNLOAD_AFTER_MINUTES=60 \
+  -e HF_TOKEN=hf_xxx \
+  mizuoto
+```
+
+`HF_TOKEN` is sent to huggingface.co only (see [Model downloads](/docs/advanced-downloads)).
+
+## The command line in the container
+
+The image's environment variables apply to `docker exec` too, so commands work on the same data folder:
+
+```bash
+docker exec -it mizuoto mizuoto engine list
+docker exec -it mizuoto mizuoto model download omnivoice/omnivoice
+docker exec -it mizuoto mizuoto speak "Hello" -m omnivoice/omnivoice -o /data/hello.wav
+```
+
+### Licence-gated engines
+
+Fish Speech and IndexTTS are in the image only when it was built with `--build-arg GATED=1`; otherwise their cards say **Not available** (`mizuoto-fishspeech` or `mizuoto-indextts` missing). Even then, their licence must be accepted before downloading their models or speaking:
+
+```bash
+docker exec -it mizuoto mizuoto engine licence fishspeech          # read the full text
+docker exec -it mizuoto mizuoto engine accept-licence fishspeech
+```
+
+Or click **Accept the licence** in the web UI's **Models** › **Engines**.
+
+## Docker Compose
+
+```yaml
+services:
+  mizuoto:
+    build: .
+    image: mizuoto
+    ports:
+      - "7869:7869"
+    volumes:
+      - mizuoto-data:/data
+    environment:
+      MIZUOTO_SERVER__ACCESS_TOKEN: a-long-random-string-of-your-own
+      MIZUOTO_DOWNLOADS__SOURCE: hf-mirror
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    restart: unless-stopped
+
+volumes:
+  mizuoto-data:
+```
+
+## An agent in a container
+
+A GPU machine can serve as a [remote host](/docs/advanced-remote) from the same image, running `mizuoto agent` instead of the web UI:
+
+```bash
+docker run -d --name mizuoto-agent --gpus all -p 7870:7870 \
+  -v mizuoto-agent:/data --no-healthcheck \
+  mizuoto mizuoto agent --host 0.0.0.0
+docker logs mizuoto-agent        # on first start it prints the token it made (also saved as remote.agent.token)
+docker exec -it mizuoto-agent mizuoto model download qwen3tts/1.7b-base
+```
+
+The agent has its own volume and models; build its image like the host's (same Mizuoto version, `GATED=1` if it serves the gated engines). The image's health check asks the web UI's port 7869, which an agent does not serve, hence `--no-healthcheck`. Without TLS, requests and audio cross the network unencrypted: use a trusted network, or give a certificate with `--ssl-certfile` / `--ssl-keyfile` (mount the files into the container).
+
+Then, on the host:
+
+```bash
+mizuoto remote add gpu-box 192.168.1.20 --token <the token the agent printed>
+mizuoto remote use qwen3tts gpu-box --device cuda:0
+```

@@ -1,0 +1,90 @@
+---
+title: "Qwen3-TTS"
+description: "The Qwen3-TTS engine as implemented in Mizuoto: variants and files, the talker, code predictor, speaker encoder and 12 Hz codec, what reproduces upstream exactly, memory and CUDA-graph decoding, the speaker fine-tune, and its parity results."
+icon: AudioLines
+---
+
+Alibaba Qwen's 12 Hz speech language model ([QwenLM/Qwen3-TTS](https://github.com/QwenLM/Qwen3-TTS), Apache-2.0). Code: `mizuoto/engines/qwen3tts`. On the CPU in fp32 with the same seed it gives the audio of Mizuoto 0.1 (upstream's `qwen_tts` behind its adapter) sample for sample, in all eight parity cases, and its trainer gives 0.1's checkpoint byte for byte. What each variant offers is in [Engines in depth](/docs/advanced-engines#qwen3-tts).
+
+## Variants and files
+
+| Variant | Catalogue models | What it does |
+| --- | --- | --- |
+| `base` | `qwen3tts/1.7b-base`, `qwen3tts/0.6b-base` | Cloning: in context with the reference's transcript, from the speaker embedding (x-vector) without one |
+| `custom_voice` | `qwen3tts/1.7b-custom-voice` | Nine preset speakers, steered by an instruction |
+| `custom_voice_lite` | `qwen3tts/0.6b-custom-voice` | The preset speakers without instructions (upstream drops them silently for the 0.6B, so the variant does not declare them) |
+| `voice_design` | `qwen3tts/1.7b-voice-design` | A voice from a free-text description |
+
+The variant comes from `config.json` (`tts_model_type`, `tts_model_size`); only `tokenizer_type = qwen3_tts_tokenizer_12hz` is accepted. The model folder holds `config.json`, `model.safetensors`, the tokenizer files (`tokenizer.json`, or `vocab.json` + `merges.txt` + `tokenizer_config.json`) and `speech_tokenizer/` (`config.json`, `model.safetensors`). A Base voice's cache is `prompt.pt`, the clone prompt (reference codes and speaker embedding).
+
+Precision: bf16 on a CUDA GPU that has it (else fp16), fp32 elsewhere; `engines.qwen3tts.dtype` overrides.
+
+## How it works
+
+Each 80 ms frame of audio is 16 codes. The **talker**, a 28-layer Qwen3 decoder over text and codec embeddings, predicts the frame's first code; the **code predictor**, a 5-layer transformer, predicts the other 15 one after the other; the sum of the 16 code embeddings (plus the next text token's embedding) is the talker's next input. The **12 Hz codec** turns codes back into 24 kHz audio (1920 samples a frame) and, for cloning, the reference into codes. Base models also have a **speaker encoder** (ECAPA-TDNN) whose embedding sits in the prompt.
+
+| Module | What it is |
+| --- | --- |
+| `engine.py` | The prompt as `Qwen3TTSForConditionalGeneration.generate` builds it, the talker loop, chunked decoding, voice caches |
+| `decode.py` | `FrameDecoder`: one frame (sampling, code predictor, talker step) over fixed tensors, eagerly or as CUDA graphs |
+| `config.py` | `config.json` read without transformers |
+| `talker.py` | The talker and the code predictor, on `runtime/lm/qwen.py` |
+| `speaker.py` | ECAPA-TDNN as Qwen2.5-Omni ships it: no BatchNorm, reflection padding, a 128-bin log-mel at 24 kHz in, a 2048-wide embedding out |
+| `codec.py` | The 12 Hz speech tokenizer: a Mimi-style encoder (transformers' `MimiModel` encode path) and a causal decoder (72-frame attention window, SnakeBeta upsampling) |
+| `train.py`, `sft.py` | `Qwen3Trainer` (method `speaker`) and its maths |
+
+Shared: `runtime/lm/qwen.py` (decoder, `hf_sdpa`, `mask_for`), `runtime/lm/cache.py`, `runtime/sampling.py`, `runtime/graphs.py`, `text/tokenize/bpe.py`, `nn/dsp/mel.py` (`matcha_mel`), `nn/dsp/resample.py`, `nn/dsp/wav.py`, `nn/dsp/flac.py`.
+
+## What reproduces upstream
+
+- **The tokenizer's split.** Upstream loads its processor with `fix_mistral_regex=True`, and transformers 4.57.3 then swaps in its "Mistral fix" pre-tokenizer regex for a local model whose config names a version between 4.57.2 and 5.0. `load_bpe(mistral_fix=…)` makes the same decision from the model's `config.json`; without it a few texts tokenise differently.
+- **The same tensor shapes.** The prompt is built as upstream's `generate` builds it: the three special embeddings looked up in one call, the codec head applied over the whole prefill. Smaller calls would compute the same values with other float sums.
+- **Attention as transformers called it** (`hf_sdpa`): without a mask, SDPA with `enable_gqa` and `is_causal` for multi-token queries; with one, the KV heads repeated. The cache grows by concatenation, as `DynamicCache` does.
+- **The sampler.** The talker samples through transformers' processor chain in its order (repetition penalty, min-new-tokens, suppression of the control ids, temperature, top-k, top-p), then `multinomial` on the request's generator; finished rows of a batch are fed EOS, as transformers pads them. The code predictor's 15 draws follow, per frame.
+- **The codec.** The encoder's transformer runs with a plain causal mask (its configured 250-frame window is ignored, as upstream's encode path ignores it); the decoder's transformer applies its 72-frame window. Decoding is in upstream's chunks (300 frames with 25 of left context), and when cloning in context the reference's share is cut off after the joint decode.
+- **The speaker encoder's mel** is Matcha-TTS's (`nn.dsp.mel.matcha_mel`), as upstream computes it.
+
+## Deviations
+
+- **The 25 Hz tokenizer is not implemented.** No released model uses it, and upstream's wrapper cannot decode its output either.
+- **Streaming is per segment**, as in 0.1: the model's whole segment is generated, then decoded.
+- **The frame rate is 12.5** (0.1 used 12.0; it only affected progress estimates).
+- **Upstream's `attn_implementation` is not a load option**: attention goes through Mizuoto's attention dispatcher, chosen by `compute.attention` / `engines.qwen3tts.attention`.
+
+## Memory
+
+Four handles, placed by phase: the talker (`kind="sequence"`, its code predictor `hot`, since it runs 15 times a frame), the speaker encoder and the codec's encoder (only for a Base model's voice prompt), and the codec's decoder.
+
+The talker's working memory is estimated from the request: each row's prompt (instruction, reference text and codes, text) and 16 frames per text token (speech runs at 3–4), within `max_new_tokens`, the cache's peak counted as one layer above its size, plus 256 MB. A sentence therefore sets aside some 300–400 MB on the 1.7B model, not the gigabytes a worst case (8192 frames) would claim, so the talker is not streamed needlessly when memory is short. `compute.kv_cache = static` gives the talker and the code predictor preallocated caches (identical on the CPU).
+
+## Speed
+
+A frame is one talker step and fifteen code-predictor steps: some 6 000 small kernels, launched one by one by the CPU. The plain loop also waited for the device about 35 times a frame (`torch.multinomial`'s two validity checks per draw, the suppressed ids copied to the device at each step, the padding check, the EOS check), and each wait drained the GPU's queue. `decode.py` removes this without changing a result:
+
+- **One wait per frame.** One-sample draws are `multinomial`'s own computation (`argmax(p / Exp(1))`) without its checks (`runtime.sampling.multinomial1`; NaN probabilities are still an error, read with the frame's one wait); masks are built once per device; the repetition penalty works on a mask of the ids drawn (`repetition_penalty_seen`, the same arithmetic); the padding is known on the host.
+- **CUDA graphs** (`compute.cuda_graphs`, on by default; NVIDIA, with the talker wholly on its device). Sampling and the code predictor's 15 steps are one graph each; the talker's step is one graph per stretch between attention calls, attention running eagerly over the growing cache. The graphs draw from a generator of their own, loaded from the request's and written back. Graphs are kept per batch size and sampling settings and dropped when the weights move.
+- **Fewer kernels, the same bits** (without autograd only, so training is untouched): q and k normed and rotated together; the code predictor's rotary tables made once; `F.rms_norm` where a self-test on the device shows it gives the float32 norm's bits.
+
+The same codes as eager; on the decode loop of the 1.7B sizes 2.7–3.4 times faster than the loop with its waits.
+
+**Fast mode** (load option `fused_projections`, off): each layer's q/k/v and gate/up projections become one linear layer with the stacked weights, at load (they still stream like any layer). About 3–4 % faster per frame on a GPU, where the products pick other kernels and the audio is no longer bit-identical; identical in the CPU parity cases. Outputs list `fused_projections` when it is on. Parameter names change, so it applies to inference only.
+
+## Training
+
+Method `speaker` (Base models; stages `prepare`, `train`, `export`): the model learns one speaker and becomes a CustomVoice model whose only preset speaker is the new voice, as upstream's `finetuning/sft_12hz.py`. On the real 1.7B Base, seeded alike, it gives 0.1's codes, losses and checkpoint byte for byte on the CPU, without transformers or accelerate.
+
+- Clips are encoded eight at a time, zero-padded, as `Qwen3TTSTokenizer.encode` batches them.
+- The order comes from a plain shuffled data loader on the process-wide generator (the training stage's own process). Accelerate's gradient accumulation is reproduced as the loss over the steps, an optimiser step every N batches and at each epoch's end.
+- Both losses are transformers' `ForCausalLMLoss`, which shifts the already shifted labels once more; kept.
+- Upstream adds the raw text embedding to the codec embeddings without its `text_projection`, which inference applies; kept, so the weights are upstream's. It follows that only a model whose text embeddings are as wide as the talker can train: the 1.7B Base can, and the train stage refuses a model that cannot (`capability_not_supported`) before it starts.
+- Each training forward gets a fresh cache: the first `DynamicCache` update concatenates, so attention sees contiguous keys and values, as upstream's.
+- `training.memory`: gradient checkpointing over the talker's and code predictor's layers gives identical results; `lowest` keeps AdamW's state in RAM (float32 there).
+
+## Parity
+
+All eight stack cases are identical to 0.1 sample for sample on the CPU in fp32: a preset speaker, an instruction, voice design, in-context cloning, x-vector cloning, a transcript from speech recognition, a dialect speaker and the fine-tuned model. Two more cases speak each implementation's training export with the other implementation; both identical. The tokenizer gives transformers' ids on the tokenizer corpus. The contract suite passes (24 tests). CUDA graphs were checked against the eager path on a GPU with a tiny model and the real 0.6B Base.
+
+## Limitations
+
+- `fused_projections` trades bit-identity on a GPU for speed.
+- CUDA graphs need the talker wholly on one NVIDIA GPU; a partly loaded talker decodes eagerly.

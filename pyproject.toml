@@ -1,0 +1,173 @@
+[build-system]
+requires = ["setuptools", "pip", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mizuoto"
+description = "One platform for open TTS engines: speak, clone, design voices and train, from one web UI and one command line"
+readme = "README.md"
+requires-python = ">=3.10"
+dynamic = ["version"]
+license = "GPL-3.0-only"
+license-files = ["LICENSE"]
+classifiers = [
+    "Development Status :: 2 - Pre-Alpha",
+    "Environment :: Console",
+    "Environment :: Web Environment",
+    "Intended Audience :: End Users/Desktop",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Multimedia :: Sound/Audio :: Speech",
+]
+# One environment: the core, the API, the command line and every engine. torch is a
+# dependency, but its build (CUDA, ROCm, XPU, CPU) is the user's choice: install it from the index that matches the
+# machine first (`mizuoto doctor` prints the command). Upper bounds stop at the next untested major.
+dependencies = [
+    # Web and command line. 0.115.3 needs Starlette 0.40+, whose FileResponse honours Range (the player seeks).
+    "fastapi>=0.115.3,<1",
+    "starlette>=0.40,<2",
+    "uvicorn>=0.30,<1",
+    # uvicorn speaks WebSocket only when this is installed.
+    "websockets>=12",
+    "python-socketio>=5.11,<6",
+    "pydantic>=2.7,<3",
+    "httpx>=0.27,<1",
+    "typer>=0.26.7,<0.28",
+    "rich>=13,<16",
+    "tomli-w>=1,<2",
+    "tomli>=2; python_version < '3.11'",
+    "send2trash>=1.8,<3",
+    # Audio: decode, encode and resample with PyAV, the rest with numpy.
+    "numpy>=1.26,<3",
+    "av>=14,<20",
+    # The native runtime and the engines.
+    "torch>=2.8",
+    "safetensors>=0.4.3",
+    # Resampling as librosa does it (soxr_hq); wheels for every platform.
+    "soxr>=0.3",
+    # BPE tokenizers without transformers (mizuoto.text.tokenize).
+    "tokenizers>=0.20",
+    # Chinese for F5-TTS: segmentation and pinyin (the versions its reference used; outputs depend on them).
+    "pypinyin==0.55.0",
+    "rjieba==0.2.1",
+    # Model configs some engines ship as YAML (Vocos).
+    "pyyaml>=6",
+    # Text normalisation (CosyVoice): WeTextProcessing's grammars as FSTs, numbers spelt out in English.
+    "kaldifst>=1.8.1",
+    "inflect==7.3.1",
+    # Whisper's vocabulary (CosyVoice 1) and Unicode-class matching.
+    "tiktoken>=0.7",
+    "regex>=2024.4",
+    # GPT-SoVITS's text front end (outputs depend on these versions): Chinese segmentation (jieba_fast's dictionary
+    # and results, pure Python), Simplified → Traditional for G2PW (the C++ OpenCC; the pure-Python port differs),
+    # English word splitting, phrase breaks, Cantonese, and language identification (fastText's model, no NumPy 2 pin).
+    "jieba==0.42.1",
+    "opencc==1.4.2",
+    "wordsegment==1.3.1",
+    "budoux==0.9.3",
+    "ToJyutping==3.2.0",
+    "fasttext-predict==0.9.2.4",
+]
+
+[project.optional-dependencies]
+# GPT-SoVITS's Japanese front end: OpenJTalk, published as an sdist only (it needs CMake and a C++ compiler).
+gptsovits-ja = ["pyopenjtalk==0.4.1"]
+# GPT-SoVITS's Korean front end: MeCab-ko and jamo.
+gptsovits-ko = ["python-mecab-ko==1.3.7", "jamo==0.4.1"]
+
+[dependency-groups]
+dev = ["pytest", "pytest-cov", "ruff", "ty", "httpx", "tomli"]
+
+[project.scripts]
+mizuoto = "mizuoto.cli.app:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["mizuoto*"]
+
+[tool.setuptools.package-data]
+"mizuoto.webui" = ["dist/**/*"]
+"mizuoto.core.engines" = ["manifests/*.toml", "manifests/files/*.json", "manifests/licences/*"]
+# F5-TTS's bundled vocabulary (E2-TTS models ship none), from upstream (MIT).
+"mizuoto.engines.f5tts" = ["vocab.txt"]
+# resampy's kaiser_best filter (ISC) in float32, as GPT-SoVITS converts it.
+"mizuoto.engines.gptsovits" = ["data/*.npy"]
+# GPT-SoVITS's text front end's data (MIT and the sources each file names): dictionaries, the G2P models, tables.
+"mizuoto.engines.gptsovits.text" = ["data/*"]
+# wetext 0.1.2's normalisation grammars that VoxCPM runs (Apache-2.0, Zhendong Peng).
+"mizuoto.engines.voxcpm" = ["assets/wetext/README.md", "assets/wetext/*/tn/*.fst"]
+# Whisper's multilingual vocabulary (CosyVoice 1), from openai-whisper 20231117 (MIT).
+"mizuoto.text.tokenize" = ["assets/*.tiktoken"]
+
+[tool.setuptools.dynamic]
+version = { attr = "mizuoto.version.VERSION" }
+
+[tool.ruff]
+include = ["mizuoto/**/*.{py,pyi}", "packages/**/*.{py,pyi}", "tests/**/*.{py,pyi}", "scripts/**/*.{py,pyi}"]
+line-length = 180
+indent-width = 4
+extend-exclude = ["mizuoto/webui/dist", "mizuoto/webui/node_modules"]
+
+[tool.ruff.lint]
+# Written out so a ruff upgrade cannot change which rules run.
+select = [
+    "E4", "E7", "E9", # pycodestyle errors that ruff checks by default
+    "F",              # pyflakes
+    "I",              # import sorting
+    "UP",             # pyupgrade, for the 3.10 floor
+    "B",              # bugbear
+    "SIM",            # simplify
+    "RUF100",         # unused noqa
+    "ANN",            # type hints on every function in mizuoto and the gated engines
+]
+ignore = [
+    "B008",   # FastAPI's Depends/Query in defaults is the framework's idiom
+    "B905",   # zip(strict=) adds noise where lengths are equal by construction
+    "SIM105", # contextlib.suppress reads worse than try/except/pass in short cleanup paths
+    "SIM108", # ternaries are not always clearer than if/else
+    "ANN401", # Any is allowed where the value really is anything (JSON)
+]
+
+[tool.ruff.lint.isort]
+known-first-party = ["mizuoto", "mizuoto_fishspeech", "mizuoto_indextts"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["ANN", "B011", "B017"]
+"scripts/*" = ["ANN"]
+# Copied verbatim from torchaudio so it stays bit-exact and diffable against upstream.
+"mizuoto/nn/dsp/kaldi.py" = ["ANN", "E741"]
+
+[[tool.ty.overrides]]
+# Copied verbatim from torchaudio (see the ruff exemption above).
+include = ["mizuoto/nn/dsp/kaldi.py"]
+rules = { invalid-argument-type = "ignore", no-matching-overload = "ignore" }
+
+[tool.ty.environment]
+python-version = "3.10"
+# The gated engines' distributions are installed editable; ty resolves them from source.
+extra-paths = ["packages/native/fishspeech", "packages/native/indextts"]
+
+[tool.ty.analysis]
+# Optional packages (the extras), and those the parity scripts import only inside the reference environments.
+allowed-unresolved-imports = ["torch", "torch.**", "transformers", "transformers.**", "soxr", "jieba", "jieba.**", "opencc", "wordsegment", "budoux", "fasttext", "ToJyutping", "pyopenjtalk", "jamo", "mecab", "voxcpm", "voxcpm.**"]
+
+[tool.ty.terminal]
+output-format = "concise"
+error-on-warning = true
+
+[tool.ty.src]
+include = ["mizuoto", "tests", "scripts"]
+exclude = ["mizuoto/webui/dist", "mizuoto/webui/node_modules"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+    "live: tests that need something outside this repository (deselected by default)",
+    "engine: the engine contract suite against installed models (deselected by default; scripts/dev.py test-engines)",
+    "weights: tests that need downloaded model weights (deselected by default)",
+    "e2e: browser end-to-end tests (deselected by default)",
+]
+addopts = "-m 'not live and not engine and not weights and not e2e'"

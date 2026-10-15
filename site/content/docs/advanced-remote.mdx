@@ -1,0 +1,178 @@
+---
+title: "远程主机"
+description: "让引擎在另一台机器上运行：那台机器运行 mizuoto agent，本机把引擎的设备设为“主机名/设备”，音色、结果和界面都留在本机。"
+icon: Network
+---
+
+一台机器有 GPU、另一台机器上是你日常使用的 Mizuoto 时，可以让某个引擎在有 GPU 的机器上运行。有 GPU 的一方运行 `mizuoto agent`（下文称 **agent**），日常使用的一方（下文称 **主机**）把它添加为远程主机，再把引擎的设备设为 `<主机名>/<设备>`，例如 `gpu-box/cuda:0`。之后合成、流式播放和取消都与在本机运行时一样，只是引擎以及它加载的模型在 agent 上运行。
+
+```bash
+# 在 GPU 机器上（与这里相同的 Mizuoto 版本，装好 torch；它有自己的模型）：
+mizuoto doctor
+mizuoto model download qwen3tts/1.7b-base
+mizuoto agent --host 0.0.0.0                 # 打印它生成的令牌
+
+# 在本机：
+mizuoto remote add gpu-box 192.168.1.20 --token <令牌>
+mizuoto remote use qwen3tts gpu-box --device cuda:0
+mizuoto speak "你好，世界。" -m qwen3tts/1.7b-base -v "我的音色"
+```
+
+## 什么在哪里运行
+
+| 在 agent 上 | 在主机上 |
+| --- | --- |
+| torch 和各引擎的包（在那里运行 `mizuoto doctor`） | 模型目录与请求的检查（计划） |
+| 已安装的模型（`mizuoto model download`） | 音色库、参考音频和音色缓存 |
+| 引擎（在 agent 自己的进程里）、加载的模型、空闲卸载 | 合成结果、历史、任务及其日志 |
+| 显存：加载与显存不足的处理 | 网页界面、HTTP 接口、命令行 |
+| 主机发来的文件的缓存：`<缓存>/remote/files/<sha256>/` | 训练（始终在本机） |
+
+- **模型状态来自 agent。** 对设备指向远程主机的引擎，模型是否“已安装”取决于 agent 上已安装的模型列表（主机每 15 秒左右重新询问一次），而不是本机的模型文件夹。模型要在 agent 上用它自己的 `mizuoto` 命令安装。
+- **两台机器运行相同的 Mizuoto 版本。** Mizuoto 0.2 使用第 2 版 agent 协议，以“已加载的引擎”为单位工作（加载、准备音色、合成、转换、编辑）。协议版本不同的主机和 agent 会在握手时互相拒绝，并提示在两台机器上安装相同版本的 Mizuoto。
+- **文件按内容传送。** 请求里用到的文件（参考音频、情感参考音频等）按 SHA-256 发送：agent 已经有的不再发送，没有的分块（每块 8 MB）上传一次。agent 启动时删除一个月内没有被任何主机用到的文件。
+- **音色缓存会传回本机。** 引擎为音色准备的缓存（第一次使用某个音色时生成）写在 agent 上，随结果逐个文件传回，保存在本机音色的缓存文件夹里；之后使用同一音色时直接读取。
+- **流式输出、流式文本输入和取消都可用。** 音频片段一生成就从 agent 传回；取消请求会转发给 agent 上的引擎。
+- **训练留在本机。** 引擎在远程主机上时，训练方法会说明原因：`<engine> runs on <host>, and training runs on this machine: mizuoto remote use <engine> --local`。
+
+## agent：提供引擎的机器
+
+```bash
+mizuoto agent [--host 地址] [--port 端口] [--token 令牌] [--ssl-certfile 证书] [--ssl-keyfile 私钥]
+```
+
+| 选项 | 设置 | 默认值 | 说明 |
+| --- | --- | --- | --- |
+| `--host` | `remote.agent.host` | `127.0.0.1` | 监听的地址；`0.0.0.0` 监听所有网卡 |
+| `--port` | `remote.agent.port` | `7870` | 端口 |
+| `--token` | `remote.agent.token` | 无 | 主机必须提供的令牌；没有时自动生成并保存 |
+| `--ssl-certfile` | `remote.agent.ssl_certfile` | 无 | PEM 证书：以 TLS 提供服务 |
+| `--ssl-keyfile` | `remote.agent.ssl_keyfile` | 无 | 证书的私钥 |
+
+- agent 使用这台机器自己的数据文件夹（设置、模型、缓存），和这台机器上的 `mizuoto webui` 一样；要让它用另一个文件夹，设置环境变量 `MIZUOTO_DATA_DIR`。引擎运行在 agent 自己的进程里。
+- 第一次启动且没有令牌时，agent 生成一个随机令牌，保存为 `remote.agent.token`，并在终端上打印：
+
+  ```text
+  Made a token and saved it (remote.agent.token): <令牌>
+  Mizuoto agent on 0.0.0.0:7870: asr, qwen3tts
+  On the host: mizuoto remote add <name> <this machine>:7870 --token …
+  ```
+
+  第二行列出在那里可用的引擎。之后再启动会沿用保存的令牌；想查看它，打开那台机器的 `settings.toml`（`mizuoto config path`）。
+- 监听非本机地址又没有 TLS 时，agent 会警告：
+
+  ```text
+  warning: without TLS, requests and audio cross the network unencrypted; use a private network or a tunnel
+  ```
+
+- agent 在前台运行，直到 <kbd>Ctrl</kbd>+<kbd>C</kbd>。它自己的空闲卸载、显存处理等遵循那台机器的设置（`compute.*`、`engines.<id>.*`）。端口被占用时启动失败，提示换一个 `--port`。
+- 需要接受许可的引擎（Fish Speech、IndexTTS）：在 agent 上安装它们的包（`mizuoto-fishspeech`、`mizuoto-indextts`），并在下载模型前在 agent 上接受许可（`mizuoto engine accept-licence <id>`）；在主机上合成前，主机上也要接受。
+
+## 主机：使用远程引擎的机器
+
+### 添加主机
+
+<Tabs items={["命令行", "Web UI"]}>
+<Tab value="命令行">
+
+```bash
+mizuoto remote add gpu-box 192.168.1.20 --token <令牌>
+mizuoto remote add gpu-box gpu.example.com:7870 --token <令牌> --tls --ca-file ./agent.pem
+```
+
+| 参数或选项 | 说明 |
+| --- | --- |
+| `NAME` | 简短的名称，引擎的设备里会用到（`gpu-box/cuda:0`）；不能为空，不能含 `/` 或 `.` |
+| `ADDRESS` | agent 的 `host` 或 `host:port`（端口默认 7870），IPv6 写作 `[::1]:7870` |
+| `--token` | agent 的令牌。修改已有主机时不给出则保留原来的令牌 |
+| `--tls` | agent 使用 TLS |
+| `--ca-file` | CA 证书包；agent 用自签名证书时给出它自己的证书 |
+| `--json` | 打印 JSON |
+
+添加后立即连接一次：在线时打印 agent 的机器名、Mizuoto 版本、设备和已安装的引擎；连不上时仍会保存，并说明状态（`offline` 或 `refused`）。
+
+</Tab>
+<Tab value="Web UI">
+
+**设置** › **远程主机** › **添加主机**，填写 **名称**、**地址**、**令牌**，需要时打开 **TLS** 并填写 **本机上的 CA 文件**，点 **添加**。修改已有主机时 **令牌** 留空则保留已保存的令牌。
+
+列表中每台主机显示状态（**在线**、**离线**、**被拒绝**）、**设备**、**已安装的引擎** 和 **使用它的引擎**；**重新检查** 立即重新连接。
+
+</Tab>
+</Tabs>
+
+| 状态 | 含义 |
+| --- | --- |
+| `online` | 握手成功 |
+| `offline` | 连不上（地址、端口、防火墙，或 agent 没有运行），或 TLS 设置与 agent 不一致 |
+| `refused` | 能连上，但令牌不对，或两边的协议版本不同 |
+
+### 把引擎放到主机上
+
+<Tabs items={["命令行", "Web UI"]}>
+<Tab value="命令行">
+
+```bash
+mizuoto remote use qwen3tts gpu-box --device cuda:0   # 等于 engines.qwen3tts.device = "gpu-box/cuda:0"
+mizuoto remote use qwen3tts gpu-box                   # 设备 auto：由 agent 选择
+mizuoto remote use qwen3tts --local                   # 回到本机运行（device = "auto"）
+```
+
+也可以直接写设置：`mizuoto config set engines.qwen3tts.device gpu-box/cuda:0`。`--device` 是 agent 上的设备名（`auto`、`cuda:0`、`cpu`），不能再含 `/`。引擎在 agent 上不可用时，命令会提示：`(not available there: on gpu-box, mizuoto doctor qwen3tts)`。
+
+</Tab>
+<Tab value="Web UI">
+
+**模型** › **引擎**，在引擎卡片的 **设备** 中选择远程主机上的设备（显示为 `主机 · 设备`）。
+
+</Tab>
+</Tabs>
+
+引擎在远程主机上时，引擎卡片和模型行标注 **在 gpu-box 上**（主机名），并提示：引擎 **其依赖由 gpu-box 管理：在那里运行 mizuoto doctor qwen3tts**；模型 **这些是 gpu-box 上的模型：请在那里用 mizuoto model download 下载**。
+
+### 查看与移除
+
+```bash
+mizuoto remote list          # 名称、地址、状态、版本、设备、已安装的引擎、使用它的引擎
+mizuoto remote remove gpu-box
+```
+
+`remote list` 会重新连接每台主机。移除主机时，设备指向它的引擎改回 `auto`，回到本机运行。
+
+## 出错时
+
+| 情况 | 错误 | 说明 |
+| --- | --- | --- |
+| 连不上 agent | `remote_unavailable`（退出码 14，HTTP 502） | "Cannot reach gpu-box at …"，提示检查 agent 是否在运行 |
+| 令牌错误 | `remote_unavailable` | "gpu-box refused: The agent refused the token"，提示用正确的令牌重新 `mizuoto remote add` |
+| 协议版本不同 | `remote_unavailable` | 主机与 agent 的 Mizuoto 版本不同：提示在两台机器上安装相同版本的 Mizuoto |
+| TLS 设置不一致 | `remote_unavailable` | 主机开了 `--tls` 而 agent 没有，或相反；报 "Cannot reach …" 或 "… closed the connection" |
+| 设备里的主机名不存在 | `device_unavailable`（退出码 8） | "No remote host 'x'"，先 `mizuoto remote add` |
+| 模型没装在 agent 上 | `model_missing`（退出码 7） | "… is not installed on gpu-box"，提示在那里运行 `mizuoto model download <模型>` |
+| 引擎在 agent 上不可用（缺 torch 或引擎的包） | `engine_not_installed`（退出码 7） | 提示在 agent 上运行 `mizuoto doctor <引擎>` |
+| 运行中连接断开或 agent 不再响应 | `worker_failed` 或 `remote_unavailable` | 正在进行的请求失败；下一个请求自动重新连接 |
+
+超时：
+
+| 设置 | 默认值 | 说明 |
+| --- | --- | --- |
+| `remote.connect_timeout` | `10` 秒 | 建立连接和握手的时限 |
+| `remote.heartbeat_timeout` | `60` 秒 | agent 工作时每 5 秒发一次心跳；超过这个时间没有任何消息，请求失败 |
+
+## 安全
+
+- 每个连接先发送令牌，agent 用恒定时间比较；令牌错误的连接立即关闭。
+- 不开 TLS 时，请求、参考音频和合成的音频以明文经过网络。只在可信的局域网里这样用，或者经过 VPN、SSH 隧道，或者给 agent 配置证书（`--ssl-certfile`）并在主机上加 `--tls`。
+- agent 使用自签名证书时，在主机上用 `--ca-file` 给出这份证书；这种情况下不检查证书中的主机名。不给 `--ca-file` 时使用系统的 CA。
+- 令牌不会出现在 `mizuoto config show` 和接口返回的设置里，只显示是否已设置。
+
+## HTTP 接口
+
+| 方法与路径 | 说明 |
+| --- | --- |
+| `GET /api/v1/remote/hosts?refresh=true` | 各主机的状态（`refresh` 时重新连接） |
+| `PUT /api/v1/remote/hosts/{name}` | 添加或修改：`{"address", "token", "tls", "ca_file"}`；`token` 为 `null` 时保留原令牌 |
+| `DELETE /api/v1/remote/hosts/{name}` | 移除，返回回到本机运行的引擎 |
+| `PUT /api/v1/remote/engines/{engine_id}` | `{"host": "gpu-box", "device": "cuda:0"}`；`host` 为 `null` 时回到本机 |
+
+接口的通用约定见 [HTTP 接口](/docs/advanced-api)，相关设置见 [配置与环境变量](/docs/cli-config)。

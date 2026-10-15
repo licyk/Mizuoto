@@ -1,0 +1,247 @@
+---
+title: "Web UI"
+description: "Vue 3 + Material 3 界面的结构：Material Design 3 的令牌层与组件层、ui/ 包装层与规则测试、API 客户端与查询、socket 事件、引擎可用性检查、store、保活视图和 i18n，以及以项目页为例新增一个界面。"
+icon: Monitor
+---
+
+Web UI 是 `mizuoto/webui/` 下的一个 Vue 3 项目，组件基于 Material Web（`@material/web`），图标是 Lucide（`@lucide/vue`），数据层是 TanStack Query（`@tanstack/vue-query`）+ `openapi-fetch`，状态用 Pinia。构建产物 `mizuoto/webui/dist/` 作为包数据随 wheel 发布，由 API 的 `SPAStaticFiles` 提供（见 [HTTP API 与命令行](/docs/development-api)）。基础部分（`theme/`、`ui/`、动效、层、外壳、store、i18n、规则测试）沿用 rvc-next，来源见[设计参考与决策](/docs/development-design)。
+
+```
+mizuoto/webui/src/
+  main.ts          QueryClient、Pinia、router，挂载 App
+  App.vue          外壳：导航、任务和已加载模型两个侧栏、保活的 RouterView、socket 连接
+  router.ts        路由（hash 历史）与每个目的地的上次地址
+  api/             baseUrl.ts、client.ts、socket.ts、types.ts、schema.d.ts（生成）、queries/*.ts
+  ui/              包装组件、icons.ts、layers.ts、motion/；index.ts 是唯一出口
+  theme/           tokens.css、scheme.ts（种子色 #4f6b3a）、applyTheme.ts、breakpoints.ts
+  components/      功能组件（ModelGate、EngineCard、LoadedModelsSheet、VoicePicker、JobCard、ScriptEditor…）
+  views/           每个界面一个 *View.vue
+  stores/          auth、jobs、preferences、player、handoff
+  i18n/            en.ts、zh-CN.ts、index.ts
+  audio/           player.ts、recorder.ts、streamPlayer.ts
+```
+
+开发时用 `python scripts/dev.py dev` 同时启动 API 服务器和 Vite（`http://localhost:5173`），Vite 把 `/api` 和 `/ws` 代理到 `MIZUOTO_BACKEND`（默认 `http://127.0.0.1:7869`）。API 服务器重启时代理的连接错误只打印一行（`vite.config.ts`，`devProxy.test.ts` 测试）。环境准备见[开发环境](/docs/development-setup)。
+
+## Material Design 3 的分层
+
+界面按 Material Design 3（M3）构建，分两层：所有东西都读取的**令牌层**，以及建立在它上面的**组件层**。令牌层与任何组件库无关；组件层可以逐个替换。
+
+### 令牌层：`src/theme/`
+
+| 文件 | 内容 |
+| --- | --- |
+| `scheme.ts` | 用 `@material/material-color-utilities` 的 Tonal Spot 方案，从一个种子色生成全部颜色角色（`primary`、`on-primary`、`surface-container`、`outline`……），亮色与暗色各一套，对比度 0（标准）、0.5（中）、1（高） |
+| `applyTheme.ts` | 把角色写成 `:root` 上的 `--md-sys-color-*`，并设置 `data-theme` |
+| `tokens.css` | 静态令牌：15 种字号（`--md-sys-typescale-*`，Roboto Flex 可变字体）、圆角（`--md-sys-shape-corner-*`）、动效的缓动和时长（`--md-sys-motion-*`）、状态层不透明度（悬停 8%、聚焦 12%、按下 12%、拖动 16%，取自 `@material/web` 2.5.0 的令牌文件；禁用的内容 38%、容器 12%）、阴影、间距（4px 为单位）、层内 z 序和随窗口变化的宽度；还有首帧用的回退颜色 |
+| `breakpoints.ts` | M3 的窗口尺寸分级：compact（&lt; 600px）、medium（&lt; 840px）、expanded（&lt; 1200px）、large（&lt; 1600px）、extra-large |
+
+- **颜色只来自种子色。** 默认种子色是 `#4f6b3a`；用户可以在“设置 › 外观”里换任意颜色、对比度、亮暗（跟随系统、亮、暗）和动效。偏好存在 localStorage，并经 `/api/v1/client-state/{key}` 同步到服务器。`index.html` 里的一小段脚本在打包代码运行前读取偏好、设置 `data-theme`，避免首屏闪烁。
+- **令牌用的是 Google 官方的名字**（`--md-sys-*`），所以 `@material/web` 的组件不经任何映射就能读取它们；项目自己的令牌以 `--app-` 开头。
+- **层级首先用表面色调表达**（`surface`、`surface-container-low` … `surface-container-highest`），阴影其次。
+- **颜色角色成对使用**：`primary` 容器上的内容用 `on-primary`，`surface-container` 上的用 `on-surface`；生成的成对角色保证对比度。
+- **动效**：命名的过渡（`fade-through`、`shared-axis-x`、`container`、`sheet`、`scrim`、`list` 等，`ui/motion/`），在支持的浏览器里用 View Transitions 做列表到详情的容器变换。系统或应用内选择“减少动效”时，所有过渡变成 100 ms 的淡入淡出，没有涟漪。
+- **布局**：compact 窗口用底部导航栏，更宽时用导航轨（`AppShell`）。
+- 字体（`@fontsource-variable/roboto-flex`）和图标都打包进 `dist/`，界面不从任何外部来源加载东西，离线也能用。
+
+### 组件层：`src/ui/`
+
+- `@material/web` 有的组件包一层项目自己的 Vue 组件：按钮（`AppButton`：填充、色调、描边、文本）、图标按钮、FAB、复选框、筛选 chip、分隔线、文本框与多行文本框、滑块、线性与环形进度条、开关、标签页。包装组件拥有属性、事件名和类型；`vite.config.ts` 把 `md-*` 标签声明为自定义元素。
+- `@material/web` 没有的组件用令牌自己实现，放在同一个目录：外壳、导航栏与导航轨、顶部应用栏、卡片、对话框、侧栏、菜单与选择菜单、提示条（snackbar）、工具提示、分段按钮、选择框、展开面板、步骤条、数据列表、折线图、波形、频谱图、电平表等。
+- 两种组件读取同一套令牌，看起来一致。`@material/web` 处于维护模式，不再增加组件；万一某个组件在未来的浏览器或 Vue 版本中出问题，就在 `src/ui/` 里替换它，业务代码不变。
+- 图标用 Lucide（`@lucide/vue`），不用 Material Symbols：只在 `ui/icons.ts` 导入。
+- 按钮的强调层级：一个区域里最多一个填充按钮（视图的主要操作，如“合成”、“训练”），次要操作用色调按钮，其余用描边或文本按钮。可交互元素有可见的焦点指示，点击目标一般不小于 48×48px（紧凑的行和卡片里的复选框等以 `dense` 例外）。
+- 不使用 MUI（它实现的是 Material Design 2），也没有采用 M3 Expressive；令牌层把形状和动效的值集中在一处，需要时可以只改令牌。
+
+## `ui/` 包装层
+
+`src/ui/index.ts` 是共享组件的唯一出口：
+
+```ts
+/**
+ * Shared components. Views and composites import only from here; they do not restyle these
+ * components and use no literal colours, radii or durations.
+ */
+```
+
+- 只有 `ui/` 下的组件（以及 `theme/tokens.css` 和测试的 `test/setup.ts`）导入 `@material/web`。视图和功能组件从 `@/ui` 导入 `AppButton`、`TextField`、`AppDialog`、`SegmentedButton`、`Stepper`、`LineChart` 等。
+- 图标也经过 `ui/icons.ts` 再导出，`ui/` 是唯一导入 `@lucide/vue` 的地方。新图标先加到这里，再以 `icons.X` 使用。`AppIcon` 设置了 `fill: none`：Material 按钮会填充插槽里的图标，Lucide 的描边因此会变成色块。
+- 样式只用令牌：颜色角色 `--md-sys-color-*`（由 `applyTheme.ts` 从种子色生成），间距 `--app-space-*`，层内 z 序 `--app-z-*`，字号类 `type-title-large` 等。
+- `ui/layers.ts` 是所有浮层（对话框、侧栏、菜单、选择器）的唯一记录，按打开顺序决定绘制层级、Escape 和外部点击只关闭最上层、模态层下面的内容设为 `inert`、焦点打开时进入并在关闭时归还。新的浮层组件要通过它注册，而不是自己设 z-index。
+
+`/dev` 路由（`DevComponentsView.vue`）列出全部 `ui/` 组件，用来目视检查。
+
+### 规则测试
+
+几条约定由 vitest 检查，违反时 `dev.py test-web` 失败：
+
+| 测试 | 规则 |
+| --- | --- |
+| `src/imports.test.ts` | `src/` 内的模块互相导入一律用 `@/` 别名，不用相对路径 |
+| `src/tokens.test.ts` | `src/theme/` 之外的 `.vue` 和 `.css` 中（`<script>` 除外）没有十六进制颜色 |
+| `src/layout.test.ts` | 放文件名的行，其文本元素要有 `min-width: 0`（长名字不把按钮挤出视野）；Speak 与音色页是一列分节，操作按钮在 `PageFooter` 里；字段旁的按钮居中对齐；分节从不并排 |
+| `src/ui/layers.test.ts` | 浮层的键盘、绘制、外部点击、模态和焦点规则 |
+| `src/i18n/i18n.test.ts` | `zh-CN` 与 `en` 的键完全一致，占位符一致；固定术语（"音色"、"合成"、"克隆"）不变；每个服务器错误 code 都有标题 |
+| `src/ui/ui.test.ts` 等 | 单个组件、动效辅助函数、主题生成、窗口尺寸分级、导航 |
+
+"视图只从 `@/ui` 导入组件"是约定，目前没有测试强制。
+
+## API 客户端与查询
+
+`api/client.ts` 用生成的 `paths` 类型创建一个 `openapi-fetch` 客户端：
+
+```ts
+export const api = createClient<paths>({ baseUrl: BASE_URL });
+api.use(auth);   // 加 Bearer 令牌；401 时把 auth store 的 needed 置真，弹出令牌对话框
+```
+
+- `BASE_URL`（`api/baseUrl.ts`）由运行中脚本的 URL 推出：最后一个 `/assets/` 之前的部分就是部署根。不编译进任何 API 地址，所以挂在 `api_prefix` 下也无需改动。路由用 hash 历史，任何子路径都不需要服务端改写。
+- `unwrap(call)` 返回数据，失败时抛 `ApiError(status, code, message, detail)`；FastAPI 自己的 422 校验错误被转成 `invalid_input`。`components/errors.ts` 把它变成界面上的标题（`errors.<code>`）、提示（`detail.hint`）和详情。
+- 媒体 URL（`urls.output()`、`urls.audioFile()`）由 `<audio>` 直接请求，靠 `mizuoto_token` cookie 认证；上传用 `uploadRaw()`（XMLHttpRequest，可报告进度，请求体是原始字节）。
+- 类型来自 `api/types.ts`：`S = components['schemas']`，以及常用模型的别名。既作请求又作响应的模型分成两份，例如发送 `S['SpeakRequest-Input']`、读取 `S['SpeakRequest-Output']`。
+
+`api/queries/<资源>.ts` 把端点包装成组合式函数：读取用 `useQuery`，写入用 `useMutation`。查询键集中在 `api/queries/keys.ts`，查询模块和 socket 处理器共用：
+
+```ts
+projects: ['projects'] as const,
+project: (id: string) => ['projects', 'id', id] as const,
+```
+
+层级化的键让作废 `keys.projects` 同时作废列表和每个项目。`main.ts` 中的 `QueryClient` 关闭了窗口聚焦时重新获取，4xx 错误不重试。
+
+## Socket 事件
+
+`api/socket.ts` 的 `connectSocket(qc)` 只连接一次（`App.vue` 挂载时），路径是 `${BASE_PATH}/ws/socket.io`，令牌放在握手的 `auth` 中。监听器的类型来自模式里的 `ServerEvents`：
+
+```ts
+type Listeners = { [K in keyof ServerEvents]: (payload: ServerEvents[K]) => void };
+```
+
+REST 是事实来源，事件只修补或作废查询：
+
+- `job_updated` 进入 jobs store（`upsert` 丢弃比已有状态更旧的快照），写入 `keys.job(id)`；任务结束时按 `AFFECTS` 表作废它影响的列表，例如 `project_render` → `keys.projects`，`train` → 实验、音色、模型和输出。
+- `runtime_changed`（已加载的模型，供**内存中的模型**侧栏 `LoadedModelsSheet` 使用）和 `compute_changed` 直接写入查询数据（`keys.runtime`、`keys.computeUsage`）；`train_metrics` 把新点追加到实验的指标上。
+- 其余 `*_changed` 事件经 `createInvalidator()` 作废对应的键，300 ms 内的一串事件只引起一次重新获取。
+- 连接和重连时重新拉取活动任务（`resync()`），重连时还作废屏幕上常见的全部列表。
+- `job_log` 分发给打开的日志查看器（`onJobLog(jobId, listener)`）；每个事件最多 50 行，其余通过 REST 获取。
+
+## 引擎可用性
+
+所有引擎都随 Mizuoto 一起安装，但某个引擎仍可能*缺*东西：torch，或某个需要接受许可的引擎自己的发行包。引擎列表（`EngineStatus.available`、`missing`）和 doctor 的报告（`api/queries/engines.ts` 的 `useDoctor(engine)`：`GET /api/v1/engines/{id}/doctor`，不指定引擎时为 `GET /api/v1/runtime/doctor`）决定界面提供什么：
+
+- **`ModelGate`**（`components/ModelGate.vue`）把合成页的主按钮换成模型还差的那一个操作，按以下顺序检查：启用引擎、接受许可、安装缺少的包、下载模型。缺包时显示命令：torch 用 doctor 给出的 `install_command`（适合本机的构建），其他包用 `pip install <包名>`；引擎在远程主机上时，提示那台主机缺这个包。
+- **`EngineCard`** 显示**可用**或**不可用**以及缺少的包，并有一个 doctor 面板，列出该引擎的检查结果（torch、附加依赖、训练）。
+- **`ModelsView`** 标出引擎不可用的分组，并写明它需要什么。
+- **`SettingsView`** 在 **计算** 中显示 torch 的检查结果（doctor 的 `torch` 一项）：已安装的版本和构建，以及两者不符时安装推荐构建的命令。
+
+## Store
+
+| Store | 内容 |
+| --- | --- |
+| `auth` | 令牌（localStorage 与 `mizuoto_token` cookie）、是否需要令牌 |
+| `jobs` | 本次会话知道的任务：所有活动任务，以及打开页面期间结束的任务；每个任务从哪个界面启动（`upsert(job, from)`、`fromScreen()`），`onFinished()` 用于"在其他界面启动的任务已完成"提示。进度更新很频繁，所以放在这里而不是查询缓存里 |
+| `preferences` | 主题、种子色、对比度、语言、动效、上次界面、Speak 的上次选择；存 localStorage，并经 `/api/v1/client-state/{key}` 同步到服务器，跟随用户换浏览器 |
+| `player` | 页面上唯一的播放器（`audio/player.ts`） |
+| `handoff` | 界面之间的交接："用这些设置重新运行"、"使用这个音色"、"用作参考"；Speak 打开时取走 |
+
+## 保活视图
+
+`App.vue` 用 `KeepAlive :max="12"` 包住 `RouterView`，切换界面时每个页面保留自己的状态。缓存键是：
+
+```ts
+const viewKey = (path: string, name: unknown) =>
+  (path.startsWith('/voices/') || path.startsWith('/train/') || path.startsWith('/projects/') ? path : String(name));
+```
+
+列表页每个路由一个实例；音色、数据集、实验和项目的详情页每个路径一个实例。外壳的滚动容器是共享的，所以每个页面的滚动位置另存在 `offsets` 里，在视图过渡的更新中放回。被保活的页面不会卸载，需要在离开时保存的东西要同时挂 `onDeactivated` 和 `onBeforeUnmount`（`ProjectView.vue` 的草稿保存就是这样）。
+
+`router.ts` 中每个路由的 `meta.screen` 指明它属于哪个导航目的地；`addressOf(screen)` 记住每个目的地上次的地址，导航回去时回到离开时的那个音色或项目，而不是列表。
+
+## i18n
+
+`i18n/en.ts` 是消息树，`zh-CN.ts` 必须有完全相同的键（测试检查）。`useI18n()` 返回 `t(key, params)`，占位符写成 `{n}`；当前语言来自偏好，`auto` 跟随系统语言。由服务器值拼出的键（错误 code、阶段 id）用 `tOr(key, fallback)`，没有消息时显示可读的回退文字。新增文字时两个文件同时加。
+
+## 新增一个界面：以"项目"为例
+
+项目界面（长篇脚本，由一组音色逐行朗读）是最近加入的完整界面，可以作为模板。API 侧见 `mizuoto/api/routers/projects.py`，事件是 `projects_changed`。
+
+<Steps>
+<Step>
+
+**生成类型。** 后端路由就绪后运行 `python scripts/dev.py typegen`，`schema.d.ts` 中出现 `/api/v1/projects` 等路径和 `Project`、`ProjectInput` 等模型。在 `api/types.ts` 加别名：
+
+```ts
+export type Project = S['Project'];
+export type ProjectInput = S['ProjectInput'];
+export type ProjectLine = S['Line-Output'];
+export type LineInput = S['Line-Input'];
+```
+
+</Step>
+<Step>
+
+**查询键与查询。** 在 `api/queries/keys.ts` 加 `projects` 和 `project(id)`，新建 `api/queries/projects.ts`：
+
+```ts
+export const useProjects = () => useQuery({ queryKey: keys.projects, queryFn: () => unwrap(api.GET('/api/v1/projects')) });
+
+export function useProjectActions() {
+  // create、save、remove、importScript、useTake：成功后作废列表并写入该项目
+  // render、exportAudio：返回 Job，放进 jobs store 并记下来源界面
+  const render = useMutation({
+    mutationFn: ({ id, body }: { id: string; body: S['RenderRequest'] }) =>
+      unwrap(api.POST('/api/v1/projects/{project_id}/render', { ...path(id), body })),
+    onSuccess: (job) => jobs.upsert(job, 'projects'),
+  });
+  ...
+}
+```
+
+</Step>
+<Step>
+
+**Socket。** 在 `api/socket.ts` 处理新事件，并在 `AFFECTS` 中登记新任务种类影响的键：
+
+```ts
+socket.on('projects_changed', (e) => {
+  invalidate(keys.projects);
+  for (const id of e.ids) invalidate(keys.project(id));
+});
+// AFFECTS: project_render: [keys.projects], project_export: [keys.outputs]
+```
+
+并把 `keys.projects` 加入重连时作废的列表。
+
+</Step>
+<Step>
+
+**视图。** `views/ProjectsView.vue` 是列表：`useProjects()`、`EmptyState`、一组 `AppCard`，以及 `NewProjectDialog`。`views/ProjectView.vue` 是详情页，接收路由参数 `id` 作为 prop：编辑保存在本地草稿里，停止输入 800 ms 后 `PUT` 保存，`onDeactivated` 与 `onBeforeUnmount` 时也保存；进行中的渲染从 jobs store 中按 `kind` 和 `request.project` 找到，用 `JobCard` 显示；主要操作放在 `PageFooter`。"在 Speak 中试听"一行通过 `handoff.sendRequest()` 交给 Speak。只从 `@/ui` 取组件，只用令牌写样式。
+
+</Step>
+<Step>
+
+**路由。** 在 `router.ts` 加路由，`meta.screen` 指向目的地；若它是可记住的上次界面，加入 `SCREENS`：
+
+```ts
+{ path: '/projects', name: 'projects', component: () => import('@/views/ProjectsView.vue'), meta: { screen: 'projects' } },
+{ path: '/projects/:id', name: 'project', component: () => import('@/views/ProjectView.vue'), props: true, meta: { screen: 'projects' } },
+```
+
+</Step>
+<Step>
+
+**导航与保活。** 在 `App.vue` 的 `nav` 中加一项（图标先加到 `ui/icons.ts`），详情页要每个项目一个实例时把前缀加进 `viewKey`，需要记住为上次界面时加进 `lastScreen` 的监听：
+
+```ts
+{ to: addressOf('projects'), label: t('nav.projects'), icon: icons.BookOpen },
+```
+
+</Step>
+<Step>
+
+**文字与测试。** 在 `en.ts` 和 `zh-CN.ts` 加 `nav.projects` 和 `projects.*`；名字可能很长的行加 `min-width: 0`（必要时登记到 `layout.test.ts`）。运行 `python scripts/dev.py test-web`（vitest + `vue-tsc`）。
+
+</Step>
+</Steps>
+
+测试的写法和 CI 见[测试](/docs/development-testing)。

@@ -1,0 +1,71 @@
+---
+title: "F5-TTS"
+description: "The F5-TTS engine as implemented in Mizuoto: v1 Base, v0 Base and E2, the DiT and UNetT, the CFM sampler and Vocos, what reproduces upstream exactly, memory and compile notes, the full fine-tune, and its parity results."
+icon: Waves
+---
+
+A flow-matching TTS that fills in a mel spectrogram after the reference's and turns it into audio with Vocos ([SWivid/F5-TTS](https://github.com/SWivid/F5-TTS); code MIT, pretrained weights CC-BY-NC-4.0). Code: `mizuoto/engines/f5tts`. On the CPU in fp32 with the same seed it is identical to Mizuoto 0.1 for all three models, cloning and speech editing, and its trainer gives 0.1's exported weights byte for byte. User-facing details: [Engines in depth](/docs/advanced-engines#f5-tts).
+
+## Variants and files
+
+| Variant | Catalogue model | Backbone |
+| --- | --- | --- |
+| `v1_base` | `f5tts/v1-base` | DiT (1024 wide, 22 layers), text padding masked |
+| `base` | `f5tts/base` | DiT with rotary embedding on one head only (`pe_attn_head = 1`) |
+| `e2_base` | `f5tts/e2-base` | E2-TTS's UNetT: a flat transformer with skip connections, x-transformers' RMSNorm |
+
+All three clone (the reference's transcript is required) and edit speech. The model folder holds the checkpoint (`*.safetensors`, else `*.pt`), `vocab.txt` and `vocos/config.yaml` + `vocos/pytorch_model.bin`. E2's repository has no vocabulary, so upstream's bundled `vocab.txt` ships with the engine as package data and serves it.
+
+Precision: fp16 on a CUDA GPU of compute capability 7 or more, as upstream's `load_checkpoint` decides; fp32 elsewhere.
+
+## How it works
+
+The text (reference transcript plus the new text, Chinese characters turned into pinyin with tones) is embedded by ConvNeXtV2 blocks; the transformer predicts the flow from noise to mel frames, conditioned on the reference's mel; an ODE solver integrates it over a fixed time grid, with classifier-free guidance as a batch of two; Vocos turns the mel into 24 kHz audio. There is no duration model: the length comes from the reference's speaking rate, or from `duration`.
+
+| Module | What it is |
+| --- | --- |
+| `engine.py` | Reference preparation, chunking, `CFM.sample` (seeded noise, the EPSS or sway time grid, Euler or midpoint steps, guidance), Vocos, cross-fades; `edit` as upstream's `speech_edit.py` |
+| `text.py` | Characters and pinyin (`f5_tts.model.utils`), upstream's chunking |
+| `vocab.txt` | Upstream's bundled vocabulary |
+| `train.py` | `F5Trainer` (method `full`) |
+
+Shared: `nn/transformer/dit.py` (AdaLN-zero, ConvNeXtV2 text blocks, interleaved rotary embedding), `nn/transformer/unett.py`, `nn/flow/cfm.py` (`odeint_fixed`, `epss_timesteps`, `sway`), `nn/vocoders/vocos.py`, `nn/dsp/mel.py`, `nn/dsp/resample.py`, `nn/dsp/tiles.py`, `runtime/compile.py`.
+
+## What reproduces upstream
+
+- **The reference** is trimmed and padded as `preprocess_ref_audio_text` does, levelled to `target_rms` and resampled with torchaudio's `Resample`. pydub's 50 ms pad is reproduced from `audioop.ratecv`'s frame count (`edge_pad`: 1198 samples at 24 kHz, not 1200), since `audioop` is gone in Python 3.13.
+- **The text.** A reference text ending in a one-byte character gets a trailing space, as `infer_batch_process` adds one.
+- **Chunks** are cut as upstream cuts them, generated in order and joined with upstream's cross-fade; `duration` is spread over the chunks as upstream spreads it.
+- **The ODE.** torchdiffeq's fixed-grid Euler and midpoint steps are `nn.flow.cfm.odeint_fixed`; the grid is upstream's Empirically Pruned Step Sampling for 5, 6, 7, 10, 12 or 16 steps, otherwise a linear grid with sway sampling. Noise is drawn as upstream draws it, per item in the model's dtype.
+- **x-transformers' interleaved rotary embedding and RMSNorm** are ported as they are.
+- **Precision on a GPU.** The model is cast to its dtype *before* the checkpoint is copied in, as upstream does, so on a GPU the rotary embedding's `inv_freq` is fp16 too and the angles are computed in fp16.
+
+## Deviations
+
+- **Chunks in order.** Upstream generates a long text's chunks on a thread pool that shares the global random generator, so its own output depends on thread timing; 0.1's adapter generated them in order, and so does Mizuoto.
+- Only the Vocos vocoder is offered; upstream's BigVGAN variant of the v0 model is not in the catalogue.
+
+## Memory and speed
+
+Two phases: the transformer with the mel (every ODE step; guidance doubles the batch) and Vocos. If Vocos runs out of memory with `compute.oom_fallback` on, it decodes in tiles of 256 frames overlapping by 32 and cross-faded (`applied.fallbacks` says so).
+
+`compute.compile` wraps the DiT or UNetT in `torch.compile(dynamic=True)`. On a CPU in fp32 with 8 threads the transformer's warm time drops 23 % (a request from 60 to 45 s); the first request pays about 30 s of compilation; the audio stays within 9.2e-5 of eager (89 dB). The CPU allocator and thread placement of `compute.cpu_allocator` and `compute.cpu_threads` make F5-TTS 10–20 % faster on Linux without changing a result.
+
+## Training
+
+Method `full` (stages `prepare`, `train`, `export`): upstream's `finetune_cli` recipe, without accelerate, datasets, wandb or ema_pytorch. Seeded alike, it gives 0.1's losses, learning rates and exported `model_<update>.safetensors` byte for byte on the CPU. (0.1 itself never seeded: its condition drops came from an unseeded `random`.)
+
+- **Draws in upstream's order**: the model's random initialisation in upstream's construction order (UNetT makes a layer's skip projection last), one data-loader worker seed in each of the first two epochs (persistent loaders; accelerate's `skip_first_batches` copy iterates epoch 0), then per batch the span, noise, time, two `random()` calls and the dropout masks.
+- **Epoch *e* ≥ 1 shuffles with seed 666 + *e* − 1**: accelerate's loader resets the sampler's epoch to its own iteration count.
+- **Mels on one thread**, as in upstream's loader workers; more threads change the filterbank product's sums.
+- **The export** keeps the EMA weights with upstream's keys, the vocabulary and the vocoder, so both 0.1 and Mizuoto load it.
+- `training.memory`: gradient checkpointing over the transformer's blocks gives identical results; `low` keeps the EMA copy in RAM; `lowest` also AdamW's state (identical on the CPU).
+
+## Parity
+
+Identical sample for sample to 0.1 on the CPU in fp32 in all six stack cases: English and Chinese cloning on v1 Base, v0 Base and E2, the fine-tuned model and speech editing. Two more cases speak each implementation's training export with the other implementation; identical too. The contract suite passes (12 tests).
+
+## Limitations
+
+- The pretrained weights are CC-BY-NC-4.0 and so is a fine-tune of them; outputs are tagged.
+- On a GPU the model runs in fp16 as upstream does; Mizuoto offers no fp32 rotary embedding there.

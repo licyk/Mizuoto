@@ -1,0 +1,186 @@
+---
+title: "Release"
+description: "Mizuoto's dependencies and why, the platforms it supports, and how its distributions are made and checked: versions in lockstep, wheels, the smoke test, CI and the release workflow, the Docker image, the model mirror and this docs site."
+icon: Package
+---
+
+A release produces three distributions: `mizuoto` (wheel and sdist, with the built web UI inside, every engine under a permissive licence included) and the wheels of the two licence-gated engines, `mizuoto-fishspeech` and `mizuoto-indextts`. All three install into one environment over a torch the user chose. This page covers how they are built and checked. Mizuoto is not published to PyPI yet: the wheels come from `scripts/build_wheels.py` (`dist/`) or the release workflow's artifacts, and publishing is the release owner's step.
+
+## Dependencies
+
+Mizuoto is one environment: the dependencies of the core, the API, the command line, the web UI and every engine are in `pyproject.toml` and install at once. Every new dependency must answer three questions: does it have wheels for every platform CI covers (Linux x86_64, Windows x86_64, macOS arm64, CPython 3.10–3.13), does it change results, does it change process-wide state.
+
+### Required
+
+| For | Packages | Notes |
+| --- | --- | --- |
+| Web and command line | fastapi (≥ 0.115.3), starlette (≥ 0.40), uvicorn, websockets, python-socketio, pydantic 2, httpx, typer (&lt; 0.28), rich, tomli-w, tomli (Python &lt; 3.11), send2trash | Starlette 0.40's `FileResponse` honours Range, so the player seeks; uvicorn speaks WebSocket only with websockets installed; typer has an upper bound because the command line uses its private modules |
+| Audio | av (PyAV), numpy | Decoding, encoding and resampling through PyAV, the rest with numpy; no ffmpeg or sox program is called |
+| Runtime | torch (≥ 2.8), safetensors, soxr, tokenizers | torch's build is the user's (below); soxr is the resampler librosa calls; tokenizers builds the BPE transformers builds |
+| Text | pypinyin, rjieba, jieba, opencc, kaldifst, inflect, tiktoken, regex, wordsegment, budoux, ToJyutping, fasttext-predict, pyyaml | Many versions are **pinned** (`pypinyin==0.55.0`, `opencc==1.4.2`, `inflect==7.3.1`…): the engines' output depends on them, and another version changes phones and audio |
+
+The licence-gated packages bring a few of their own: `mizuoto-fishspeech` needs tokenizers and safetensors, `mizuoto-indextts` sentencepiece.
+
+### Optional extras
+
+| Extra | Packages | For |
+| --- | --- | --- |
+| `mizuoto[gptsovits-ja]` | `pyopenjtalk==0.4.1` | GPT-SoVITS's Japanese front end; published as a source distribution only, so installing it needs CMake and a C++ compiler |
+| `mizuoto[gptsovits-ko]` | `python-mecab-ko==1.3.7`, `jamo==0.4.1` | GPT-SoVITS's Korean front end |
+| `mizuoto-indextts[ja]` | fugashi, unidic-lite | IndexTTS-2.5's Japanese segmentation |
+
+Without an extra, text in that language fails with `capability_not_supported` and the install command in the hint; `mizuoto doctor` lists each engine's missing extras too. The optional attention packages (flash-attn, xFormers, SageAttention) are not extras: they must match the user's torch, and `mizuoto doctor` prints install commands that keep the installed torch (`--no-deps`); see [Attention acceleration](/docs/development-acceleration).
+
+### No longer needed
+
+Every engine is ported in-tree, so none of these upstream dependencies is needed any more:
+
+| No longer needed | Replaced by |
+| --- | --- |
+| vLLM, TensorRT / TensorRT-LLM, FlashInfer, flash-attn as a requirement | Autoregressive decoding without waits and as CUDA graphs, optional `torch.compile`, SDPA and the optional attention backends |
+| transformers (several incompatible versions), accelerate, huggingface_hub, peft, loralib | In-tree modules (the Qwen decoder, GPT-2, BERT, HuBERT, w2v-BERT, Whisper…), `tokenizers`, an in-tree LoRA |
+| onnxruntime | The weights in ONNX files are converted into torch modules by an in-tree protobuf reader (`runtime/convert/onnx.py`), the result cached under the model folder's `.mizuoto/` |
+| openai-whisper, faster-whisper (CTranslate2) | An in-tree Whisper, log-mel and the `tiktoken` vocabulary (shipped) |
+| torchaudio, librosa, numba, resampy, scipy | `mizuoto.nn.dsp`, bit-exact with those libraries; soxr |
+| descript-audiotools, descript-audio-codec | `mizuoto/nn/codecs/dac.py` |
+| pynini, WeTextProcessing, wetext, modelscope | kaldifst with exported FSTs (shared assets, or shipped in the package) |
+| jieba_fast, g2p_en, nltk (and the data it downloads at run time) | jieba; the ported GRU and tagger, with their data shipped |
+| hyperpyyaml, omegaconf, hydra | YAML read as data, and dataclass configs |
+| x-transformers, diffusers, conformer, Matcha-TTS, vocos, torchdiffeq, einops, ema-pytorch | In-tree code |
+| Lightning, torchmetrics, datasets, webdataset, wandb, tensorboard, pyarrow, pyworld, deepspeed | The native trainers |
+| pydub (and audioop, gone in Python 3.13) | numpy ports with integer semantics |
+| sox, the ffmpeg program, soundfile | PyAV; WAV and FLAC reading and writing and a port of libswresample's resampler in `nn/dsp` |
+
+### torch and platforms
+
+torch is a dependency, but its build is installed by the user first: from the download.pytorch.org index that matches the machine (CUDA, ROCm, XPU or CPU; on Apple silicon PyPI's wheels include MPS), then Mizuoto, whose installation keeps it. `mizuoto/core/compute/torch_index.py` knows the builds published for torch ≥ 2.8 (CUDA cu126–cu132, ROCm 6.4–7.2, XPU, CPU) and picks the newest CUDA build the driver runs, else ROCm, XPU, MPS or CPU; `mizuoto doctor` prints the install command when the installed build does not match the hardware.
+
+| Device | Platforms |
+| --- | --- |
+| NVIDIA (CUDA) | Linux, Windows |
+| AMD (ROCm; `cuda` to torch) | Linux |
+| Intel (XPU) | Linux, Windows |
+| Apple silicon (MPS) | macOS arm64 |
+| CPU | All |
+
+CI tests every combination of Linux x86_64, Windows x86_64 and macOS arm64 with Python 3.10–3.13 on CPU torch, and separately torch 2.8.0 and the latest release.
+
+<Callout type="warn" title="ROCm, XPU and MPS">
+The code has paths for these devices (device probing, float64 modules on the CPU where a device lacks float64, no compilation on MPS, CUDA graphs and half precision only on CUDA) and they are tested on simulated devices, but they have not been verified on AMD, Intel or Apple hardware.
+</Callout>
+
+## Versions in lockstep
+
+Every distribution carries the same version (0.2.0), which lives in these places and changes in all of them at once:
+
+| File | What |
+| --- | --- |
+| `mizuoto/version.py` | `VERSION`, the dynamic version of `mizuoto` |
+| `packages/native/fishspeech/mizuoto_fishspeech/__init__.py` | `VERSION` of `mizuoto-fishspeech` |
+| `packages/native/indextts/mizuoto_indextts/__init__.py` | `VERSION` of `mizuoto-indextts` |
+
+The gated packages depend on `mizuoto` (their `pyproject.toml`). `tests/core/test_engines.py::test_gated_distributions_move_in_lockstep` checks that both carry Mizuoto's version and depend on `mizuoto`; `check_versions()` in `scripts/build_wheels.py` checks the versions again at build time and fails on a mismatch.
+
+<Callout type="info" title="What an upgrade changes on disk">
+Voice caches are keyed by Mizuoto's version, so they are rebuilt once after an upgrade. Settings keys a version no longer knows are ignored (see [Architecture](/docs/development-architecture#settings)). A host and its remote agents must speak the same protocol version (`AGENT_PROTOCOL`, now 2): otherwise each refuses the other at `hello` with an upgrade hint. More in [The data folder and compatibility](/docs/development-architecture#the-data-folder-and-compatibility).
+</Callout>
+
+## Wheels: `scripts/build_wheels.py`
+
+```bash
+python scripts/dev.py wheels                       # all: mizuoto and every gated engine
+python scripts/dev.py wheels host                  # mizuoto only
+python scripts/dev.py wheels native indextts       # chosen gated engines
+python scripts/build_wheels.py host --skip-web --out /wheels
+```
+
+- **host**: `bun install --frozen-lockfile` and `bun run build` in `mizuoto/webui` (`--skip-web` reuses the existing `dist/`, as Docker's `wheels` stage does), a check that `dist/index.html` exists, then `uv build` of the `mizuoto` sdist and, from it, the wheel, from a clean copy of `mizuoto/`, `pyproject.toml` and `README.md` (no `__pycache__`, no stale `build/`).
+- **native**: each package in `packages/native/` (or the ones named), copied without `__pycache__`, `*.egg-info`, `build` and `dist`, and built with `uv build --wheel`.
+- The output goes to `dist/` by default. The script uses the standard library plus uv and bun.
+
+The package data that ships in the wheel is listed in `pyproject.toml` (`[tool.setuptools.package-data]`): the built UI, the engine manifests, files manifests and licence texts, F5-TTS's vocabulary, GPT-SoVITS's text front-end data, Whisper's vocabulary. IndexTTS's text-normalisation FSTs ship in `mizuoto-indextts`.
+
+## Smoke test: `scripts/smoke_wheels.py`
+
+```bash
+python scripts/dev.py smoke                        # same as python scripts/smoke_wheels.py --dist dist
+python scripts/smoke_wheels.py --dist dist --python 3.13 --torch torch==2.8.0
+```
+
+It tries the built distributions as a user gets them. In a temporary folder outside the checkout, uv creates a new environment (`--python`, 3.11 by default), installs torch first from `--torch-index` (the CPU build by default; `--torch` picks the version, `torch>=2.8` by default), then, in one install, the `mizuoto` wheel of this version and the gated wheels found beside it (their other dependencies from `--index`), which must leave that torch in place. uv runs without the machine's configuration (`--no-config`, no `UV_*`/`PIP_*` variables). Then, in a temporary data folder:
+
+1. `mizuoto version`, `mizuoto env vars` and `mizuoto doctor`: every engine must be available;
+2. every engine's implementation and trainer imported (`get_engine`), every module of `mizuoto` and the gated packages imported, and every data file the checkout has beside the code found installed (the ones engines read at run time actually read);
+3. a dummy-engine `mizuoto speak`;
+4. the server: `/api/v1/app/health`, the UI, and a dummy speak through the API.
+
+## CI and the release workflow
+
+`.github/workflows/ci.yml` runs the tests on every push (see [Testing](/docs/development-testing#ci)): the `host` matrix (Ubuntu, Windows, macOS × Python 3.10–3.13, CPU torch, the gated packages installed), the `torch` job (torch 2.8.0 and the latest release), `web` and `site`.
+
+`.github/workflows/release.yml` runs on a pushed `v*` tag or by hand:
+
+1. `build` (Ubuntu, Python 3.11, bun): `pip install uv`, `python scripts/build_wheels.py all`; `dist/` is uploaded as the `dist` artifact.
+2. `smoke` (Ubuntu, Python 3.10 and 3.13): downloads the artifact and runs `smoke_wheels.py --dist dist --python <version>`.
+
+The artifact holds every wheel, the gated ones included; whoever publishes them decides where.
+
+## Docker
+
+The `Dockerfile` at the repository root builds one image: the server, its web UI and every engine, with GPT-SoVITS's Japanese and Korean front ends (and IndexTTS-2.5's Japanese with `GATED=1`). Models go into the `/data` volume.
+
+```bash
+docker build -t mizuoto .                                   # torch's CUDA 12.8 build
+docker build -t mizuoto:cpu --build-arg TORCH_INDEX=https://download.pytorch.org/whl/cpu .
+docker build -t mizuoto --build-arg GATED=1 .               # with Fish Speech and IndexTTS
+docker run --gpus all -p 7869:7869 -v mizuoto-data:/data -e MIZUOTO_SERVER__ACCESS_TOKEN=change-me mizuoto
+```
+
+| Build argument | Default | Meaning |
+| --- | --- | --- |
+| `PYTHON` | `3.11` | The `python:<version>-slim` base of the wheels stage and the image |
+| `TORCH_INDEX` | `https://download.pytorch.org/whl/cu128` | Where torch comes from: a CUDA (`cu126` … `cu132`), ROCm (`rocm6.4` … `rocm7.2`) or `cpu` index |
+| `TORCH` | `torch>=2.8` | Which torch |
+| `GATED` | `0` | `1` also builds and installs the licence-gated engines (their licences must still be accepted) |
+
+| Stage | What |
+| --- | --- |
+| `web` | `oven/bun:1`: `bun install --frozen-lockfile`, `bun run build` |
+| `wheels` | `python:<PYTHON>-slim` with a compiler and CMake: a wheel of `pyopenjtalk==0.4.1` (published as an sdist only), `build_wheels.py host --skip-web`, and `build_wheels.py native` when `GATED=1` |
+| the image | `python:<PYTHON>-slim`: torch from `TORCH_INDEX` first, then the wheels with `mizuoto[gptsovits-ja,gptsovits-ko]` (and `mizuoto-indextts[ja]`), the rest from PyPI; `MIZUOTO_DATA_DIR=/data`, a `/data` volume, port 7869, a health check on `/api/v1/app/health` |
+
+No system packages are installed in the image: PyAV, torch and the text libraries ship their native code in their wheels. Without a C compiler in the image, `compute.compile` runs eagerly (it warns once). For using the image, see [Docker](/docs/advanced-docker).
+
+## The model mirror: `scripts/mirror_models.py`
+
+`downloads.repository = "mizuoto-model"` makes Mizuoto download from its mirror repository first (`downloads.mirror_repo`, default `licyk/mizuoto-model`, the same id on Hugging Face and ModelScope) and fill in what the mirror lacks from each model's official repositories, so a partial mirror works. The mirror lays files out as Mizuoto keeps them: a model under `<engine>/<model>/<path>`, a shared asset under `_assets/<engine>/<asset>/<path>`.
+
+```bash
+python scripts/mirror_models.py build OUT [id…]        # lay the models folder out as a mirror
+python scripts/mirror_models.py upload OUT --repo licyk/mizuoto-model [--modelscope]
+python scripts/mirror_models.py check --repo licyk/mizuoto-model
+```
+
+- `build` lays the installed catalogue models and shared assets out under `OUT` (hard links where possible), checks each file against its pinned size and SHA-256 (`--no-verify`: sizes only), and writes `MIRROR.json` (each file's path, size, SHA-256 and official origin) and a README. Archive parts (`unpack`) are not kept after unpacking, so they stay official-only. Licence-gated engines are left out unless `--gated`.
+- `upload` publishes with `hf upload-large-folder` (it needs `hf auth login`) and, with `--modelscope`, with `modelscope upload`.
+- `check` lists, with HEAD requests, which catalogue files the published mirror lacks.
+
+Publishing the mirror is the mirror owner's step; the weights keep their own licences.
+
+## The docs site
+
+This site lives in `site/`. It is built on fumadocs (TanStack Start + Vite) with bun into static files (`.output/public`); `site/vercel.json` is ready for a Vercel deployment.
+
+```bash
+python scripts/dev.py site-install   # bun install in site/
+python scripts/dev.py site-dev       # local preview with hot reload
+python scripts/dev.py site           # vite build, then scripts/prepare-static-output.mjs
+python scripts/dev.py test-site      # vitest, then tsc --noEmit
+```
+
+CI's `site` job runs `bun install --frozen-lockfile`, `bun run check`, `bun run test` and `bun run build` in `site/`.
+
+- Pages are in `site/content/docs/`: `<slug>.mdx` in Simplified Chinese (the default language, `zh-CN`) and `<slug>.en.mdx` in English, with the same structure. The sidebars are `meta.json` and `meta.en.json`, grouped by `---Title---` separators.
+- The frontmatter has `title`, `description` and `icon` (a Lucide icon name). The MDX components are in `site/src/components/mdx.tsx`: `Cards`/`Card`, `Callout`, `Tabs`/`Tab`, `Steps`/`Step`, `Accordions`/`Accordion` and `Mermaid` (a `chart` prop; rendered in the browser with Mermaid loaded from a CDN, following the site's light or dark theme).
+- `prepare-static-output.mjs` checks that every page in `meta.json` produced `docs/<slug>/index.html` and copies `_shell.html` to `404.html`.
+- `src/lib/i18n-content.test.ts` requires an English page for every Chinese one and the same page order in both sidebars.

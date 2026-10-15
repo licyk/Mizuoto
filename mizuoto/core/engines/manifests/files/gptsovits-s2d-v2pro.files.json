@@ -1,0 +1,11 @@
+{
+ "repo": "lj1995/GPT-SoVITS",
+ "revision": "8f8857563c040d542de108a2c18b0425abd6c9c5",
+ "files": [
+  {
+   "path": "v2Pro/s2Dv2Pro.pth",
+   "size": 126431971,
+   "sha256": "257a7f36ae49e9ff08790d2cd3d398592530852caba810197f8606e884a52c54"
+  }
+ ]
+}

@@ -1,0 +1,28 @@
+The quick brown fox jumps over the lazy dog near the river bank.
+This is the first sentence. And here comes the second one, a little longer.
+今天的天气很好，我们一起去公园散步吧。
+会议定在2024年3月15日下午3点，预算是1250万元。
+春天的早晨，阳光洒在湖面上，微风吹过，带来淡淡的花香。
+こんにちは、世界。今日はいい天気ですね！カタカナとひらがな、漢字。
+안녕하세요, 반갑습니다. 오늘 날씨가 좋네요.
+Ça va? Où est la bibliothèque — près de l'école?
+Grüße aus München: Straße, Äpfel, Öl, Übung.
+¿Dónde está el baño? ¡Gracias!
+It's John's car; we'll see, they'd've done it. I'M SHOUTING. Don't.
+  leading spaces	and tabs		and  double  spaces  
+Line one
+Line two
+
+Line four after a blank
+Numbers: 3.14159, 1,000,000, -42, 0x1F, 1e-10, 2^10=1024 and 50%.
+Emoji 😀👍🏽 and symbols ©®™ ← → ★ ♪ … — “quotes” ‘single’ «guillemets»
+<|im_start|>assistant
+Hello<|im_end|>
+<|im_start|>user
+你好<|im_end|>
+<tts_pad><tts_text_bos>text<tts_text_eod>
+Mixed 中文English混合text テスト 123 abc
+[laughter] (sighs) <breath> *emphasis* _under_ #hash @at $5.00
+URL https://example.com/path?query=1&x=y#frag and email a.b@c.org
+A very long word: pneumonoultramicroscopicsilicovolcanoconiosis supercalifragilisticexpialidocious
+ﬁ ligature, fullwidth ＡＢＣ１２３, combining é vs é, NFC test Å vs Å

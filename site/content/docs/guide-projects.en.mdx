@@ -1,0 +1,214 @@
+---
+title: "Projects"
+description: "The Projects screen: a cast of voices reads a book, a script or a dialogue line by line; importing scripts, editing lines, rendering, takes and exporting audio with subtitles."
+icon: BookOpen
+---
+
+**Projects** are for long-form reading: a book, a script or a dialogue with several voices. A project has two parts:
+
+- **The script**: chapters, each a list of lines. Each line has its text and the speaker who says it, and may have its own style instruction.
+- **The cast**: each speaker has its own model, voice (a library voice, a preset speaker or the model's own voice), language, way of speaking and parameters. **The first speaker is the narrator**: lines without a speaker are theirs. A speaker without a model uses the project's.
+
+Each line is rendered on its own, and each rendering is a **take**. After you change a line's text, speaker or settings, only that line needs rendering again; at the end the lines are joined, with the pauses you set, into one file with subtitles. Speakers may use models of different engines.
+
+A project is saved in `projects/<name>/project.json` in the data folder.
+
+## The list
+
+Open **Projects** in the navigation. Each card shows the project's name, rendered lines out of all lines (red when some failed), its description, **N chapter(s) · N line(s)**, **N speaker(s)**, the length of what is rendered and a bar coloured by the lines' states. Click a card to open the project.
+
+## A new project
+
+1. Click **New project**.
+2. Type the **Project name**.
+3. Choose the **Model**: the project's model, used by the narrator and by every speaker that names none.
+4. Optionally paste a script under **Script** (see the next section) and choose **Make a line of each**: **line of text** or **sentence**.
+5. Click **Create**.
+
+A new project starts with one speaker, **Narrator**.
+
+## The script format
+
+An imported script is plain text, with these rules (the hint under the box says the same):
+
+| You write | It means |
+| --- | --- |
+| `# Title` | A new chapter, titled with the text after `#` |
+| `Name: text` (`:` or `：`), or `[Name]: text` | A line of that speaker (see the rules below) |
+| Any other line | A line of the narrator |
+| A blank line | The end of a paragraph (the pause after a paragraph is longer when exported) |
+
+A `Name:` prefix counts as a speaker only when one of these holds; otherwise the whole line, prefix included, is the narrator's:
+
+- the name is already in the cast;
+- the same name begins two or more lines;
+- the script is a dialogue (some name meets one of the two rules above) and the prefix **looks like a name**: it starts with a letter and has at most three words, such as `Dr. Watson` or `林黛玉`.
+
+So in a script that is not a dialogue (no name recurs), an occasional "Note: the power is off tomorrow" does not become a speaker; but in a dialogue, any prefix that looks like a name does. A dialogue in which every name occurs only once is not recognised; add speakers with those names under **Cast** first, then import.
+
+New names join the cast. They have no model or voice yet (they use the project's model); choose their voices under **Cast** after importing.
+
+Lines before the first `#` go into one chapter: titled after the project when the project has no chapters yet, else untitled.
+
+**Make a line of each**: with **line of text** each line of the script is one line; with **sentence** each is split further into its sentences.
+
+An example:
+
+```text
+# Chapter 1: The night train
+
+The train ran on through the dark. Only two passengers were left in the carriage.
+
+Anna: Can't you sleep either?
+Old man: I have travelled this line for forty years.
+Anna: Forty years?
+Old man: Since it was a dirt track.
+
+Outside, a lamp flashed past.
+```
+
+It imports as one chapter of six lines: "Anna" and "Old man" each begin two lines and become two new speakers; the other lines are the narrator's; the first line, the dialogue and the last line are three paragraphs.
+
+## Importing a script
+
+Click **Import a script** at the bottom of the project's page (or in the middle of an empty project), paste the script, choose how to split it and **Add it**:
+
+| Choice | What it does |
+| --- | --- |
+| **as new chapters** | Appends the script's chapters to the end of the project |
+| **to this chapter** | Appends every line to the chapter that is open, without making chapters (`#` headings are left out) |
+| **instead of the script** | Replaces every chapter with the script's; the old lines' takes are deleted |
+
+Click **Import**.
+
+## Editing the script
+
+A project's page has three tabs: **Script**, **Cast** and **Export**. The top shows its name, the save state (**Saving…**, **Saved**, **Unsaved changes**) and rendered lines out of all, with their length.
+
+Every change is saved a moment after you stop typing, and when you leave the page; there is nothing to save by hand.
+
+### Chapters
+
+**Chapters** on the left lists the chapters, each with its rendered lines out of all; click one to open it. **Add a chapter** makes a new one. Above the lines are the **Chapter title** and a menu with **Move up**, **Move down** and **Delete the chapter** (its lines' takes are deleted too).
+
+### Lines
+
+One row per line, from left to right:
+
+- a state dot (hover for the state's name; see the next section);
+- **Speaker**: who says the line; choosing the first speaker (the narrator) means no speaker;
+- **Text**: <kbd>Ctrl</kbd>+<kbd>Enter</kbd> in it inserts a line below;
+- a play button for the line's take in use;
+- **Render this line again**: renders a new take of this line now, even when it is current;
+- a menu:
+
+| Item | What it does |
+| --- | --- |
+| **Insert a line below** | The new line keeps this line's speaker |
+| **End the paragraph here** / **Continue the paragraph** | Where a paragraph ends, for the pauses when exported |
+| **Add a style instruction** | Shows **Style for this line**, used for this line instead of its speaker's **How it speaks** |
+| **Move up** / **Move down** | Reorder |
+| **Try in Speak** | Loads the line's whole request (model, voice, text, parameters) into Speak, to try things out |
+| **Take N (s s)** | The line's takes, the one in use marked ✓; click one to use it |
+| **Delete** | Deletes the line and its takes |
+
+**Add a line** at the end of the chapter appends a line. A line that failed shows why beneath it.
+
+## Line states
+
+| State | Meaning |
+| --- | --- |
+| **Rendered** | It has a take, made from its current text and settings |
+| **Changed since its take** | It has a take, but its text, speaker, the speaker's model, voice or parameters changed since, or the library voice it uses was changed |
+| **Not rendered** | No take yet |
+| **Failed** | The last rendering failed; the reason shows beneath the line |
+| **Rendering** | Being rendered |
+| **Empty** | No text; skipped when rendering and exporting |
+
+## Cast
+
+At the top of **Cast**, the **Project** part holds the project's **Model**, **Project name** and **Description**. Below it, one card per speaker:
+
+- **Speaker name**; the first speaker carries the **Narrator** badge; beside it the speaker's number of lines and a remove button. A removed speaker's lines go to the narrator.
+- **Model**: without one, its label reads **Model (the project's: …)**; with one, **Use the project's** goes back.
+- The voice: **Library voice**, **Preset speaker** or **Its own voice**, as the model supports. The library picker shows how this model can use each voice, as in Speak.
+- **Language**: **The project's language**, or one of the model's languages.
+- **How it speaks**: a style instruction for each of this speaker's lines (only when the model takes instructions).
+- **Parameters**: the same panel as in Speak; it shows **N set** when you changed some.
+
+**Add a speaker** adds one. The project's own language is set under **Project** on the same tab (**Language**; **Each model decides** leaves it to each model), or with `mizuoto project set --lang`.
+
+<Callout type="info" title="Changing a speaker makes lines stale">
+
+When a speaker's model, voice, language, way of speaking or parameters change, every rendered line of that speaker becomes **Changed since its take**. **Level each take** under Export is a rendering setting too: changing it makes every line stale.
+
+</Callout>
+
+## Rendering
+
+Two buttons at the bottom of the page:
+
+- **Render chapter (N)**: renders every line of the open chapter that is not **Rendered** (not rendered, changed or failed).
+- **Render all (N)**: the same for the whole project.
+
+Rendering is one **Render a project** job with a step per chapter. It submits an ordinary speak job per line and keeps up to 8 of them queued, so that **Settings › Speech › Run waiting requests together** can run lines with the same model, voice and settings, differing only in their text, as one batch (on engines that take batches, such as Qwen3-TTS, GPT-SoVITS and OmniVoice). Those speak jobs do not announce themselves one by one; the render announces itself once when it ends.
+
+- A failed line does not stop the others: it is marked **Failed** with the reason, and the rest go on.
+- Cancelling the render cancels the speak jobs it submitted.
+- You can keep editing while it renders; a changed line is judged stale or not by its new contents.
+
+## Takes
+
+Each rendering of a line adds a take and uses it at once. Up to 5 takes are kept per line; older ones not in use are deleted. **Take N** in the line's menu goes back to an earlier one.
+
+Takes are FLAC results and are not listed in [History](/docs/guide-history). Deleting a line, a chapter or the project deletes their takes.
+
+## Export
+
+The **Export** tab:
+
+| Setting | Default | What it does |
+| --- | --- | --- |
+| **Pause after a line (ms)** | 350 | Silence between two lines of a paragraph |
+| **Pause after a paragraph (ms)** | 800 | Silence after a line that ends a paragraph |
+| **Pause between chapters (ms)** | 2000 | Silence between chapters when several are exported together |
+| **Format** | WAV | WAV, FLAC, MP3, OGG, M4A |
+| **Sample rate** | 24000 | Every take is resampled to it (speakers' models may differ in rate) |
+| **Level each take** | **By loudness** | **By loudness**, **By peak** or **As made**; applied when each line is rendered |
+
+**Export what is rendered**: off (the default), every line of what you export must be **Rendered**, else the export is refused; on, lines never rendered are left out and lines changed since their take use the take they have.
+
+Then click:
+
+- **Export this chapter**: the open chapter only; the file is named "project — chapter title".
+- **Export everything**: the whole project as one file.
+
+Exporting is an **Export a project** job. The file then appears under **Exported files**, where you can play it, **Download** it and download its **Subtitles (SRT)**: one cue per line, timed to the audio. Exported files are listed in [History](/docs/guide-history) as well.
+
+## Deleting
+
+**Delete** at the bottom of the page moves the project and all its takes to the trash.
+
+## Command line
+
+| Command | What it does |
+| --- | --- |
+| `mizuoto project new <name> [-m model] [--voice voice \| --preset speaker] [-l lang] [--script file] [--split line\|sentence]` | Create a project, with a narrator and optionally a script |
+| `mizuoto project import <project> <script> [--split …] [--replace] [--chapter chapter-id]` | Import a script (append, replace, or into a chapter) |
+| `mizuoto project cast <project> <speaker-id> [--name] [-m] [-v] [--preset] [-l] [--instruct] [-p name=value] [-O name=value] [--remove]` | Add, change or remove a speaker; a new id adds one, `''` clears a value |
+| `mizuoto project set <project> [--name] [-m] [-l] [--line-pause] [--paragraph-pause] [--chapter-pause] [-f] [--sample-rate] [--normalize]` | Change the project's settings |
+| `mizuoto project render <project> [-c chapter-id] [--line line-id] [--force]` | Render the lines without a current take; `--force` renders current ones too |
+| `mizuoto project export <project> [-o file] [-c chapter-id] [-f format] [--srt file] [--allow-missing]` | Export; `--srt` writes `.srt` or `.vtt` subtitles |
+| `mizuoto project show <project>` | The cast and each line's state (with chapter and line ids) |
+| `mizuoto project script <project>` | Print the project as a script that imports back |
+| `mizuoto project list` | List the projects |
+| `mizuoto project delete <project>` | Move it to the trash |
+
+For example:
+
+```bash
+mizuoto project new "Night train" -m qwen3tts/1.7b-custom-voice --preset ryan --script book.txt
+mizuoto project cast night-train anna --name Anna --preset serena
+mizuoto project render night-train
+mizuoto project export night-train -o book.mp3 --srt book.srt
+```

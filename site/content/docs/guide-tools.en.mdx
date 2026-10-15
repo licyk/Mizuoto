@@ -1,0 +1,49 @@
+---
+title: "Tools"
+description: "The Tools screen: say a recording in another voice with CosyVoice, and replace words in a recording with F5-TTS."
+icon: WandSparkles
+---
+
+**Tools** has two tabs: **Convert voice** and **Edit speech**. Both start from an existing recording; their results appear under **Results** at the bottom of the page (and in [History](/docs/guide-history)), with the same menu as in Speak.
+
+## Convert voice
+
+**Say what a recording says in another voice, keeping its words and timing.** It needs a model with voice conversion: CosyVoice (300M, 300M SFT, 2, 3).
+
+1. Choose a CosyVoice model under **Model**. The picker lists only models that convert voices; when the model is not ready, the button at the bottom offers the step it still needs first, such as the download (see [Speak](/docs/guide-speak#when-the-model-is-not-ready)).
+2. Add the audio to convert under **Recording**: drop or choose a file, **Record**, **Server files** or **Earlier results**.
+3. Under **Target voice**, choose:
+   - **Library voice**: a voice from the library; its reference clip is the target voice;
+   - **A clip**: a clip of the target voice, given directly.
+4. Click **Convert** at the bottom.
+
+The command line:
+
+```bash
+mizuoto convert speech.wav -m cosyvoice/cosyvoice2-0.5b --voice narrator -o converted.wav
+mizuoto convert speech.wav -m cosyvoice/cosyvoice2-0.5b --ref target.wav -o converted.wav
+```
+
+## Edit speech
+
+**Replace parts of a recording with new words in the same voice.** It needs a model with speech editing: F5-TTS (v1 Base, Base, E2-TTS).
+
+1. Choose an F5-TTS model under **Model**.
+2. Add the audio to edit under **Recording**.
+3. Under **Changes**, fill in **The whole text after the edit**: everything the recording should say once edited. The easy way: click **Transcribe** to transcribe the recording, then change the words you replace. The model reads this text.
+4. Mark each part to replace:
+   - **From (s)** and **To (s)**: where the replaced speech is in the recording;
+   - **New words**: what this part says now (for the record; the model goes by the whole text above);
+   - **Length (s)**: how long the new speech lasts; empty (**Automatic**) keeps the span's length.
+
+   **Add a change** adds a row; the button at the end of a row removes it. Only rows with a start and an end, the end after the start, are sent.
+5. Click **Edit** at the bottom.
+
+When something is missing the footer says so: **Add the recording**, **Give the text after the edit**, or **Mark what to replace: from and to, in seconds**.
+
+The command line (`--span` is repeatable, `START:END[:SECONDS]` in seconds):
+
+```bash
+mizuoto edit speech.wav -m f5tts/v1-base -t "The whole text after the edit." --span 1.2:1.8 -o edited.wav
+mizuoto edit speech.wav -m f5tts/v1-base -t "The whole text after the edit." --span 1.2:1.8:0.9 --span 4.0:4.5
+```

@@ -1,0 +1,68 @@
+@import "tailwindcss";
+@import "fumadocs-ui/css/neutral.css";
+@import "fumadocs-ui/css/preset.css";
+@import "./page/index.css";
+@import "./home/index.css";
+@import "./controls.css";
+
+html {
+  scrollbar-gutter: stable;
+}
+
+html > body[data-scroll-locked] {
+  margin-right: 0 !important;
+  --removed-body-scroll-bar-size: 0px !important;
+}
+
+.primary-action,
+.secondary-action {
+  display: inline-flex;
+  min-height: 2.75rem;
+  align-items: center;
+  justify-content: center;
+  gap: 0.55rem;
+  padding: 0.7rem 1.1rem;
+  border-radius: 0.75rem;
+  cursor: pointer;
+  font-size: 0.92rem;
+  font-weight: 600;
+  transition:
+    transform var(--page-out) var(--page-ease-out),
+    background-color var(--page-out) var(--page-ease-out),
+    border-color var(--page-out) var(--page-ease-out),
+    box-shadow var(--page-out) var(--page-ease-out),
+    color var(--page-out) var(--page-ease-out),
+    opacity var(--page-out) var(--page-ease-out);
+}
+
+.primary-action {
+  background: var(--color-fd-primary);
+  color: var(--color-fd-primary-foreground);
+}
+
+.secondary-action {
+  border: 1px solid var(--color-fd-border);
+  background: var(--color-fd-card);
+}
+
+@media (any-hover: hover) {
+  .primary-action:hover,
+  .secondary-action:hover {
+    transform: translateY(-2px);
+    transition-duration: var(--page-in);
+    transition-timing-function: var(--page-ease-in);
+  }
+
+  .primary-action:hover .page-interactive-part,
+  .secondary-action:hover .page-interactive-part {
+    transition-duration: var(--page-in);
+    transition-timing-function: var(--page-ease-in);
+  }
+}
+
+.primary-action:disabled,
+.secondary-action:disabled {
+  cursor: wait;
+  opacity: 0.72;
+  transform: none;
+}

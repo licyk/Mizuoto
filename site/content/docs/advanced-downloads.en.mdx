@@ -1,0 +1,286 @@
+---
+title: "Model downloads and mirrors"
+description: "Where model files come from, how Mizuoto falls back between sources, resumes and verifies them, and how to use the mizuoto-model mirror or run your own."
+icon: Download
+---
+
+Every model in the catalogue names its repository and a pinned files manifest (`mizuoto/core/engines/manifests/files/*.files.json`): the repository's commit and each file's path, size and SHA-256. Mizuoto fetches only the listed files and checks each one's size and SHA-256, so the files are identical whichever source served them.
+
+## Sources
+
+| `downloads.source` | Address | Notes |
+| --- | --- | --- |
+| `huggingface` (default) | `https://huggingface.co` | The official repositories |
+| `hf-mirror` | `https://hf-mirror.com` | A Hugging Face mirror, often faster in mainland China |
+| `modelscope` | `https://www.modelscope.cn` | ModelScope, for the models that name a ModelScope repository |
+| `custom` | `downloads.endpoint` | Any Hugging Face compatible server (URL form under [Running your own mirror](#running-your-own-mirror)) |
+
+<Tabs items={["Web UI", "Command line"]}>
+<Tab value="Web UI">
+
+**Settings** › **Downloads** › **Download source**; with **Custom**, fill in **Custom endpoint**.
+
+</Tab>
+<Tab value="Command line">
+
+```bash
+mizuoto config set downloads.source hf-mirror
+mizuoto config set downloads.source custom
+mizuoto config set downloads.endpoint https://hf.example.lan
+MIZUOTO_DOWNLOADS__SOURCE=modelscope mizuoto model download qwen3tts/1.7b-base   # this once
+```
+
+</Tab>
+</Tabs>
+
+Models with a ModelScope repository: every Qwen3-TTS, CosyVoice and VoxCPM model, and OmniVoice. CosyVoice's shared file `cosyvoice/wetext` exists on ModelScope only, so it comes from there whatever the source. The others (F5-TTS, GPT-SoVITS, IndexTTS, Fish Speech, the Whisper speech recognition model) and their shared files come from Hugging Face and compatible addresses only. On ModelScope the `master` branch is used (`cosyvoice/wetext` is pinned to a commit); its files are checked against the same sizes and SHA-256. ModelScope may answer several anonymous downloads at once with 403; `downloads.concurrency` 1 gets them.
+
+### Order and fallback
+
+Each file picks its source on its own:
+
+1. With `downloads.repository` set to `mizuoto-model`, the [mizuoto-model mirror](#the-mizuoto-model-mirror) first;
+2. then the source in `downloads.source`;
+3. then the rest of `huggingface`, `hf-mirror`, `modelscope` in that order (with `custom` chosen, `custom` comes before these three).
+
+A source that answers 401, 403 or 404 for a file, or serves it with the wrong size or SHA-256, is left for the next one at once. Other errors (a dropped connection, a timeout, a 5xx) are retried on the same source up to 4 times, after 1, 2, 4 and 8 seconds (30 at most). When every source fails, the job ends with `download_failed` (exit code 12); its detail lists the sources tried and the last errors. The job log has one line per file naming the source it came from.
+
+## Resuming and verification
+
+- A file is written to `<name>.part` and renamed only when its size and SHA-256 match. Downloading again after an interruption resumes with an HTTP Range request; a server that ignores the range starts the file over.
+- A file already present with the right size is not downloaded again.
+- With `downloads.verify_checksums` (**Verify checksums**, on by default) off, only sizes are checked.
+- `downloads.concurrency` (**Files at once**, 1–8, default 2): how many files download at once, the largest first.
+- Download jobs share the `io` resource: four run at once, the others wait (shown as **Waiting for other downloads**).
+
+A model's state:
+
+| State | In the UI | Meaning |
+| --- | --- | --- |
+| `missing` | **Not downloaded** | No folder |
+| `partial` | **Partly downloaded** | A folder without `model.json` (the download did not finish), or a shared file it needs is missing |
+| `downloading` | **Downloading** | Being downloaded |
+| `installed` | **Installed** | `model.json` written (it is written last) |
+| `corrupt` | **Damaged** | A file's size differs, or the last verification failed |
+
+```bash
+mizuoto model verify qwen3tts/1.7b-base    # hash every file and compare with what was installed
+```
+
+Verification lists the damaged files. Since files of the right size are not downloaded again, delete those files (or the whole model with `mizuoto model delete`) and then download again.
+
+### Hugging Face token and proxies
+
+- When `HF_TOKEN` is set in the environment, it is sent as `Authorization: Bearer` to huggingface.co only, never to hf-mirror, ModelScope, a custom endpoint or the mizuoto-model mirror.
+- Downloads use httpx, which reads the standard proxy variables `HTTPS_PROXY`, `HTTP_PROXY`, `ALL_PROXY` and `NO_PROXY`. Set them in the environment that starts `mizuoto webui` or `mizuoto model download`.
+
+## Shared files
+
+Files several models of an engine share (GPT-SoVITS's encoders and text front-end data; IndexTTS-2/2.5's w2v-BERT, semantic codec, CAM++ and BigVGAN; CosyVoice's text normalisation grammars) are shared files, kept in `<models folder>/_assets/<engine>/<name>/` with an `asset.json`.
+
+- They are downloaded with the first model that needs them (the job's steps list them); a model whose shared files are missing is **Partly downloaded**.
+- Manage them on their own in **Models** › **Shared files**, or:
+
+  ```bash
+  mizuoto asset list
+  mizuoto asset download gptsovits/s2d-v2pro
+  mizuoto asset delete gptsovits/g2pw
+  ```
+
+- Some shared files are archives (GPT-SoVITS's G2PW, NLTK data and Open JTalk dictionary): verified, unpacked into the folder, then deleted; verification and new downloads work on the unpacked files. Archive members cannot land outside the target folder.
+
+## Importing a model folder
+
+Model files you already have (an earlier download, another program's copy, your own fine-tune) can be imported instead of downloaded:
+
+```bash
+mizuoto model import ~/models/Qwen3-TTS-12Hz-1.7B-Base             # copied into the models folder
+mizuoto model import ~/models/Qwen3-TTS-12Hz-1.7B-Base --move      # moved
+mizuoto model import ~/finetunes/alice --name alice                # imported as qwen3tts/alice
+```
+
+1. Mizuoto identifies the engine and variant from the folder's files (and a GPT-SoVITS weight's version). A folder it does not recognise is refused.
+2. When the file sizes match a catalogue model's manifest exactly, the folder becomes that catalogue model and every file's SHA-256 is then checked; a mismatch is an error.
+3. Otherwise (or with `--name`) it becomes a user model `<engine>/<name>`; the name cannot be a catalogue model's.
+
+In the web UI: **Models** › **Import a model folder**. It reads a server path, so it works only in a browser on the server's own machine, and the path must lie inside `paths.browse_roots`.
+
+## The mizuoto-model mirror
+
+mizuoto-model is a mirror repository holding the files Mizuoto downloads, laid out as Mizuoto keeps them:
+
+```text
+<engine>/<model>/<path>             e.g. qwen3tts/1.7b-base/model.safetensors
+_assets/<engine>/<asset>/<path>     e.g. _assets/gptsovits/encoders/…
+```
+
+`<path>` is the file's place in the model's folder. Every model is in one repository, so reaching that one repository is enough. The mirror is `licyk/mizuoto-model` on Hugging Face and `licyks/mizuoto-model` on ModelScope; both hold the whole catalogue: every model and shared file, archives and the licence-gated engines included, with their licence and notice files.
+
+<Tabs items={["Web UI", "Command line"]}>
+<Tab value="Web UI">
+
+**Settings** › **Downloads** › **Repository**: **mizuoto-model mirror first**. The mirror is fetched from the place chosen in **Download source**.
+
+</Tab>
+<Tab value="Command line">
+
+```bash
+mizuoto config set downloads.repository mizuoto-model
+mizuoto config set downloads.source modelscope          # the mirror on ModelScope
+mizuoto config set downloads.mirror_repo licyk/mizuoto-model               # the default, on Hugging Face
+mizuoto config set downloads.mirror_repo_modelscope licyks/mizuoto-model   # the default, on ModelScope
+```
+
+</Tab>
+</Tabs>
+
+| Setting | Default | Meaning |
+| --- | --- | --- |
+| `downloads.repository` | `official` | `official`: each model's own repositories; `mizuoto-model`: the mirror first |
+| `downloads.mirror_repo` | `licyk/mizuoto-model` | The mirror repository on Hugging Face, also used through hf-mirror and a custom endpoint |
+| `downloads.mirror_repo_modelscope` | `licyks/mizuoto-model` | The mirror repository on ModelScope, used when `downloads.source` is `modelscope` |
+
+- The mirror is fetched from `downloads.source`: the `main` branch on Hugging Face, hf-mirror and custom endpoints, `master` on ModelScope.
+- It is not pinned to a commit, but each file is checked against the manifest's size and SHA-256 like any other; a file that does not match comes from the official repository.
+- Files the mirror lacks (models it does not hold; archive-type shared files in a mirror made with `build`) come from each model's official repositories, so a partial mirror works.
+
+## Maintaining a mirror
+
+Three scripts, run from a source checkout, make and publish a mirror: `scripts/mirror_models.py` lays out the models installed on this machine, publishes the result and checks it; `scripts/mirror_fetch.py` downloads the whole catalogue into the mirror's layout; `scripts/mirror_readme.py` writes the repository's card and licence files. Publishing is the mirror owner's step: the weights keep their own licences, and `MIRROR.json` names each file's origin.
+
+### `build`: lay out the installed models
+
+```bash
+python scripts/mirror_models.py build ./mizuoto-model                       # every installed model and shared file
+python scripts/mirror_models.py build ./mizuoto-model qwen3tts/1.7b-base gptsovits/encoders
+```
+
+| Argument or option | Meaning |
+| --- | --- |
+| `OUT` | The output folder |
+| `IDS...` | Only these models and shared files (default: every installed one) |
+| `--models-dir <path>` | The models folder; default: the data folder's |
+| `--gated` | Include licence-gated engines (Fish Speech, IndexTTS); their licences may not allow redistribution |
+| `--no-verify` | Check sizes only, not SHA-256 |
+
+- Files are hard-linked where possible, else copied; each is checked against its manifest, and an incomplete or mismatching model is skipped with the reason.
+- `MIRROR.json` (every file's path, size, SHA-256 and official origin: repository, revision, path) and a `README.md` are written.
+- Archive-type shared files are not kept after unpacking, so `build` leaves them out and they come from the official repository; `mirror_fetch.py` includes them.
+
+### `mirror_fetch.py`: the whole catalogue
+
+```bash
+python scripts/mirror_fetch.py ./mizuoto-model --gated                     # every model and shared file
+python scripts/mirror_fetch.py ./mizuoto-model qwen3tts/1.7b-base cosyvoice/wetext
+```
+
+| Argument or option | Default | Meaning |
+| --- | --- | --- |
+| `OUT` | | The output folder |
+| `IDS...` | every one | Only these models and shared files |
+| `--models-dir <path>` | the data folder's models folder | Take verified copies from here; can be given more than once |
+| `--gated` | off | Include licence-gated engines (Fish Speech, IndexTTS); run `mirror_readme.py` afterwards so that their licence and notice files lie beside them |
+| `--workers` | `4` | Files downloaded at once |
+
+- Each file goes where Mizuoto's mirror source asks for it. A copy in a models folder with the same size and SHA-256 is hard-linked (else copied); anything else is downloaded from the official sources by Mizuoto's own downloader: resumed, retried and checked against its SHA-256.
+- Archive-type shared files are kept as published; a machine using the mirror unpacks them after downloading.
+- `HF_TOKEN`, when set, is sent to huggingface.co only.
+- Running it again skips what is already there. `MIRROR.json` (as `build` writes it, archives marked `archive`) is written once every file is in place; when a file fails, the run lists it and exits with 1.
+
+### `mirror_readme.py`: the card and licence files
+
+```bash
+python scripts/mirror_readme.py ./mizuoto-model --repo <you>/mizuoto-model
+```
+
+It reads `MIRROR.json` (from `build` or `mirror_fetch.py`) and writes:
+
+- `README.md`: the Hugging Face card: metadata, how to use the mirror, each engine's licence notes and a table of every model and shared-file folder with its size and origin repositories. It replaces the shorter README that `build` writes;
+- `LICENSES.md`: each engine's licence and its link;
+- for each licence-gated engine in the mirror, its licence text as `<engine>/LICENSE.*` and, for Fish Speech, the `NOTICE.txt` its licence asks for.
+
+`--repo` (default `licyk/mizuoto-model`) goes into the card's licence link, which Hugging Face requires to be an `https` address.
+
+### `upload`: publish
+
+```bash
+python scripts/mirror_models.py upload ./mizuoto-model --repo <you>/mizuoto-model
+python scripts/mirror_models.py upload ./mizuoto-model --repo <you>/mizuoto-model --modelscope --modelscope-repo <you>/mizuoto-model
+```
+
+| Option | Default | Meaning |
+| --- | --- | --- |
+| `--repo` | `licyk/mizuoto-model` | The Hugging Face repository |
+| `--modelscope` | off | After Hugging Face, also upload to ModelScope with `modelscope upload` |
+| `--modelscope-repo` | `licyks/mizuoto-model` | The ModelScope repository |
+
+Uploading to Hugging Face uses `hf upload`, which splits a large folder into several commits and resumes when run again (`hf upload-large-folder` with a `huggingface_hub` older than 2); it needs the `huggingface_hub` command line, after `hf auth login`; ModelScope needs the `modelscope` command line. The folder must hold a `MIRROR.json`.
+
+### `check`: find missing files
+
+```bash
+python scripts/mirror_models.py check --gated --archives                  # licyk/mizuoto-model, everything
+python scripts/mirror_models.py check --modelscope --gated --archives      # licyks/mizuoto-model on ModelScope
+python scripts/mirror_models.py check --repo team/mizuoto-model --endpoint http://192.168.1.10:8000
+```
+
+| Option | Default | Meaning |
+| --- | --- | --- |
+| `--repo` | `licyk/mizuoto-model`; with `--modelscope`, `licyks/mizuoto-model` | The repository to check |
+| `--endpoint` | `https://huggingface.co` | A Hugging Face compatible address |
+| `--modelscope` | off | Check the mirror on ModelScope instead |
+| `--gated` | off | Check the licence-gated engines too |
+| `--archives` | off | Check the archive-type shared files too (a mirror made with `mirror_fetch.py` has them) |
+
+It sends a HEAD request to each catalogue file's URL, the one Mizuoto itself would download, and prints `complete` or the number of missing files per model; the exit code is 1 when anything is missing.
+
+### Running your own mirror
+
+With several machines on a local network, one machine's models can be laid out as a mirror for the others. The URLs Mizuoto requests from a custom endpoint have this form:
+
+```text
+{downloads.endpoint}/{downloads.mirror_repo}/resolve/main/{path}
+```
+
+Any Hugging Face compatible server works, and so does a plain static file server whose folders are laid out as `<repo id>/resolve/main/…`:
+
+<Steps>
+<Step>
+
+On a machine with the models downloaded, build the mirror under `<repo id>/resolve/main`:
+
+```bash
+python scripts/mirror_models.py build /srv/mirror/team/mizuoto-model/resolve/main
+```
+
+Or the whole catalogue, downloaded for it: `python scripts/mirror_fetch.py /srv/mirror/team/mizuoto-model/resolve/main`.
+
+</Step>
+<Step>
+
+Serve `/srv/mirror` with a static file server, for example:
+
+```bash
+python -m http.server 8000 --directory /srv/mirror
+```
+
+A server that supports HTTP Range lets interrupted downloads resume.
+
+</Step>
+<Step>
+
+On the other machines:
+
+```bash
+mizuoto config set downloads.source custom
+mizuoto config set downloads.endpoint http://192.168.1.10:8000
+mizuoto config set downloads.repository mizuoto-model
+mizuoto config set downloads.mirror_repo team/mizuoto-model
+```
+
+</Step>
+</Steps>
+
+Downloads then try this server first; files it lacks (and official repository files the custom address does not serve) come from Hugging Face, hf-mirror and ModelScope in turn. `check --endpoint http://192.168.1.10:8000 --repo team/mizuoto-model` tells whether the mirror is complete.
+
+See [Configuration](/docs/cli-config) for every setting, and the [FAQ](/docs/advanced-faq) for slow or failing downloads.

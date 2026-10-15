@@ -1,0 +1,187 @@
+/*
+ * The one motion system (plan section 7.6). Views and composites use these named transitions
+ * through <Transition name="..."> and never write their own.
+ */
+
+/* fade-through: switching between the four interfaces */
+.fade-through-leave-active {
+  transition: opacity 90ms var(--md-sys-motion-easing-emphasized-accelerate);
+}
+.fade-through-enter-active {
+  transition:
+    opacity 210ms var(--md-sys-motion-easing-emphasized-decelerate) 90ms,
+    transform 210ms var(--md-sys-motion-easing-emphasized-decelerate) 90ms;
+}
+.fade-through-enter-from { opacity: 0; transform: scale(0.92); }
+.fade-through-leave-to { opacity: 0; }
+
+/* shared-axis-x: entering and leaving a folder, hub tabs. --axis-dir is 1 forward, -1 back. */
+.shared-axis-x-enter-active,
+.shared-axis-x-leave-active {
+  transition:
+    opacity var(--md-sys-motion-duration-medium2) var(--md-sys-motion-easing-emphasized),
+    transform var(--md-sys-motion-duration-medium2) var(--md-sys-motion-easing-emphasized);
+}
+.shared-axis-x-leave-active { position: absolute; inset-inline: 0; }
+.shared-axis-x-enter-from { opacity: 0; transform: translateX(calc(30px * var(--axis-dir, 1))); }
+.shared-axis-x-leave-to { opacity: 0; transform: translateX(calc(-30px * var(--axis-dir, 1))); }
+
+/* container: a dialog grows from the card's rectangle (set by transitions.ts), else fades and scales */
+.container-enter-active,
+.container-leave-active {
+  transition:
+    opacity var(--md-sys-motion-duration-medium4) var(--md-sys-motion-easing-emphasized),
+    transform var(--md-sys-motion-duration-medium4) var(--md-sys-motion-easing-emphasized);
+  transform-origin: var(--from-origin, center);
+}
+.container-leave-active { transition-duration: var(--md-sys-motion-duration-short4); }
+.container-enter-from,
+.container-leave-to {
+  opacity: 0;
+  transform: var(--from-transform, scale(0.85));
+}
+
+/* sheet: drawers and side sheets slide from the edge, with a scrim fade */
+.sheet-enter-active,
+.sheet-leave-active {
+  transition: transform var(--md-sys-motion-duration-medium3) var(--md-sys-motion-easing-emphasized);
+}
+.sheet-leave-active { transition-timing-function: var(--md-sys-motion-easing-emphasized-accelerate); transition-duration: var(--md-sys-motion-duration-short4); }
+.sheet-enter-from,
+.sheet-leave-to { transform: translateX(100%); }
+
+.scrim-enter-active,
+.scrim-leave-active { transition: opacity var(--md-sys-motion-duration-medium3) var(--md-sys-motion-easing-standard); }
+.scrim-enter-from,
+.scrim-leave-to { opacity: 0; }
+
+/* list: cards added, removed or reordered (TransitionGroup). Stagger comes from --stagger. */
+.list-move { transition: transform var(--md-sys-motion-duration-medium2) var(--md-sys-motion-easing-emphasized); }
+.list-enter-active {
+  transition:
+    opacity var(--md-sys-motion-duration-medium1) var(--md-sys-motion-easing-emphasized-decelerate),
+    transform var(--md-sys-motion-duration-medium1) var(--md-sys-motion-easing-emphasized-decelerate);
+  transition-delay: var(--stagger, 0ms);
+}
+.list-leave-active {
+  transition: opacity var(--md-sys-motion-duration-short3) var(--md-sys-motion-easing-emphasized-accelerate);
+  position: absolute;
+}
+.list-enter-from { opacity: 0; transform: translateY(8px); }
+.list-leave-to { opacity: 0; }
+
+/* collapse: expanding sections and tree nodes (height set by transitions.ts hooks) */
+.collapse-enter-active,
+.collapse-leave-active {
+  transition:
+    height var(--md-sys-motion-duration-short4) var(--md-sys-motion-easing-standard),
+    opacity var(--md-sys-motion-duration-short4) var(--md-sys-motion-easing-standard);
+  overflow: hidden;
+}
+.collapse-enter-from,
+.collapse-leave-to { opacity: 0; }
+
+/* snackbar */
+.snackbar-enter-active {
+  transition:
+    opacity var(--md-sys-motion-duration-medium1) var(--md-sys-motion-easing-emphasized-decelerate),
+    transform var(--md-sys-motion-duration-medium1) var(--md-sys-motion-easing-emphasized-decelerate);
+}
+.snackbar-leave-active {
+  transition: opacity var(--md-sys-motion-duration-short3) var(--md-sys-motion-easing-emphasized-accelerate);
+}
+.snackbar-enter-from { opacity: 0; transform: translateY(16px); }
+.snackbar-leave-to { opacity: 0; }
+
+/* Interaction state layer shared by project-built interactive components */
+.state-layer { position: relative; isolation: isolate; overflow: hidden; }
+.state-layer::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: currentColor;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity var(--md-sys-motion-duration-short2) var(--md-sys-motion-easing-standard);
+  z-index: -1;
+}
+.state-layer:hover::before { opacity: var(--md-sys-state-hover-state-layer-opacity); }
+.state-layer:focus-visible::before { opacity: var(--md-sys-state-focus-state-layer-opacity); }
+.state-layer:active::before { opacity: var(--md-sys-state-pressed-state-layer-opacity); }
+.state-layer[data-dragging='true']::before { opacity: var(--md-sys-state-dragged-state-layer-opacity); }
+
+.ripple-wave {
+  position: absolute;
+  border-radius: 50%;
+  background: currentColor;
+  opacity: var(--md-sys-state-pressed-state-layer-opacity);
+  transform: scale(0);
+  pointer-events: none;
+  animation: ripple var(--md-sys-motion-duration-long1) var(--md-sys-motion-easing-standard) forwards;
+}
+@keyframes ripple {
+  to { transform: scale(1); opacity: 0; }
+}
+
+@keyframes skeleton-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.55; }
+}
+
+/* Destinations under document.startViewTransition: the same fade through, done by the browser. */
+/* Only the page fades through. The shell (rail, top bar) is the root snapshot and does not animate,
+   so it never moves or flickers between destinations; the content area is its own group
+   (``view-transition-name: app-content`` in AppShell) with the same box before and after. */
+::view-transition-old(root), ::view-transition-new(root) { animation: none; }
+::view-transition-group(app-content) { animation: none; }
+::view-transition-old(app-content) { animation: 90ms var(--md-sys-motion-easing-emphasized-accelerate) both vt-fade-out; }
+::view-transition-new(app-content) { animation: 210ms var(--md-sys-motion-easing-emphasized-decelerate) 90ms both vt-fade-in; }
+@keyframes vt-fade-out { to { opacity: 0; } }
+@keyframes vt-fade-in { from { opacity: 0; transform: scale(0.92); } }
+/* Reduced motion: a short crossfade without the scale, for the system setting and the in-app choice. */
+@keyframes vt-fade-in-flat { from { opacity: 0; } }
+/* The container transform (``morphStyle``): a card and the page it opens are one surface whose box
+   moves between their rectangles, both ways, while its contents fade through, unscaled and pinned
+   to the top left. In time with the page's fade through. Never under reduced motion (no pair). */
+/* Nested in the page's group (``view-transition-group: nearest``, where the browser has it), which
+   clips it to the content area: a long page's box never spills over the frame. */
+::view-transition-group(app-content) { overflow: clip; }
+::view-transition-group(morph) {
+  animation-duration: var(--md-sys-motion-duration-medium2);
+  animation-timing-function: var(--md-sys-motion-easing-emphasized);
+  overflow: clip;
+  border-radius: var(--md-sys-shape-corner-medium);
+  background: var(--md-sys-color-surface-container-low);
+}
+::view-transition-old(morph), ::view-transition-new(morph) { height: 100%; object-fit: none; object-position: top left; mix-blend-mode: normal; }
+::view-transition-old(morph) { animation: 90ms var(--md-sys-motion-easing-emphasized-accelerate) both vt-fade-out; }
+::view-transition-new(morph) { animation: 210ms var(--md-sys-motion-easing-emphasized-decelerate) 90ms both vt-fade-in-flat; }
+@media (prefers-reduced-motion: reduce) {
+  ::view-transition-old(app-content) { animation: 100ms linear both vt-fade-out; }
+  ::view-transition-new(app-content) { animation: 100ms linear both vt-fade-in-flat; }
+}
+:root[data-motion='reduced']::view-transition-old(app-content) { animation: 100ms linear both vt-fade-out; }
+:root[data-motion='reduced']::view-transition-new(app-content) { animation: 100ms linear both vt-fade-in-flat; }
+
+/* Reduced motion: every transition becomes a short fade, and there is no ripple. The rules apply
+   for the system setting and for the in-app choice (data-motion="reduced" on the root). */
+@media (prefers-reduced-motion: reduce) {
+  [class*='-enter-active'],
+  [class*='-leave-active'],
+  .list-move {
+    transition: opacity 100ms linear !important;
+    transition-delay: 0ms !important;
+  }
+  [class*='-enter-from'],
+  [class*='-leave-to'] { transform: none !important; }
+  .ripple-wave { display: none; }
+  * { animation-duration: 0.01ms !important; animation-iteration-count: 1 !important; }
+}
+
+:root[data-motion='reduced'] [class*='-enter-active'], :root[data-motion='reduced'] [class*='-leave-active'], :root[data-motion='reduced'] .list-move {
+    transition: opacity 100ms linear !important;
+    transition-delay: 0ms !important;
+  }
+  :root[data-motion='reduced'] [class*='-enter-from'], :root[data-motion='reduced'] [class*='-leave-to'] { transform: none !important; }
+  :root[data-motion='reduced'] .ripple-wave { display: none; }
+  :root[data-motion='reduced'] * { animation-duration: 0.01ms !important; animation-iteration-count: 1 !important; }

@@ -1,0 +1,278 @@
+# CosyVoice.
+id = "cosyvoice"
+title = "CosyVoice"
+description = "Alibaba Tongyi's LLM + flow-matching TTS: cloning with or without the clip's transcript, preset speakers, instructions (dialects, emotions, speed), voice conversion, and token-level streaming."
+devices = ["cuda", "rocm", "xpu", "mps", "cpu"]
+languages = ["zh", "en", "ja", "ko", "yue"]
+
+[upstream]
+url = "https://github.com/QwenAudio/CosyVoice"
+commit = "074ca6dc9e80a2f424f1f74b48bdd7d3fea531cc"
+
+[licence]
+id = "apache-2.0"
+name = "Apache License 2.0"
+url = "https://github.com/FunAudioLLM/CosyVoice/blob/main/LICENSE"
+
+# Upstream splits long text itself (text_normalize). CosyVoice 3 does not when its system prompt
+# leads the text, so Mizuoto splits for it.
+
+[variants.v1_base]
+title = "CosyVoice 1 (300M)"
+sample_rate = 22050
+capabilities = ["clone", "clone_no_transcript", "voice_conversion", "stream_audio", "speed", "inline_tags", "long_text", "seed"]
+stream_granularity = "token"
+inline_tags = ["[laughter]", "[breath]", "<strong></strong>"]
+
+[variants.v1_base.reference]
+min_seconds = 1.0
+max_seconds = 30.0
+min_sample_rate = 16000
+
+[variants.v1_sft]
+title = "CosyVoice 1 SFT (preset speakers)"
+sample_rate = 22050
+capabilities = ["preset_speaker", "clone", "clone_no_transcript", "voice_conversion", "stream_audio", "speed", "long_text", "seed"]
+stream_granularity = "token"
+speakers = ["中文女", "中文男", "日语男", "粤语女", "英文女", "英文男", "韩语女"]
+
+[variants.v1_sft.reference]
+min_seconds = 1.0
+max_seconds = 30.0
+min_sample_rate = 16000
+
+[variants.v1_instruct]
+title = "CosyVoice 1 Instruct (speakers described)"
+sample_rate = 22050
+capabilities = ["preset_speaker", "instruct", "stream_audio", "speed", "inline_tags", "long_text", "seed"]
+stream_granularity = "token"
+speakers = ["中文女", "中文男", "日语男", "粤语女", "英文女", "英文男", "韩语女"]
+instruct_requires = ["preset"]
+inline_tags = ["[laughter]", "[breath]", "<strong></strong>"]
+
+[variants.v2]
+title = "CosyVoice 2"
+sample_rate = 24000
+capabilities = ["clone", "clone_no_transcript", "instruct", "voice_conversion", "stream_audio", "stream_text_input", "speed", "inline_tags", "long_text", "seed"]
+stream_granularity = "token"
+instruct_requires = ["clone", "clone_no_transcript"]
+inline_tags = ["[laughter]", "[breath]", "<strong></strong>", "<laughter></laughter>"]
+
+[variants.v2.reference]
+min_seconds = 1.0
+max_seconds = 30.0
+min_sample_rate = 16000
+
+[variants.v3]
+title = "Fun-CosyVoice 3"
+sample_rate = 24000
+capabilities = ["clone", "clone_no_transcript", "instruct", "voice_conversion", "stream_audio", "stream_text_input", "speed", "inline_tags", "pronunciation", "seed"]
+stream_granularity = "token"
+instruct_requires = ["clone", "clone_no_transcript"]
+languages = ["zh", "en", "ja", "ko", "de", "es", "fr", "it", "ru", "yue"]
+inline_tags = ["[breath]", "[laughter]", "[cough]", "[clucking]", "[accent]", "[quick_breath]", "[hissing]", "[sigh]", "[vocalized-noise]", "[lipsmack]", "[mn]"]
+
+[variants.v3.reference]
+min_seconds = 1.0
+max_seconds = 30.0
+min_sample_rate = 16000
+
+# -- common parameters ----------------------------------------------------------------
+# The LLM's sampling is fixed in each model's yaml: temperature, top-p and top-k are not taken.
+
+[params.speed]
+target = "speed"
+min = 0.5
+max = 2.0
+step = 0.05
+default = 1.0
+streaming = false
+help = "Speeds the flow up or down (not while streaming)."
+
+[params.text_normalization]
+target = "text_frontend"
+type = "bool"
+default = true
+help = "Spell out numbers and symbols before speaking."
+
+[params.seed]
+target = "seed"
+type = "int"
+min = 0
+max = 4294967295
+
+# -- engine options -------------------------------------------------------------------
+
+[options.system_prompt]
+type = "str"
+default = "You are a helpful assistant."
+variants = ["v3"]
+group = "advanced"
+help = "CosyVoice 3's system prompt, before the prompt text or the instruction."
+
+[load_options.fp16]
+type = "bool"
+default = false
+help = "Half precision on the GPU: faster, slightly different."
+
+[[assets]]
+id = "cosyvoice/wetext"
+title = "Text normalisation grammars"
+description = "WeTextProcessing's Chinese and English normalisation compiled to FSTs (wetext's), which the text frontend uses to write out numbers, dates and units."
+files = { modelscope = "pengzhendong/wetext", modelscope_revision = "030bb1febce0bd0168549a03e181cd9c1d70c799", include = ["zh/tn/tagger.fst", "zh/tn/verbalizer.fst", "en/tn/tagger.fst", "en/tn/verbalizer.fst"], manifest = "cosyvoice-wetext.files.json" }
+
+# -- models ---------------------------------------------------------------------------
+
+[[models]]
+id = "cosyvoice/cosyvoice3-0.5b"
+variant = "v3"
+title = "Fun-CosyVoice 3 0.5B"
+description = "The newest CosyVoice: nine languages and Chinese dialects, pronunciation in pinyin or CMU phones."
+vram_mb = 6000
+recommended = true
+files = { hf = "FunAudioLLM/Fun-CosyVoice3-0.5B-2512", modelscope = "FunAudioLLM/Fun-CosyVoice3-0.5B-2512", exclude = [".gitattributes", "*.md", "asset/*", "*.batch.onnx", "flow.decoder.estimator.*.onnx", "CosyVoice-BlankEN/model.safetensors", "llm.rl.pt"], manifest = "cosyvoice3-0.5b.files.json" }
+assets = ["cosyvoice/wetext"]
+
+[[models]]
+id = "cosyvoice/cosyvoice2-0.5b"
+variant = "v2"
+title = "CosyVoice 2 0.5B"
+description = "Cloning, instructions and bidirectional streaming."
+vram_mb = 5000
+recommended = true
+files = { hf = "FunAudioLLM/CosyVoice2-0.5B", modelscope = "iic/CosyVoice2-0.5B", exclude = [".gitattributes", "*.md", "asset/*", "*.batch.onnx", "flow.decoder.estimator.*.onnx", "CosyVoice-BlankEN/model.safetensors"], manifest = "cosyvoice2-0.5b.files.json" }
+assets = ["cosyvoice/wetext"]
+
+[[models]]
+id = "cosyvoice/cosyvoice-300m"
+variant = "v1_base"
+title = "CosyVoice 300M"
+description = "The first CosyVoice: cloning and cross-lingual cloning."
+vram_mb = 3500
+files = { hf = "FunAudioLLM/CosyVoice-300M", modelscope = "iic/CosyVoice-300M", exclude = [".gitattributes", "*.md", "asset/*", "flow.decoder.estimator.*.onnx"], manifest = "cosyvoice-300m.files.json" }
+assets = ["cosyvoice/wetext"]
+
+[[models]]
+id = "cosyvoice/cosyvoice-300m-sft"
+variant = "v1_sft"
+title = "CosyVoice 300M SFT"
+description = "Seven preset speakers (Chinese, English, Japanese, Cantonese, Korean)."
+vram_mb = 3500
+files = { hf = "FunAudioLLM/CosyVoice-300M-SFT", modelscope = "iic/CosyVoice-300M-SFT", exclude = [".gitattributes", "*.md", "asset/*", ".DS_Store", "flow.decoder.estimator.*.onnx"], manifest = "cosyvoice-300m-sft.files.json" }
+assets = ["cosyvoice/wetext"]
+
+[[models]]
+id = "cosyvoice/cosyvoice-300m-instruct"
+variant = "v1_instruct"
+title = "CosyVoice 300M Instruct"
+description = "The preset speakers, steered by a description of the speaker and the delivery."
+vram_mb = 3500
+files = { hf = "FunAudioLLM/CosyVoice-300M-Instruct", modelscope = "iic/CosyVoice-300M-Instruct", exclude = [".gitattributes", "*.md", "asset/*", "flow.decoder.estimator.*.onnx"], manifest = "cosyvoice-300m-instruct.files.json" }
+assets = ["cosyvoice/wetext"]
+
+[training.llm]
+title = "Fine-tune the language model"
+description = "Upstream's LibriTTS recipe: speaker embeddings, speech tokens and parquet shards, then the text-to-token LLM trained further (cosyvoice/bin/train.py), saved as a new model. Prosody and pronunciation follow the dataset."
+variants = ["v1_base", "v2", "v3"]
+export = "model"
+min_seconds = 60.0
+stages = [
+    { id = "features", title = "Embeddings and tokens", help = "CAM++ embeddings, speech tokens and parquet shards (the recipe's stages 0–3).", uses = [] },
+    { id = "llm", title = "Train the LLM", uses = ["epochs", "learning_rate", "grad_accumulation"] },
+    { id = "export", title = "Export the model", uses = ["preview_text"] },
+]
+
+[training.llm.hyperparams.epochs]
+type = "int"
+default = 10
+min = 1
+max = 1000
+group = "basic"
+help = "Passes over the dataset, for each part trained."
+
+[training.llm.hyperparams.learning_rate]
+type = "float"
+default = 0.00001
+min = 0.0000001
+max = 0.001
+group = "basic"
+help = "Upstream's recipe fine-tunes at 1e-5."
+
+[training.llm.hyperparams.grad_accumulation]
+type = "int"
+default = 2
+min = 1
+max = 64
+help = "Batches per optimiser update (upstream: 2)."
+
+[training.llm.hyperparams.workers]
+type = "int"
+default = 2
+min = 0
+max = 16
+help = "Data-loading processes."
+
+[training.llm.hyperparams.preview_text]
+type = "str"
+default = ""
+help = "What the preview says (empty: a dataset clip's text)."
+
+[training.llm.hyperparams.gradient_checkpointing]
+type = "enum"
+default = "auto"
+choices = ["auto", "off", "blocks", "every:2", "every:4"]
+help = "Keep only each block's input and run it again in the backward pass: less GPU memory for about a third more time, the same results. auto follows Settings › Training › Memory."
+
+[training.llm_flow]
+title = "Fine-tune the LLM and the flow"
+description = "As the language-model fine-tune, then the flow-matching decoder as well: the voice's timbre follows the dataset too."
+variants = ["v1_base", "v2", "v3"]
+export = "model"
+min_seconds = 60.0
+stages = [
+    { id = "features", title = "Embeddings and tokens", help = "CAM++ embeddings, speech tokens and parquet shards (the recipe's stages 0–3).", uses = [] },
+    { id = "llm", title = "Train the LLM", uses = ["epochs", "learning_rate", "grad_accumulation"] },
+    { id = "flow", title = "Train the flow", uses = ["epochs", "learning_rate", "grad_accumulation"] },
+    { id = "export", title = "Export the model", uses = ["preview_text"] },
+]
+
+[training.llm_flow.hyperparams.epochs]
+type = "int"
+default = 10
+min = 1
+max = 1000
+group = "basic"
+help = "Passes over the dataset, for each part trained."
+
+[training.llm_flow.hyperparams.learning_rate]
+type = "float"
+default = 0.00001
+min = 0.0000001
+max = 0.001
+group = "basic"
+help = "Upstream's recipe fine-tunes at 1e-5."
+
+[training.llm_flow.hyperparams.grad_accumulation]
+type = "int"
+default = 2
+min = 1
+max = 64
+help = "Batches per optimiser update (upstream: 2)."
+
+[training.llm_flow.hyperparams.workers]
+type = "int"
+default = 2
+min = 0
+max = 16
+help = "Data-loading processes."
+
+[training.llm_flow.hyperparams.preview_text]
+type = "str"
+default = ""
+help = "What the preview says (empty: a dataset clip's text)."
+
+[training.llm_flow.hyperparams.gradient_checkpointing]
+type = "enum"
+default = "auto"
+choices = ["auto", "off", "blocks", "every:2", "every:4"]
+help = "Keep only each block's input and run it again in the backward pass: less GPU memory for about a third more time, the same results. auto follows Settings › Training › Memory."

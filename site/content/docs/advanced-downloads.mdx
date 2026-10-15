@@ -1,0 +1,286 @@
+---
+title: "模型下载与镜像"
+description: "模型文件从哪里下载、按什么顺序换来源、怎样续传和校验，以及 mizuoto-model 镜像和自建镜像的方法。"
+icon: Download
+---
+
+模型目录中的每个模型都写明了它的仓库，以及一份固定版本的文件清单（`mizuoto/core/engines/manifests/files/*.files.json`）：仓库的提交、每个文件的路径、大小和 SHA-256。下载时 Mizuoto 只取清单里的文件，下载完逐个核对大小和 SHA-256，所以无论从哪个来源下载，得到的文件都完全相同。
+
+## 下载来源
+
+| `downloads.source` | 地址 | 说明 |
+| --- | --- | --- |
+| `huggingface`（默认） | `https://huggingface.co` | 官方仓库 |
+| `hf-mirror` | `https://hf-mirror.com` | Hugging Face 的镜像，在中国大陆通常更快 |
+| `modelscope` | `https://www.modelscope.cn` | 魔搭社区，只用于写明了 ModelScope 仓库的模型 |
+| `custom` | `downloads.endpoint` | 任何与 Hugging Face 兼容的服务器（地址形式见[自建镜像](#自建镜像)） |
+
+<Tabs items={["Web UI", "命令行"]}>
+<Tab value="Web UI">
+
+**设置** › **下载** › **下载来源**；选 **自定义** 时填写 **自定义地址**。
+
+</Tab>
+<Tab value="命令行">
+
+```bash
+mizuoto config set downloads.source hf-mirror
+mizuoto config set downloads.source custom
+mizuoto config set downloads.endpoint https://hf.example.lan
+MIZUOTO_DOWNLOADS__SOURCE=modelscope mizuoto model download qwen3tts/1.7b-base   # 只是这一次
+```
+
+</Tab>
+</Tabs>
+
+在 ModelScope 上有仓库的模型：Qwen3-TTS、CosyVoice 和 VoxCPM 的全部模型，以及 OmniVoice。CosyVoice 的共享文件 `cosyvoice/wetext` 只在 ModelScope 上有，所以无论选哪个来源都从那里下载。其他模型（F5-TTS、GPT-SoVITS、IndexTTS、Fish Speech、语音识别的 Whisper）和它们的共享文件只来自 Hugging Face 及其兼容地址。ModelScope 上取 `master` 分支（`cosyvoice/wetext` 固定在一个提交），文件同样按清单里的大小和 SHA-256 核对。ModelScope 可能对同时进行的多个匿名下载返回 403；把 `downloads.concurrency` 设为 1 即可。
+
+### 来源的顺序与回退
+
+每个文件单独选择来源：
+
+1. `downloads.repository` 为 `mizuoto-model` 时，先试 [mizuoto-model 镜像](#mizuoto-model-镜像)；
+2. 然后是 `downloads.source` 选中的来源；
+3. 然后依次是其余的 `huggingface`、`hf-mirror`、`modelscope`（选了 `custom` 时，`custom` 排在这三者之前）。
+
+某个来源对一个文件返回 401、403 或 404，或者给出的文件大小、SHA-256 不对时，立即换下一个来源；其他错误（网络中断、超时、5xx）在同一来源重试，最多 4 次，间隔 1、2、4、8 秒（最长 30 秒）。所有来源都失败时任务以 `download_failed`（退出码 12）结束，错误详情列出试过的来源和最后几条错误。任务日志里每个文件记一行，写明它来自哪个来源。
+
+## 续传与校验
+
+- 文件先写到 `<文件名>.part`，大小和 SHA-256 都对上后才改名。中断后再次下载时用 HTTP Range 从断点继续；服务器不支持 Range 时从头下载。
+- 已经存在且大小正确的文件不会重新下载。
+- `downloads.verify_checksums`（**校验文件**，默认开）关闭后只核对大小，不计算 SHA-256。
+- `downloads.concurrency`（**同时下载的文件数**，1–8，默认 2）：同时下载几个文件，大文件优先。
+- 下载任务占用 `io` 资源，最多 4 个下载任务同时进行，其余排队（界面显示 **等待其他下载**）。
+
+模型的状态：
+
+| 状态 | 界面 | 含义 |
+| --- | --- | --- |
+| `missing` | **未下载** | 没有文件夹 |
+| `partial` | **部分下载** | 有文件夹但没有 `model.json`（下载未完成），或它需要的共享文件还没下载 |
+| `downloading` | **下载中** | 正在下载 |
+| `installed` | **已安装** | `model.json` 已写入（它在最后写） |
+| `corrupt` | **已损坏** | 某个文件大小不对，或上次校验失败 |
+
+```bash
+mizuoto model verify qwen3tts/1.7b-base    # 逐个计算 SHA-256，与安装时的记录比较
+```
+
+校验会列出损坏的文件。因为大小正确的文件不会重新下载，修复时先删除这些文件（或用 `mizuoto model delete` 删除整个模型），再下载一次。
+
+### Hugging Face 令牌与代理
+
+- 设置了环境变量 `HF_TOKEN` 时，它只作为 `Authorization: Bearer` 发送给 huggingface.co，不会发给 hf-mirror、ModelScope、自定义地址或 mizuoto-model 镜像。
+- 下载使用 httpx，读取标准的代理环境变量 `HTTPS_PROXY`、`HTTP_PROXY`、`ALL_PROXY` 和 `NO_PROXY`。在启动 `mizuoto webui` 或 `mizuoto model download` 的环境里设置它们即可。
+
+## 共享文件
+
+一个引擎的多个模型共用的文件（GPT-SoVITS 的编码器和文本前端数据，IndexTTS-2/2.5 的 w2v-BERT、语义编解码器、CAM++、BigVGAN，CosyVoice 的文本规范化语法等）是“共享文件”，放在 `<模型文件夹>/_assets/<引擎>/<名称>/`，带一个 `asset.json`。
+
+- 下载第一个需要它们的模型时一起下载（任务的步骤里会列出）；缺少共享文件的模型显示为 **部分下载**。
+- 单独管理：**模型** › **共享文件**，或命令行：
+
+  ```bash
+  mizuoto asset list
+  mizuoto asset download gptsovits/s2d-v2pro
+  mizuoto asset delete gptsovits/g2pw
+  ```
+
+- 有些共享文件是压缩包（GPT-SoVITS 的 G2PW、NLTK 数据、Open JTalk 词典）：下载并校验后解压到文件夹里，再删除压缩包，校验和重新下载针对解压出的文件。解压时成员不能跑出目标文件夹。
+
+## 导入模型文件夹
+
+已经在别处有模型文件（以前下载过、别的程序里用过、自己微调的），可以导入而不重新下载：
+
+```bash
+mizuoto model import ~/models/Qwen3-TTS-12Hz-1.7B-Base             # 复制进模型文件夹
+mizuoto model import ~/models/Qwen3-TTS-12Hz-1.7B-Base --move      # 移动
+mizuoto model import ~/finetunes/alice --name alice                # 作为 qwen3tts/alice 导入
+```
+
+1. Mizuoto 根据文件夹里的文件识别引擎和变体，GPT-SoVITS 权重还会识别版本。识别不出时报错。
+2. 文件大小与某个目录模型的清单完全一致时，导入为这个目录模型，然后逐个核对 SHA-256；有文件不一致则报错。
+3. 否则（或给了 `--name`）导入为用户模型 `<引擎>/<名称>`；名称不能与目录模型重名。
+
+网页界面：**模型** › **导入模型文件夹**。它要读服务器上的路径，只在服务器本机的浏览器中可用，路径还要在 `paths.browse_roots` 之内。
+
+## mizuoto-model 镜像
+
+mizuoto-model 是一个镜像仓库，按 Mizuoto 保存的方式存放它下载的文件：
+
+```text
+<引擎>/<模型>/<路径>              例如 qwen3tts/1.7b-base/model.safetensors
+_assets/<引擎>/<共享文件>/<路径>   例如 _assets/gptsovits/encoders/…
+```
+
+`<路径>` 是文件在模型文件夹中的位置。所有模型的文件都在一个仓库里，所以只需能访问这一个仓库。镜像在 Hugging Face 上是 `licyk/mizuoto-model`，在 ModelScope 上是 `licyks/mizuoto-model`，两者都收录了整个目录：所有模型和共享文件，包括压缩包和需要接受许可的引擎（附带它们的许可和声明文件）。
+
+<Tabs items={["Web UI", "命令行"]}>
+<Tab value="Web UI">
+
+**设置** › **下载** › **仓库** 选 **优先使用 mizuoto-model 镜像**。镜像从 **下载来源** 选中的地方访问。
+
+</Tab>
+<Tab value="命令行">
+
+```bash
+mizuoto config set downloads.repository mizuoto-model
+mizuoto config set downloads.source modelscope          # 从 ModelScope 上的镜像下载
+mizuoto config set downloads.mirror_repo licyk/mizuoto-model               # 默认值，Hugging Face 上的镜像
+mizuoto config set downloads.mirror_repo_modelscope licyks/mizuoto-model   # 默认值，ModelScope 上的镜像
+```
+
+</Tab>
+</Tabs>
+
+| 设置 | 默认值 | 说明 |
+| --- | --- | --- |
+| `downloads.repository` | `official` | `official`：各模型自己的仓库；`mizuoto-model`：先试镜像 |
+| `downloads.mirror_repo` | `licyk/mizuoto-model` | Hugging Face 上的镜像仓库，通过 hf-mirror 和自定义地址访问时也用它 |
+| `downloads.mirror_repo_modelscope` | `licyks/mizuoto-model` | ModelScope 上的镜像仓库，`downloads.source` 为 `modelscope` 时使用 |
+
+- 镜像在 `downloads.source` 选中的地方访问：Hugging Face、hf-mirror 和自定义地址取 `main` 分支，ModelScope 取 `master` 分支。
+- 镜像不按提交固定版本，但每个文件同样按清单核对大小和 SHA-256；不对的文件从官方仓库下载。
+- 镜像中没有的文件（未收录的模型；用 `build` 做的镜像中压缩包形式的共享文件）自动从各模型的官方仓库下载，所以不完整的镜像也能用。
+
+## 维护镜像
+
+三个脚本（在源码目录中运行）用来制作和发布镜像：`scripts/mirror_models.py` 把本机已安装的模型整理成镜像，并发布或检查它；`scripts/mirror_fetch.py` 按镜像的布局下载整个目录；`scripts/mirror_readme.py` 写出仓库的说明页和许可文件。发布镜像是镜像维护者的事：权重保留各自的许可，`MIRROR.json` 写明每个文件的来源。
+
+### `build`：整理已安装的模型
+
+```bash
+python scripts/mirror_models.py build ./mizuoto-model                       # 全部已安装的模型和共享文件
+python scripts/mirror_models.py build ./mizuoto-model qwen3tts/1.7b-base gptsovits/encoders
+```
+
+| 参数或选项 | 说明 |
+| --- | --- |
+| `OUT` | 输出文件夹 |
+| `IDS...` | 只整理这些模型和共享文件（默认全部已安装的） |
+| `--models-dir <路径>` | 模型文件夹，默认为数据文件夹中的模型文件夹 |
+| `--gated` | 包含需要接受许可的引擎（Fish Speech、IndexTTS）；它们的许可可能不允许再分发 |
+| `--no-verify` | 只核对大小，不计算 SHA-256 |
+
+- 文件尽量用硬链接，不能时复制；每个文件都按清单核对，不完整或不一致的模型会跳过并说明原因。
+- 写出 `MIRROR.json`（每个文件的路径、大小、SHA-256 和官方来源：仓库、提交、路径）和一个 `README.md`。
+- 压缩包形式的共享文件解压后不再保留压缩包，所以 `build` 不收录它们，它们从官方仓库下载；`mirror_fetch.py` 会收录。
+
+### `mirror_fetch.py`：下载整个目录
+
+```bash
+python scripts/mirror_fetch.py ./mizuoto-model --gated                     # 全部模型和共享文件
+python scripts/mirror_fetch.py ./mizuoto-model qwen3tts/1.7b-base cosyvoice/wetext
+```
+
+| 参数或选项 | 默认值 | 说明 |
+| --- | --- | --- |
+| `OUT` | | 输出文件夹 |
+| `IDS...` | 全部 | 只下载这些模型和共享文件 |
+| `--models-dir <路径>` | 数据文件夹中的模型文件夹 | 从这里取核对无误的副本；可以给多次 |
+| `--gated` | 关 | 包含需要接受许可的引擎（Fish Speech、IndexTTS）；之后运行 `mirror_readme.py`，让它们的许可和声明文件放在旁边 |
+| `--workers` | `4` | 同时下载的文件数 |
+
+- 每个文件放在 Mizuoto 的镜像来源请求它的位置。模型文件夹里大小和 SHA-256 都一致的副本直接硬链接（不能时复制）；其余文件用 Mizuoto 自己的下载器从官方来源下载：断点续传、失败重试、核对 SHA-256。
+- 压缩包形式的共享文件按发布时的样子保留；使用镜像的机器下载后自己解压。
+- 设置了 `HF_TOKEN` 时，它只发送给 huggingface.co。
+- 再次运行会跳过已有的文件。所有文件就位后写出 `MIRROR.json`（与 `build` 的格式相同，压缩包标为 `archive`）；有文件失败时列出它们，退出码为 1。
+
+### `mirror_readme.py`：说明页和许可文件
+
+```bash
+python scripts/mirror_readme.py ./mizuoto-model --repo <你的账号>/mizuoto-model
+```
+
+读取 `MIRROR.json`（来自 `build` 或 `mirror_fetch.py`），写出：
+
+- `README.md`：Hugging Face 的模型说明页，包括元数据、镜像的用法、各引擎的许可说明，以及每个模型和共享文件文件夹的大小与来源仓库表。它取代 `build` 写的简短 README；
+- `LICENSES.md`：每个引擎的许可及链接；
+- 镜像中每个需要接受许可的引擎，把许可全文写成 `<引擎>/LICENSE.*`；Fish Speech 另有其许可要求的 `NOTICE.txt`。
+
+`--repo`（默认 `licyk/mizuoto-model`）用于说明页中的许可链接，Hugging Face 要求它是 `https` 地址。
+
+### `upload`：发布
+
+```bash
+python scripts/mirror_models.py upload ./mizuoto-model --repo <你的账号>/mizuoto-model
+python scripts/mirror_models.py upload ./mizuoto-model --repo <你的账号>/mizuoto-model --modelscope --modelscope-repo <你的账号>/mizuoto-model
+```
+
+| 选项 | 默认值 | 说明 |
+| --- | --- | --- |
+| `--repo` | `licyk/mizuoto-model` | Hugging Face 上的仓库 |
+| `--modelscope` | 关 | 上传到 Hugging Face 之后，再用 `modelscope upload` 上传到 ModelScope |
+| `--modelscope-repo` | `licyks/mizuoto-model` | ModelScope 上的仓库 |
+
+上传到 Hugging Face 使用 `hf upload`，它把大文件夹分成多次提交，再次运行时接着上传（`huggingface_hub` 低于 2 时用 `hf upload-large-folder`）；需要 `huggingface_hub` 的命令行并已 `hf auth login`；上传到 ModelScope 需要 `modelscope` 命令行。输出文件夹里必须有 `MIRROR.json`。
+
+### `check`：检查缺少的文件
+
+```bash
+python scripts/mirror_models.py check --gated --archives                  # licyk/mizuoto-model，检查全部
+python scripts/mirror_models.py check --modelscope --gated --archives      # ModelScope 上的 licyks/mizuoto-model
+python scripts/mirror_models.py check --repo team/mizuoto-model --endpoint http://192.168.1.10:8000
+```
+
+| 选项 | 默认值 | 说明 |
+| --- | --- | --- |
+| `--repo` | `licyk/mizuoto-model`；加 `--modelscope` 时为 `licyks/mizuoto-model` | 要检查的仓库 |
+| `--endpoint` | `https://huggingface.co` | 与 Hugging Face 兼容的地址 |
+| `--modelscope` | 关 | 改为检查 ModelScope 上的镜像 |
+| `--gated` | 关 | 也检查需要接受许可的引擎 |
+| `--archives` | 关 | 也检查压缩包形式的共享文件（用 `mirror_fetch.py` 做的镜像收录了它们） |
+
+对目录里每个文件的地址（即 Mizuoto 自己下载时请求的地址）发一个 HEAD 请求，逐个模型打印 `complete` 或缺少几个文件；有缺少时退出码为 1。
+
+### 自建镜像
+
+局域网里多台机器使用 Mizuoto 时，可以把一台机器上的模型整理成镜像，让其他机器从它下载。Mizuoto 向自定义地址请求的 URL 形式是：
+
+```text
+{downloads.endpoint}/{downloads.mirror_repo}/resolve/main/{路径}
+```
+
+所以任何与 Hugging Face 兼容的服务器都可以；也可以用普通的静态文件服务器，只要目录结构是 `<仓库 id>/resolve/main/…`：
+
+<Steps>
+<Step>
+
+在已下载好模型的机器上整理镜像，放到 `<仓库 id>/resolve/main` 下：
+
+```bash
+python scripts/mirror_models.py build /srv/mirror/team/mizuoto-model/resolve/main
+```
+
+也可以为它下载整个目录：`python scripts/mirror_fetch.py /srv/mirror/team/mizuoto-model/resolve/main`。
+
+</Step>
+<Step>
+
+用静态文件服务器提供 `/srv/mirror`，例如：
+
+```bash
+python -m http.server 8000 --directory /srv/mirror
+```
+
+服务器最好支持 HTTP Range，中断的下载才能续传。
+
+</Step>
+<Step>
+
+在其他机器上：
+
+```bash
+mizuoto config set downloads.source custom
+mizuoto config set downloads.endpoint http://192.168.1.10:8000
+mizuoto config set downloads.repository mizuoto-model
+mizuoto config set downloads.mirror_repo team/mizuoto-model
+```
+
+</Step>
+</Steps>
+
+之后下载模型时先找这台服务器；它没有的文件（以及 `custom` 地址上找不到的官方仓库文件）依次从 Hugging Face、hf-mirror、ModelScope 下载。可以用 `check --endpoint http://192.168.1.10:8000 --repo team/mizuoto-model` 确认镜像是否完整。
+
+相关设置的完整列表见 [配置与环境变量](/docs/cli-config)；下载慢或失败的常见原因见 [常见问题](/docs/advanced-faq)。

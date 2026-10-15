@@ -1,0 +1,85 @@
+/*
+ * Homepage design tokens.
+ *
+ * `--page-nav` lives on `:root` because `html:has(.paged)` needs it for
+ * `scroll-padding-top`, and custom properties on `.paged` are not visible
+ * to the `html` element.
+ */
+
+:root {
+  /* fumadocs HomeLayout header is `sticky h-14 top-0` */
+  --page-nav: 3.5rem;
+
+  /*
+   * Motion timing lives on :root because shared controls (`.primary-action`,
+   * the docs) render outside `.paged` and must resolve the same
+   * tokens.
+   *
+   * The leave duration is deliberately longer than the enter duration so a
+   * pointer leaving an element reads as a settle rather than a cut.
+   */
+  --page-in: 200ms;
+  --page-out: 340ms;
+  --page-ease-in: cubic-bezier(0.32, 0.72, 0, 1);
+  --page-ease-out: cubic-bezier(0.33, 0, 0.2, 1);
+  --page-enter: 620ms;
+  --page-ease-enter: cubic-bezier(0.22, 1, 0.36, 1);
+  --page-stagger-step: 70ms;
+}
+
+.paged {
+  /* palette */
+  --page-accent: #4f6b3a;
+  --page-accent-strong: #3b5229;
+  --page-accent-soft: color-mix(in srgb, var(--page-accent) 12%, transparent);
+  /* Text on an accent fill (the primary buttons). */
+  --page-on-accent: #ffffff;
+  --page-surface: color-mix(in srgb, var(--color-fd-card) 88%, transparent);
+  --page-surface-strong: color-mix(in srgb, var(--color-fd-card) 96%, transparent);
+  --page-ink: #191d16;
+  --page-preview-bg: #11140e;
+  --page-preview-surface: #1d211a;
+  --page-preview-border: rgb(255 255 255 / 9%);
+
+  /* layout */
+  --page-section-min: calc(100svh - var(--page-nav));
+  --page-gutter: clamp(1.25rem, 4vw, 3rem);
+  --page-shell-width: 1200px;
+
+  /*
+   * Dual-axis fluid unit. It contracts when EITHER axis is tight, so a short
+   * wide window (1920x720) scales type down instead of clipping section
+   * content. Every fluid size on the homepage is derived from this.
+   */
+  --page-fluid: min(1vw, 1.7vh);
+  --page-display: clamp(2.25rem, calc(1.6rem + 3.4 * var(--page-fluid)), 4.25rem);
+  --page-title: clamp(1.55rem, calc(1.25rem + 1.35 * var(--page-fluid)), 2.9rem);
+  --page-lead: clamp(0.9rem, calc(0.86rem + 0.3 * var(--page-fluid)), 1.12rem);
+  --page-body: clamp(0.8rem, calc(0.78rem + 0.12 * var(--page-fluid)), 0.88rem);
+  --page-step: clamp(0.7rem, calc(0.45rem + 0.62 * var(--page-fluid)), 1.6rem);
+
+  /* Reveal stagger index; each `.page-reveal` overrides it inline. */
+  --page-stagger: 0;
+
+  color: var(--color-fd-foreground);
+}
+
+.dark .paged {
+  --page-accent: #acd28e;
+  --page-accent-strong: #c8eea8;
+  --page-accent-soft: color-mix(in srgb, var(--page-accent) 14%, transparent);
+  --page-on-accent: #1a3705;
+  --page-surface: color-mix(in srgb, #1d211a 88%, transparent);
+  --page-surface-strong: #191d16;
+  --page-ink: #f5f8ee;
+}
+
+/*
+ * Below a real height floor, filling the viewport produces stretched, mostly
+ * empty sections. Fall back to content-driven height there.
+ */
+@media (max-height: 600px) {
+  .paged {
+    --page-section-min: auto;
+  }
+}

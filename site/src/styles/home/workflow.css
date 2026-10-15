@@ -1,0 +1,181 @@
+.home-workflow-grid {
+  position: relative;
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0;
+  margin: clamp(1.5rem, 5vh, 3rem) 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.home-workflow-grid > li {
+  position: relative;
+  min-width: 0;
+  padding: 0 1.35rem;
+  border-left: 1px solid var(--color-fd-border);
+}
+
+.home-workflow-grid > li:first-child {
+  padding-left: 0;
+  border-left: 0;
+}
+
+/*
+ * The connector is drawn on the reveal wrapper itself, so its scrub is part of
+ * the enter channel and never interacts with hover timing.
+ */
+.home-workflow-grid > li:not(:last-child)::after {
+  position: absolute;
+  top: 4rem;
+  right: -1px;
+  left: 4.5rem;
+  height: 1px;
+  background: linear-gradient(90deg, var(--page-accent), transparent);
+  content: "";
+  transform: scaleX(var(--page-connector, 1));
+  transform-origin: left;
+}
+
+@supports not (animation-timeline: view()) {
+  .home-workflow-grid > li:not(:last-child)::after {
+    --page-connector: 1;
+    transition: transform var(--page-enter) var(--page-ease-enter)
+      calc(var(--page-stagger, 0) * var(--page-stagger-step));
+  }
+
+  .home-workflow-grid > li.is-reveal-pending:not(:last-child)::after {
+    --page-connector: 0;
+  }
+}
+
+.home-workflow-number {
+  color: color-mix(in srgb, var(--page-accent-strong) 70%, var(--color-fd-muted-foreground));
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 0.68rem;
+}
+
+.home-workflow-icon {
+  display: inline-flex;
+  width: 2.7rem;
+  height: 2.7rem;
+  align-items: center;
+  justify-content: center;
+  margin-top: clamp(1rem, 3vh, 1.8rem);
+  border: 1px solid color-mix(in srgb, var(--page-accent) 18%, var(--color-fd-border));
+  border-radius: 0.78rem;
+  background: var(--page-accent-soft);
+  color: var(--page-accent-strong);
+}
+
+.home-workflow-icon svg {
+  width: 1.1rem;
+  height: 1.1rem;
+}
+
+.home-workflow-grid h3 {
+  margin-top: 1.2rem;
+  font-size: 1rem;
+  font-weight: 660;
+}
+
+.home-workflow-grid p {
+  margin-top: 0.6rem;
+  color: var(--color-fd-muted-foreground);
+  font-size: var(--page-body);
+  line-height: 1.7;
+  text-wrap: pretty;
+}
+
+@container page-section (max-width: 58rem) {
+  .home-workflow-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: clamp(1.25rem, 3vh, 2rem) 0;
+  }
+
+  .home-workflow-grid > li:not(:last-child)::after {
+    display: none;
+  }
+
+  .home-workflow-grid > li:nth-child(3) {
+    padding-left: 0;
+    border-left: 0;
+  }
+}
+
+/* Below two columns the row becomes a vertical timeline. */
+@container page-section (max-width: 34rem) {
+  .home-workflow-grid {
+    grid-template-columns: 1fr;
+    gap: 0;
+  }
+
+  .home-workflow-grid > li,
+  .home-workflow-grid > li:first-child,
+  .home-workflow-grid > li:nth-child(3) {
+    padding: clamp(0.9rem, 2.5vh, 1.4rem) 0;
+    border-top: 1px solid var(--color-fd-border);
+    border-left: 0;
+  }
+
+  .home-workflow-grid > li:last-child {
+    padding-bottom: 0;
+  }
+
+  .home-workflow-icon {
+    margin-top: 0.85rem;
+  }
+}
+
+/*
+ * The step body is the interactive element; the `<li>` above it is the reveal
+ * wrapper and stays out of the interaction channel.
+ */
+.home-workflow-step {
+  display: block;
+  height: 100%;
+  border-radius: 0.8rem;
+}
+
+@media (any-hover: hover) {
+  .home-workflow-step:hover {
+    transform: translateY(-3px);
+  }
+
+  .home-workflow-step:hover .home-workflow-icon {
+    border-color: color-mix(in srgb, var(--page-accent) 42%, var(--color-fd-border));
+    background: color-mix(in srgb, var(--page-accent) 20%, transparent);
+    transform: scale(1.06) rotate(-3deg);
+  }
+}
+
+/*
+ * Connector draw. The line is a pseudo-element of the step, so it borrows a
+ * named view timeline from the step itself rather than trying to resolve
+ * `view()` against its own one-pixel box.
+ *
+ * If the named lookup is unsupported the connector simply stays drawn, which
+ * is the state it had before.
+ */
+@supports (animation-timeline: view()) {
+  @media not (prefers-reduced-motion: reduce) {
+    .home-workflow-grid > li {
+      view-timeline: --workflow-step block;
+    }
+
+    .home-workflow-grid > li:not(:last-child)::after {
+      animation: page-connector-draw linear both;
+      animation-timeline: --workflow-step;
+      animation-range: entry 45% entry 95%;
+    }
+  }
+}
+
+@keyframes page-connector-draw {
+  from {
+    transform: scaleX(0);
+  }
+
+  to {
+    transform: scaleX(1);
+  }
+}

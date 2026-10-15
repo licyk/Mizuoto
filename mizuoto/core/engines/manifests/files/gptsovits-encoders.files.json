@@ -1,0 +1,41 @@
+{
+ "repo": "lj1995/GPT-SoVITS",
+ "revision": "8f8857563c040d542de108a2c18b0425abd6c9c5",
+ "files": [
+  {
+   "path": "chinese-hubert-base/config.json",
+   "size": 1449,
+   "sha256": "c3e5060a1277e0f078cc6be9da4528a605dba6ece93018981fe2c820e5c7b103"
+  },
+  {
+   "path": "chinese-hubert-base/preprocessor_config.json",
+   "size": 212,
+   "sha256": "dcd684124d06722947939d41ea6ae58dbf10968c60a11a29f23ddc602c64a29b"
+  },
+  {
+   "path": "chinese-hubert-base/pytorch_model.bin",
+   "size": 188811417,
+   "sha256": "24164f129c66499d1346e2aa55f183250c223161ec2770c0da3d3b08cf432d3c"
+  },
+  {
+   "path": "chinese-roberta-wwm-ext-large/config.json",
+   "size": 963,
+   "sha256": "3d57de2fd7e80d0e5c8ff194f0bbb6baa10df7e43fc262a0cc71298a78b0a3e5"
+  },
+  {
+   "path": "chinese-roberta-wwm-ext-large/pytorch_model.bin",
+   "size": 651225145,
+   "sha256": "e53a693acc59ace251d143d068096ae0d7b79e4b1b503fa84c9dcf576448c1d8"
+  },
+  {
+   "path": "chinese-roberta-wwm-ext-large/tokenizer.json",
+   "size": 268962,
+   "sha256": "173796956820ea27bd14f76bf28162607ff4254807e2948253eb5b46f5bb643b"
+  },
+  {
+   "path": "sv/pretrained_eres2netv2w24s4ep4.ckpt",
+   "size": 107528697,
+   "sha256": "4f5a0bf73c61eb41b174e1bb54e7ee3c83233892be8e0af1f187024e8e581a35"
+  }
+ ]
+}

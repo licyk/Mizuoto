@@ -1,0 +1,226 @@
+---
+title: "加速"
+description: "不改变结果的提速：注意力分发（调用点、参照计算、策略、后端、结构化掩码、探测），compute.fast，compute.compile，解码步骤的 CUDA Graph，无同步采样，以及 CPU 的内存分配与线程绑定；哪些需主动开启的功能结果不逐位一致。"
+icon: Zap
+---
+
+每个引擎在 CPU 上的输出都与其上游逐样本一致（见[引擎详解](/docs/advanced-engines)），提速工作保持这一点：**默认设置从不改变结果**。以相同参数执行相同内核的提速（CUDA Graph、更少地等待设备、CPU 内存与线程的放置）默认开启；改变运算的提速（其他注意力内核、TF32、`torch.compile`、合并投影）需要主动开启，并且每个输出都会列出实际用到的那些。测量结果见[性能记录](/docs/development-performance)；显存管理见[显存与内存](/docs/development-memory)。
+
+## 哪些会改变结果
+
+| 功能 | 设置（默认） | 结果 |
+| --- | --- | --- |
+| 解码步骤的 CUDA Graph | `compute.cuda_graphs`（开） | 与即时执行完全相同 |
+| 无同步采样 | 始终 | 相同：同样的 id 和生成器状态 |
+| CPU 内存分配与线程绑定 | `compute.cpu_allocator`、`compute.cpu_threads`（`auto`） | 相同 |
+| 按各上游的方式计算注意力 | `compute.attention = auto` | 相同 |
+| 用 SDPA 或其 math 内核计算注意力 | `compute.attention = sdpa` / `math` | 参照计算就是同参数 SDPA 的调用点相同；其他调用点略有不同（分组头、Fish Speech 的 math 内核、手写 softmax） |
+| `fast`、SDPA 的某个融合内核、FlashAttention、xFormers、SageAttention | `compute.attention`、`engines.<id>.attention`、`training.attention` | 不同（fp16/bf16 内核；SageAttention 会量化） |
+| 进程级 GPU 开关 | `compute.fast`（无） | 不同 |
+| `torch.compile` | `compute.compile`（关） | 多数引擎略有不同（见下文） |
+| Qwen3-TTS 的合并投影 | 加载选项 `fused_projections`（关） | 在 CPU 上的一致性用例中相同；在 CUDA 上不同 |
+| 静态 KV 缓存 | `compute.kv_cache = static` | 在 CPU 上相同；见[显存与内存](/docs/development-memory#静态-kv-缓存与-cuda-分配器) |
+
+原生代码从不改动进程级状态：不给 `torch.backends` 赋值，不用 `sdpa_kernel`（它会为所有线程切换 SDPA 的内核），不给全局随机数生成器播种。唯一的例外是 `runtime/accel/features.py`，由主机和训练阶段调用（两者都由架构测试强制）。
+
+## 注意力
+
+`runtime`、`nn`、各引擎、各训练器以及需要接受许可的包中的每一次注意力计算，都经过同一个入口，参照了 ComfyUI 的注意力后端和 `comfy_kitchen` 的注册表：
+
+```python
+from mizuoto.runtime import accel
+
+SITE = accel.Site("qwen3tts.mimi")  # 每个调用点一次
+
+out = accel.attention(q, k, v, site=SITE, mask=mask, causal=False, scale=None,
+                      enable_gqa=False, dropout_p=0.0, mask_info=None)
+```
+
+- `q`、`k`、`v` 的形状为 `(batch, heads, length, head_dim)`；`mask` 为布尔型（True 表示参与注意力）或加性掩码，可广播到 `(batch, heads, q_length, k_length)`。
+- `causal` 即 SDPA 的 `is_causal`：左上对齐。调用点按上游传 `is_causal` 的方式传它（CosyVoice 的流式文本步骤会借助它在缓存上一次送入多个 token）。右下对齐的因果关系（KV 缓存的情形）通过 `mask_info` 表达。
+- 架构测试禁止在 `runtime/accel/` 之外使用 `F.scaled_dot_product_attention` 及其 aten 内核。
+
+| 代码 | 作用 |
+| --- | --- |
+| `runtime/accel/dispatch.py` | `attention`、`Site`、`MaskInfo`、`Masked`；参照计算形式 `sdpa`、`math_kernel`、`softmax_attention` |
+| `runtime/accel/registry.py` | `Backend`、`Constraints`、`Call`、注册表及其按设备的探测 |
+| `runtime/accel/policy.py` | `AccelPolicy`（后端链、选择、回退）、`Run`（一个请求用了什么）、`bind`、`policy_for` |
+| `runtime/accel/backends/torch_sdpa.py` | `sdpa`、`math`、`sdpa_flash`、`sdpa_efficient`、`sdpa_cudnn` |
+| `runtime/accel/backends/optional.py` | `flash`、`xformers`、`sage`、`sage3`：受保护的导入、探测、自检 |
+| `runtime/accel/features.py` | `compute.fast` |
+| `runtime/accel/__main__.py` | `python -m mizuoto.runtime.accel`：每个后端在每个设备上能否运行，输出 JSON |
+| `core/compute/accel.py` | 从包的元数据读出已安装的包，以及不替换 torch 的安装命令（只用标准库） |
+
+### 调用点与参照计算
+
+`Site` 为一处计算命名，并保存它的**参照计算**：上游在该处用相同参数做的精确计算。Mizuoto 共声明 19 个调用点（含 dummy 引擎的一个）。
+
+| 参照计算 | 调用点 |
+| --- | --- |
+| `sdpa`：以调用参数执行 SDPA（默认） | 大多数：Qwen 解码器（`qwen`）、F5-TTS 的 DiT、CosyVoice 的 U-Net 与 v3 DiT、Seed-VC、HuBERT、BERT、Whisper、GPT-SoVITS 的 T2S 与 v4/v5 DiT、Qwen3-TTS 的 Mimi 编码器、VoxCPM 的 MiniCPM、Fish Speech 的预填充与编解码器、IndexTTS 的 GPT-2 |
+| `math_kernel`：直接调用 SDPA 的 math 内核 | Fish Speech 的解码步骤（`fishspeech.step`） |
+| 手写的 softmax | Fish Speech 的快速 transformer（`fishspeech.fast`）、IndexTTS 的 perceiver（`indextts.perceiver`） |
+
+在分数中加入相对位置、或需要概率矩阵的注意力不是调用点：wenet 的相对位置注意力、IndexTTS 的 Conformer、w2v-BERT、VITS，以及 s3tokenizer（q 和 k 各乘 d^-¼）、MelStyle 和 G2PW 的 BERT。没有融合内核能计算它们，所以保持手写。`Site(swappable=False)` 让一个调用点无论什么策略都使用参照计算；`approx_ok=False` 拒绝所有非精确的后端。
+
+### 策略
+
+| 设置 | 取值 | 默认 |
+| --- | --- | --- |
+| `compute.attention` | `auto`、`fast`、`sdpa`、`math`、`sdpa_flash`、`sdpa_efficient`、`sdpa_cudnn`、`flash`、`xformers`、`sage`、`sage3` | `auto` |
+| `engines.<id>.attention` | 同上，或 `inherit` | `inherit` |
+| `training.attention` | 带反向传播的后端（不含 `sage`、`sage3`） | `auto` |
+| `compute.attention_strict` | 指定的后端无法处理某次调用时抛出 `compute_unavailable`，而不是回退 | 关 |
+
+- **`auto` 什么都不绑定**：`attention()` 读一次上下文变量，发现没有策略，就调用该调用点的参照计算（每次约 1 微秒）。
+- 否则，模型的 `AccelPolicy` 在加载时确定（`policy_for(name, strict)`：每个取值一个，模型之间共享选择结果），并作为 `LoadedModelInfo.attention` 报告。`LocalHandle` 在请求的每一步用 `RequestContext.accel` 绑定它（上下文变量定义在 `runtime/context.py`，所以绑定时不会加载 torch），因此在两步之间挂起的流不会把策略泄露给别的线程。
+- 训练阶段在整个进程范围绑定策略（`dispatch.PROCESS_POLICY`），因为 autograd 在自己的线程上运行反向传播以及梯度检查点重算的前向。
+- 修改对之后加载的模型生效；修改 `engines.<id>.attention` 会卸载该引擎。
+
+### 后端与后端链
+
+| 后端 | 来源 | 设备 | 精度 | 掩码 | 反向传播 |
+| --- | --- | --- | --- | --- | --- |
+| `sdpa` | `F.scaled_dot_product_attention` | 全部 | 全部 | 布尔、加性 | 有，支持 dropout |
+| `math` | SDPA 的 math 内核（aten 算子） | 全部 | 全部 | 布尔、加性 | 有，支持 dropout |
+| `sdpa_flash` | `aten._scaled_dot_product_flash_attention` | CUDA（sm ≥ 8.0）、ROCm | fp16、bf16 | 仅因果 | 有 |
+| `sdpa_efficient` | `aten._scaled_dot_product_efficient_attention` | CUDA、ROCm | fp16、bf16、fp32 | 转为加性偏置 | 有 |
+| `sdpa_cudnn` | `aten._scaled_dot_product_cudnn_attention` | CUDA（sm ≥ 8.0） | fp16、bf16 | 转为加性偏置 | 有 |
+| `flash` | flash-attn ≥ 2.6（`flash_attn_func`、`flash_attn_with_kvcache`） | CUDA（sm ≥ 8.0）、ROCm | fp16、bf16 | 结构化：因果、单侧填充的键、窗口 | 有 |
+| `xformers` | `memory_efficient_attention` | CUDA（sm ≥ 7.5）、ROCm | fp16、bf16、fp32 | 加性偏置；因果与局部掩码 | 有 |
+| `sage` | SageAttention 2（或 1） | NVIDIA（sm ≥ 8.0），头维度 64/96/128 | fp16、bf16 | 仅因果 | 无 |
+| `sage3` | SageAttention 3 | NVIDIA Blackwell（sm ≥ 10.0），查询超过 1024 个 | fp16、bf16 | 无 | 无 |
+
+固定的 SDPA 内核通过各自的 aten 算子调用，接手调用前先用 torch 自己的资格检查（`can_use_*_attention`）。可选包的内核直接调用：flash-attn 和 xFormers 自己注册算子和 autograd；SageAttention 没有反向传播，从不在 autograd 下使用。
+
+**后端链。** 指定的后端排在最前，然后是 `fast` 针对该调用的后端链，最后是调用点的参照计算：
+
+| 调用 | `fast` 的后端链 |
+| --- | --- |
+| CUDA，fp16/bf16 | `sage3`、`sage`、`flash`、`xformers`、`sdpa` |
+| ROCm，fp16/bf16 | `flash`、`xformers`、`sdpa` |
+| fp32，或 XPU、MPS、CPU | `sdpa` |
+
+**选择。** 每次调用用一个 `Call` 描述（设备类型、计算能力、精度、头维度、GQA、单个还是多个查询、长度是否相等、查询是否超过 1024 个、掩码类型、`mask_info` 的结构、自定义缩放、因果、dropout、是否需要梯度），它可哈希，所以一个解码循环对每个 `(site, Call)` 只选择一次。后端在以下情况被跳过：
+
+- 探测表明它不能在该设备上运行（未安装、版本不对、没有内核、自检失败）；
+- 调用需要它缺少的反向传播或 dropout；
+- 调用点需要精确的注意力而该后端不精确；
+- 它的约束拒绝该调用（设备、计算能力、精度、头维度、掩码、长度不等时的因果、缩放）。
+
+内核抛出异常（显存不足和取消除外）时，该后端对这种调用被标为损坏，由下一个后端接手。显存不足会向上传递给[精确重试](/docs/development-memory#显存不足)。每种回退按（调用点，后端，原因）只记录一次日志。请求的 `Run` 统计用了什么，有回退时输出会记录下来并带一条警告：
+
+```json
+"attention": {"policy": "fast", "used": {"flash": 11264, "sdpa": 320},
+              "fallbacks": {"sage→flash": {"head dim 80": 11264}}}
+```
+
+### 结构化掩码
+
+融合内核以结构而不是稠密张量的形式接受掩码（flash：`cache_seqlens`、`cache_leftpad`、`window_size`；xFormers：右下对齐的因果掩码和局部掩码）。根据某种结构构造掩码的调用点，在稠密掩码之外再传 `mask_info=MaskInfo(keys, causal, window, padding)`：
+
+- `keys`：形状 `(batch, k_length)` 的布尔值，表示真实的键；`padding`：每行是一段连续的真实键时为 `right` 或 `left`；
+- `causal`：右下对齐（查询 *i* 能看到键 *j* 当 `j ≤ i + n_k − n_q`）；`window`：`j > i' − window`。
+
+参照计算忽略它，使用稠密掩码，所以 `auto` 不受影响。Qwen 的 `mask_for` 返回 `Masked(dense, info)`；VoxCPM 的解码步骤、Seed-VC、GPT-SoVITS v4/v5 和 Fish Speech 的编解码器也提供各自的 `mask_info`。打开 `dispatch.DEBUG` 时（小型引擎的测试），每次调用都检查 `mask_info` 是否描述了它的稠密掩码；`MIZUOTO_TEST_ACCEL=count` 检查每个小型引擎和训练器的每个调用点都经过分发器。
+
+### 探测与 doctor
+
+每个可选后端在策略第一次要在某个设备上用它时才导入它的包，然后检查：
+
+- 版本：flash-attn ≥ 2.6；xFormers 不在 0.0.21–0.0.26 之间（大批次时出错），并且带有 C++ 内核（`_has_cpp_library`：为别的 torch 构建的 wheel 能导入但没有内核）；
+- 设备与计算能力；
+- **自检**：一个 1 × 2 × 64 × D 的 fp16 注意力，与 fp32 下 SDPA 的 math 内核比较，要求结果有限且误差不超过 2e-3（SageAttention 为 2e-2），这能发现为别的 torch 或 GPU 构建的 wheel。
+
+结果按进程和设备缓存。`mizuoto doctor` 有一项 `acceleration` 检查结果：相关设置、每个包（从元数据读取，不导入它）、它能否在每块 GPU 上运行（有 GPU 时在子进程中运行 `python -m mizuoto.runtime.accel`），以及保留现有 torch 的安装命令（`--no-deps`；xFormers 固定为针对已安装 torch 构建的版本）。
+
+<Callout type="info" title="验证范围">
+
+注册表、策略、回退、严格模式和绑定都在 CPU 上测试过：真实模型经过每个调用点（`auto` 下音频、指标和权重完全相同），可选后端的衔接代码则用计算相同数学的假包测试。可选内核本身、它们的速度和质量尚未测量。
+
+</Callout>
+
+### `compute.fast`
+
+参照 ComfyUI `--fast` 的进程级 GPU 开关，由主机在运行时启动时设置一次，训练阶段在加载训练器之前设置（`features.apply`）；输出会列出它们（`params.fast`）。每一项都会改变结果；修改在下次启动时生效。
+
+| 功能 | 作用 |
+| --- | --- |
+| `tf32` | TensorFloat-32 矩阵乘法和 cuDNN 卷积（NVIDIA，Ampere 及以后） |
+| `fp16_accumulation` | fp16 乘法以 fp16 累加（torch ≥ 2.7） |
+| `cudnn_benchmark` | cuDNN 针对每种形状尝试内核 |
+| `sdpa_reduced_precision` | SDPA 的 math 内核以 fp16/bf16 自身精度求和（torch ≥ 2.5） |
+
+## `torch.compile`（`compute.compile`）
+
+`mizuoto.runtime.compile.Compiled` 把一个热点模块包进 `torch.compile(dynamic=True)`：不按形状分桶，新的长度不会触发重新编译。引擎调用 `compiled or module`，所以设置关闭时走的就是即时执行路径。该设置在每次加载时读取（`RuntimeOptions.compile`），对修改之后加载的模型生效。
+
+| 引擎 | 编译的模块 |
+| --- | --- |
+| F5-TTS | DiT，或 E2 的 UNetT |
+| CosyVoice | flow 估计器 |
+| GPT-SoVITS v4、v5 Turbo | CFM 估计器（每个加载的 SoVITS 模型，包括音色自己的） |
+| IndexTTS 2、2.5 | s2mel DiT 和 BigVGAN（加载选项 `use_torch_compile` 也会开启） |
+| VoxCPM | 局部 DiT |
+
+- `Compiled` 是普通属性而不是子模块：状态字典和句柄都不变。
+- 编译或运行编译代码时的任何错误（没有 C++ 编译器、不支持的算子）都只记一次警告，此后改为即时执行；显存不足仍会抛出。在 MPS 上（`EAGER_DEVICES`）以及位于流式单元之上时，它按即时执行运行。
+- 它以其策略的 `trace_run` 追踪（编译出的图无法读取上下文变量）；策略不是 `auto` 时，同一时间只运行一个编译调用。
+- wenet 的 `add_optional_chunk_mask` 在 `torch.compiler.is_compiling()` 下改用无分支的写法：它的 `.item()` 曾打断 CosyVoice 的图。
+- Inductor 把生成的代码缓存在 `/tmp/torchinductor_<user>`。Docker 镜像中没有 C 编译器，所以在那里按即时执行运行。
+
+**结果不精确。** 在 CPU 上以 fp32 与即时执行相比，音频最大差异为：F5-TTS 9e-5，IndexTTS 6e-5，GPT-SoVITS 3e-5。CosyVoice 的梅尔谱差异在 5.7e-6 之内，但 HiFT 由 F0 驱动的声源把它放大到音频中约 1e-2（即时执行换一个线程数也是如此）。VoxCPM 的浮点差异可能改变语音结束的位置。模型加载后的第一个请求要付出编译时间（CPU 上 30 到 160 秒）；收益见[性能记录](/docs/development-performance#在-cpu-上的-torchcompile)。
+
+## CUDA Graph（`compute.cuda_graphs`）
+
+GPU 上的自回归模型每一步要启动几千个小内核（Qwen3-TTS：每 80 毫秒一帧约 6 000 个），每次等待设备都会清空队列，于是 CPU 的启动时间和 GPU 的计算时间相加而不是重叠。现在每个解码器每帧（或每个 token）只等待设备一次；开启 `compute.cuda_graphs`（默认开；仅 NVIDIA，ROCm 的 HIP Graph 未经验证）时，一步的内核捕获一次，之后一次性重放。图重放的正是即时执行代码启动的那些内核，参数相同，所以结果与即时执行逐位相同。
+
+`mizuoto/runtime/graphs.py`：
+
+- **`Graphs`**：一个模型在一个设备上的图，带有自己的流和生成器。
+  - `capture(fn, state, pool)` 先运行一次 `fn`（惰性初始化），恢复它改动的张量（`state`）和生成器，然后捕获。它自己调用 `capture_begin`/`capture_end`：`torch.cuda.graph` 的 `gc.collect()` 和 `empty_cache()` 每次捕获要花几十毫秒，而一个 24 层的步骤要捕获 25 次。
+  - 捕获之后，当前流等待捕获流：开始捕获时会在捕获流上重置生成器的 seed 和 offset 张量，第一次重放若抢在这些内核之前，就会从 offset 0 抽取随机数。
+  - 捕获失败时换上一个状态相同的新生成器（中止的捕获会让旧生成器无法再用），调用方改为即时执行；只记录一次日志。
+  - `drawing(generator)` 把请求的生成器状态装进图自己的生成器，结束后写回，所以带种子的请求抽到的随机数与即时执行相同。
+- **`LayerSteps`**：把一个层栈的单 token 步骤按两次注意力调用之间的每一段捕获为一个图，由每层的 `before`、`attend`、`after` 给出。注意力在图之间即时执行，作用于每步变长的键上，所以缓存和注意力内核都与即时执行相同；归一化、投影、旋转位置编码和 MLP 被重放。
+- **`DecoderSteps`**：用于 `QwenDecoder` 的 `LayerSteps`。
+- **`signature(modules)`**：权重所在的地址。图持有这些地址，所以只用于整个放在设备上的模型（没有流式单元），权重移动后丢弃。
+
+| 引擎 | 每步等待次数（之前 → 之后） | 捕获的内容 |
+| --- | --- | --- |
+| Qwen3-TTS（`qwen3tts/decode.py`） | 每帧约 35 → 1 | 采样和 code predictor 的 15 步各一个图；talker 的步骤按注意力调用之间的每一段（`DecoderSteps`） |
+| Fish Speech（`mizuoto_fishspeech/generate.py`） | 每帧约 22 → 1 | 慢速步骤围绕其注意力（`LayerSteps`）；抽样和快速 transformer 为一个图；随已加载模型保留 |
+| CosyVoice 2/3（`cosyvoice/llm.py`） | 每个 token 50–80 → 1 | 单 token 步骤（`DecoderSteps`）和抽样，每种 EOS 掩码一个图；上游的 nucleus 循环在设备上重放（`nucleus_device`） |
+| VoxCPM（`voxcpm/model.py`） | 每个 patch 3 → 1 | 每个注意力跨度和设置下整个 patch 一个图（`PatchDecoder`）；静态缓存随模型保留 |
+| GPT-SoVITS（`gptsovits/t2s.py`） | 每步 2 → 1 | T2S 的单 token 步骤围绕每层的注意力，每种行数一组；采样即时执行 |
+| IndexTTS（`mizuoto_indextts/gpt.py`） | 每个 beam 步约 10 → 1 | GPT-2 的单 token 步骤围绕每层的注意力；缓存、beam 重排和采样即时执行 |
+
+这些等待是用上游写法的精确等价形式去掉的（掩码赋值、列表下标、写入张量的 Python 标量、`.item()` 检查），停止标志每步只读一次。流正在捕获时跳过 `dispatch.DEBUG` 的掩码检查（它需要读回数据；预热时已检查过）。
+
+## 无同步采样
+
+`mizuoto/runtime/sampling.py` 按 transformers 的顺序重现它的 logits 处理器（重复惩罚、最少新 token、屏蔽、温度、top-k、top-p），其中没有任何需要等待设备的操作：
+
+- **`multinomial1(probs, generator)`** 就是 `torch.multinomial` 自己的单样本算法 `argmax(p / Exp(1))`，只是去掉了它的两次合法性检查（每次都要等待设备）。在 CPU 和 CUDA 上得到同样的 id 和生成器状态；其他设备上调用 `torch.multinomial`。含 NaN 的概率记在一个张量里（`invalid`），调用方在那唯一一次等待时读取，届时抛出 `torch.multinomial` 的错误。
+- **`multinomial_draws(probs, n, generator)`**：不放回地抽取多个，`topk(p / Exp(1), n)`（IndexTTS 的 beam）。
+- 屏蔽掩码和 EOS 掩码每个设备只构造一次；`repetition_penalty_seen` 在已抽取 id 的掩码上施加惩罚，形状不再增长。
+- 共用的 Qwen 解码器在不需要 autograd 时把 q 和 k 一起归一化、一起旋转，并在设备上的自检表明与 float32 上转的归一化逐位相同时使用 `F.rms_norm`（`_fused_norm_exact`：在较新 torch 的 CUDA 上以 bf16/fp16 计算时，一个内核代替八个）。调用方知道没有填充时，`mask_for(padded=…)` 跳过它的设备检查。
+
+**合并投影**（`engines.qwen3tts.load_options.fused_projections`，关）在加载时把每层的 q/k/v 以及 gate/up 权重分别堆叠成一个线性层（`QwenDecoder.fuse`；是真正的 `ops.Linear`，仍可流式加载）。仅用于推理。cuBLAS 对更宽的矩阵会选用别的内核，所以在 CUDA 上结果不逐位相同；输出会列出 `fused_projections`。
+
+## CPU 设置
+
+`mizuoto/core/compute/cpu.py`（只用标准库）由主机在导入 torch 之前应用（建立运行时时调用 `cpu.apply`），并传给它启动的进程（`child_env`：训练阶段、任务进程）。两者都不改变结果。环境中已设置的变量优先；非 glibc 或非 Linux 系统上不起作用。
+
+| 设置 | Linux 上 `auto` 即 | 作用 |
+| --- | --- | --- |
+| `compute.cpu_allocator` | `tuned` | 把 glibc 的 `mmap` 阈值固定为 32 MB，并保留最多 512 MB 空闲堆内存供复用（本进程用 `mallopt`，子进程用 `GLIBC_TUNABLES`）；torch 的大张量放在透明大页上（`THP_MEM_ALLOC_ENABLE`）。一次前向在每层都要分配和释放几到几十 MB 的张量，按 glibc 默认设置每次都重新映射，并由内核清零页面。`system` 保持默认 |
+| `compute.cpu_threads` | `cores` | 把 OpenMP 线程绑定到不同的物理核心（`OMP_PLACES=cores`、`OMP_PROC_BIND=close`）。交给调度器时，偶尔有两个线程共用一个核心，那个进程在整个生命周期里都慢三分之一。`off` 交给调度器（有其他繁忙程序共用这些核心时更好） |
+
+## 给引擎作者
+
+- 所有注意力都经 `accel.attention`，每个调用点一个 `Site`；上游手写的注意力作为调用点的 `reference`；掩码由结构构造时传 `mask_info`。
+- 用 `multinomial1` / `multinomial_draws` 抽样，解码步骤中除每步一次之外不等待设备（不用 `.item()`、`tolist()`、写入张量的 Python 标量、掩码赋值）。
+- CUDA Graph：在固定张量上运行一步，仅当 `graphs.usable(device, runtime.options.cuda_graphs)` 且模型整个在设备上时用 `Graphs` / `LayerSteps` 捕获，图随已加载模型保留，`signature` 变化时丢弃；在 `drawing(ctx.generator_for(device))` 中抽样。
+- 对耗时且反复调用的模块用 `compile_module(module, runtime.options.compile, name)` 包装，调用 `compiled or module`。
+- 验证：小型引擎在 CUDA 上开关图、故意让捕获失败、以及 `MIZUOTO_TEST_ACCEL=count` 下的音频都完全相同。见[接入引擎](/docs/development-engine)和[测试](/docs/development-testing)。

@@ -1,0 +1,254 @@
+---
+title: "在 Python 中使用"
+description: "不经过 HTTP，在 Python 里直接调用 Mizuoto 的核心服务；或者把 Mizuoto 的服务器和网页界面嵌入你自己的程序。"
+icon: Puzzle
+---
+
+Mizuoto 的网页界面、命令行和 HTTP 接口都建立在同一个核心（`mizuoto.core`）之上。Python 程序可以直接使用这个核心，也可以在进程里启动一个完整的 Mizuoto 服务器。
+
+<Callout type="info" title="需要什么环境">
+你的程序需要和 `mizuoto` 包装在同一个 Python 环境里（Python 3.10–3.13），引擎还需要 torch（见 [安装](/docs/installation)）。引擎就在你的程序的进程里运行。导入 `mizuoto.core.context` 不会加载 torch，也不会加载 FastAPI：torch 在第一个模型加载时才加载。
+</Callout>
+
+## 直接调用核心
+
+### 打开服务
+
+```python
+from mizuoto.core.context import open_services
+
+with open_services() as services:
+    print(services.settings.view().data_dir)
+```
+
+`open_services(**kwargs)` 建立全部服务，离开 `with` 块时关闭它们（停止任务、卸载模型、关闭数据库）。它的参数会传给 `build_services()`：
+
+| 参数 | 说明 | 默认值 |
+| --- | --- | --- |
+| `data_dir` | 数据文件夹（数据库、模型、音色、结果、缓存） | `MIZUOTO_DATA_DIR`，或系统默认位置 |
+| `config_dir` | 存放 `settings.toml` 的文件夹 | `MIZUOTO_CONFIG_DIR`，或数据文件夹 |
+| `settings_path` | 直接指定设置文件，优先于 `config_dir` | 无 |
+| `settings_overrides` | 固定的设置，结构与 `settings.toml` 相同；不写回文件 | 无 |
+| `start_background` | 启动任务调度器和空闲模型的卸载 | `False` |
+
+`data_dir` 等路径参数是 `pathlib.Path`。也可以不用 `with`，自己调用 `build_services()`，用完后调用 `services.close()`。
+
+### 服务一览
+
+| 属性 | 负责 |
+| --- | --- |
+| `settings` | 设置：`settings.settings`（生效的设置）、`update(patch)`、`view()` |
+| `events` | 事件总线：`subscribe(handler)` |
+| `db` | 数据库 |
+| `compute` | 设备与显存 |
+| `jobs` | 任务：`get`、`wait`、`cancel`、`retry` |
+| `engines` | 引擎目录与状态：`status(id)` 说明引擎是否可用 |
+| `runtime` | 已加载的模型：`status()`、`unload(model_id)`、`doctor(engine_id)` |
+| `models` | 模型：`list_models`、`get`、`download`、`verify` |
+| `audio` | 音频文件登记 |
+| `outputs` | 合成结果：`get`、`path_of` |
+| `presets` | 参数预设 |
+| `datasets` | 数据集 |
+| `training` | 实验与训练 |
+| `tts` | 合成：`plan`、`speak`、`convert`、`edit` |
+| `asr` | 语音识别：`transcribe` |
+| `voices` | 音色库：`list_voices`、`get`、`create_from_audio` |
+| `projects` | 项目 |
+| `remote` | 远程主机 |
+
+这些方法与 HTTP 接口一一对应，接收和返回的对象就是接口 JSON 的结构（pydantic 模型）。
+
+### 合成
+
+```python
+from mizuoto.core.context import open_services
+from mizuoto.core.tts.models import CommonParams, SpeakRequest, StyleInput, VoiceInput
+
+with open_services() as s:
+    req = SpeakRequest(
+        model="qwen3tts/1.7b-custom-voice",
+        text="你好，欢迎使用 Mizuoto。",
+        voice_spec=VoiceInput(preset="vivian"),
+        style=StyleInput(instruct="语气轻快"),
+        params=CommonParams(seed=42),
+    )
+    print(s.tts.plan(req).segments)        # 只检查，不运行
+    job = s.tts.speak(req, wait=True)      # 在当前线程运行，返回结束的任务
+    if job.state != "completed":
+        raise RuntimeError(job.error)
+    out = s.outputs.get(job.result["output_id"])
+    print(out.path, out.duration, out.sample_rate)
+```
+
+`job.result` 中有 `output_id`、`output_ids`（批量时每条文本一个）、`warnings` 和 `applied_params`。
+
+其他常用调用：
+
+```python
+from pathlib import Path
+
+s.models.list_models(engine="qwen3tts", installed=True)   # list[ModelInfo]
+s.models.download(["qwen3tts/1.7b-base"], wait=True)       # 下载任务，结束后返回
+s.runtime.doctor().findings                                # 本机的 torch 和各引擎，与 mizuoto doctor 相同
+voice, warnings = s.voices.create_from_audio("小林", [Path("ref.wav")], ["参考音频里说的话。"], language="zh")
+s.voices.list_voices(q="小林")
+s.asr.transcribe(Path("clip.wav"), language="zh").text     # 需要已下载语音识别模型
+```
+
+### 任务在哪里运行
+
+| `start_background` | 行为 |
+| --- | --- |
+| `False`（默认，与命令行相同） | 带 `wait=True` 的调用在当前线程里运行任务，返回时任务已经结束。运行中按 <kbd>Ctrl</kbd>+<kbd>C</kbd> 会取消任务（返回 `state == "cancelled"` 的任务）。不带 `wait` 提交的任务**不会运行**，因为没有调度器 |
+| `True`（与服务器相同） | 启动调度器和空闲模型的卸载。不带 `wait` 的调用把任务放进队列并立即返回，按 GPU 等资源排队；用 `s.jobs.wait(job.id, timeout)` 等它结束 |
+
+```python
+with open_services(start_background=True) as s:
+    job = s.tts.speak(req)               # 立即返回，state 为 "queued"
+    job = s.jobs.wait(job.id, 600)       # 结束后返回；超时时返回当时的状态
+```
+
+### 事件
+
+`events.subscribe(handler)` 注册一个回调，返回取消订阅的函数。回调在产生事件的线程里被调用，应当尽快返回。事件类型与 socket 推送的相同（见 [HTTP 接口](/docs/advanced-api#事件)），定义在 `mizuoto.core.events.models`：
+
+```python
+from mizuoto.core.events.models import JobUpdatedEvent
+
+def on_event(event):
+    if isinstance(event, JobUpdatedEvent):
+        print(event.job.title, event.job.state, event.job.progress)
+
+unsubscribe = s.events.subscribe(on_event)
+...
+unsubscribe()
+```
+
+### 错误
+
+失败时抛出 `mizuoto.core.errors.MizuotoError` 的子类，与接口返回的错误一一对应：
+
+```python
+from mizuoto.core.errors import MizuotoError, ModelMissingError
+
+try:
+    s.tts.speak(req, wait=True)
+except ModelMissingError as e:
+    print("先下载：", e.detail.get("hint"))
+except MizuotoError as e:
+    print(e.code, e.message, e.detail)   # 另有 e.http_status、e.exit_code
+```
+
+注意任务**运行中**的失败不抛异常：`speak(..., wait=True)` 返回 `state == "failed"` 的任务，原因在 `job.error`（`code`、`message`、`detail`）。抛异常的是运行前就能发现的问题（模型不存在、参数不合法、未接受许可等）。错误代码见 [HTTP 接口](/docs/advanced-api#错误)。
+
+## 嵌入服务器
+
+`MizuotoServer` 在你的程序里启动与 `mizuoto webui` 相同的服务器：同样的接口、网页界面和任务。宿主程序可以决定数据和设置放在哪里、哪些设置不允许修改、界面挂在哪个路径下。
+
+```python
+from mizuoto import MizuotoServer
+
+server = MizuotoServer(data_dir="./mizuoto-data", port=0)
+url = server.start()     # 开始监听后立即返回，例如 http://127.0.0.1:54123
+print(url)
+...
+server.stop()
+```
+
+`import mizuoto` 不会加载 FastAPI；用到 `MizuotoServer` 时才加载服务器部分。也可以 `from mizuoto.embed import MizuotoServer, serve`。
+
+### 参数
+
+| 参数 | 说明 | 默认值 |
+| --- | --- | --- |
+| `data_dir` | 数据文件夹 | `MIZUOTO_DATA_DIR`，或系统默认位置 |
+| `config_dir` | 存放 `settings.toml` 的文件夹（例如宿主程序自己的配置文件夹）；数据仍在 `data_dir` | 数据文件夹 |
+| `settings_path` | 设置文件的完整路径，优先于 `config_dir` | 无 |
+| `host` | 绑定的地址 | 设置 `server.host`（`127.0.0.1`） |
+| `port` | `0` 任选空闲端口；一个数字表示从它开始尝试（被占用时顺延）；`None` 使用设置 `server.port` | `None` |
+| `strict_port` | 端口被占用时直接失败 | `False` |
+| `api_prefix` | 把接口、socket 和网页界面放到这个路径下，例如 `/voice` | 无 |
+| `open_browser` | 启动后打开浏览器 | `False` |
+| `access_token` | 访问令牌：每个接口和 socket 请求都要带上，网页界面会要求输入一次 | 无 |
+| `extra_hosts` | 服务器还接受的主机名，例如隧道或反向代理的公开域名 | 无 |
+| `settings` | 固定的设置，结构与 `settings.toml` 相同 | 无 |
+| `log_level` | uvicorn 的日志级别 | `"warning"` |
+
+`host` 和 `access_token` 实际上也是固定设置（`server.host`、`server.access_token`），`server.open_browser` 固定为 `open_browser` 的值。
+
+### 方法与属性
+
+| 名称 | 说明 |
+| --- | --- |
+| `start(timeout=30)` | 在后台线程启动，开始监听后返回网页界面的地址 |
+| `run()` | 在前台运行，直到 <kbd>Ctrl</kbd>+<kbd>C</kbd> |
+| `stop(timeout=10)` | 停止服务器，卸载模型，关闭数据库，释放端口；可以重复调用 |
+| `allow_host(host)` | 再接受一个主机名（也可以传 URL），启动前后都可以调用 |
+| `url`、`port`、`running` | 网页界面的地址、端口、是否在运行 |
+| `services` | 服务器使用的同一组服务（见上文），启动后可直接调用 |
+
+对象也是上下文管理器：
+
+```python
+with MizuotoServer(data_dir="./mizuoto-data", port=0) as server:
+    print(server.url)
+    voices = server.services.voices.list_voices()
+```
+
+`serve(block=False, **options)` 用同样的参数创建并启动一个服务器，返回它；`block=True` 时在前台运行。
+
+### 固定设置
+
+`settings` 中的值叠加在设置文件和环境变量之上，**不会写回文件**，也不能通过网页界面或接口修改：
+
+```python
+server = MizuotoServer(
+    data_dir="D:/MyApp/data/mizuoto",
+    config_dir="D:/MyApp/config/mizuoto",
+    settings={
+        "compute": {"default_device": "cuda:0"},
+        "paths": {"models_dir": "D:/MyApp/models/tts"},
+        "downloads": {"source": "hf-mirror"},
+    },
+)
+```
+
+网页界面 **设置** 中被固定的项目标注 **由运行 Mizuoto 的应用程序设置**（环境变量设置的项目标注 **由环境变量设置**）。`settings.view().pinned` 列出被固定的设置名。
+
+### 路径前缀、外部访问与令牌
+
+- `api_prefix="/voice"` 后，网页界面在 `<地址>/voice/`，接口在 `/voice/api/v1/...`，兼容 OpenAI 的接口在 `/voice/v1/...`。网页界面会根据自己脚本的地址确定前缀，不需要另外配置。
+- 默认只接受本机名称作为 `Host`（防止 DNS 重绑定）。通过隧道或反向代理对外提供时，用 `extra_hosts=["abc.example.com"]` 或 `server.allow_host("https://abc.example.com")` 加入公开域名。通过这些名称来的请求不会被当作本机请求，所以只能在本机使用的功能（浏览服务器文件等）对它们不可用。
+- 开放之后，任何知道地址的人都能访问，请设置 `access_token`，或自己加上身份验证。访问控制的细节见 [HTTP 接口](/docs/advanced-api#访问控制)。
+
+服务器启动后在数据文件夹写入 `server.json`（`host`、`port`、`url`、`pid`），供其他程序找到正在运行的服务器；`stop()` 时删除。
+
+### 挂载到已有的 FastAPI 应用
+
+宿主程序本身是 FastAPI（或其他 ASGI）应用时，可以直接挂载 Mizuoto，而不再开一个端口：
+
+```python
+from contextlib import asynccontextmanager
+from pathlib import Path
+
+from fastapi import FastAPI
+
+from mizuoto.api.app import create_app
+from mizuoto.core.context import build_services
+
+services = build_services(data_dir=Path("./mizuoto-data"), start_background=True)
+child = create_app(services, bound_host="127.0.0.1", api_prefix="/voice")
+
+
+@asynccontextmanager
+async def lifespan(_app):
+    async with child.router.lifespan_context(child):
+        yield
+    services.close()
+
+
+app = FastAPI(lifespan=lifespan)
+app.mount("/", child)   # 网页界面在 /voice/
+```
+
+宿主要在自己的事件循环上进入子应用的 `lifespan`（它负责把事件转发到 socket），并在退出时调用 `services.close()`。`start_background=True` 启动任务调度器和空闲模型的卸载，没有它，排队的任务不会运行。`create_app` 还接受 `extra_hosts`（一个集合，之后加入的名称立即生效）和 `serve_ui=False`（只提供接口）。

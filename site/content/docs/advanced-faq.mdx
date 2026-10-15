@@ -1,0 +1,238 @@
+---
+title: "常见问题"
+description: "按主题整理的常见问题：启动、访问令牌、torch 与引擎、显存、许可、下载、日志和远程主机。"
+icon: CircleQuestionMark
+---
+
+遇到问题时，先看任务的日志（**任务** 面板中的 **日志**，或 `mizuoto job log <任务 id>`），再运行 `mizuoto doctor`：它检查 torch 的构建是否与硬件匹配、各引擎是否可用以及缺少哪些可选扩展，并给出修复命令。
+
+## 启动与数据
+
+<Accordions>
+<Accordion title="启动时提示端口被占用怎么办？">
+
+默认端口是 7869。被占用时服务器依次尝试后面的端口（最多 20 个），日志中提示 "Port 7869 is unavailable. Using port 7870."，浏览器打开实际使用的端口；启动成功后标准输出打印一行 `SERVER_READY url=…`。
+
+```bash
+mizuoto webui --port 8000                 # 只是这一次
+mizuoto config set server.port 8000       # 以后都用（下次启动时生效）
+mizuoto webui --strict-port               # 端口被占用时直接失败（退出码 3）
+```
+
+</Accordion>
+<Accordion title="数据保存在哪里？">
+
+默认的数据文件夹：
+
+| 系统 | 位置 |
+| --- | --- |
+| Windows | `%APPDATA%\mizuoto` |
+| macOS | `~/Library/Application Support/mizuoto` |
+| Linux | `$XDG_DATA_HOME/mizuoto`，默认 `~/.local/share/mizuoto` |
+
+里面有 `settings.toml`、数据库 `mizuoto.db`、`models/`、`voices/`、`outputs/`、`datasets/`、`experiments/`、`projects/`、`cache/`、`jobs/`（任务日志）和 `logs/`。
+
+用环境变量 `MIZUOTO_DATA_DIR` 或 `mizuoto webui --data-dir <路径>` 换到别处；只想移动某一类文件，改 `paths.*`（**设置** › **存储**）。`mizuoto config show` 的 `data_dir` 和 `resolved_paths` 显示实际位置，网页界面在 **设置** › **关于** 显示 **数据文件夹** 和 **设置文件**。详见 [配置与环境变量](/docs/cli-config)。
+
+</Accordion>
+<Accordion title="怎样把设置恢复为默认值？">
+
+先停止服务器，再删除或改名 `settings.toml`（`mizuoto config path` 打印它的路径）。下次启动时使用全部默认值；音色、模型和结果不受影响。注意 `MIZUOTO_<GROUP>__<FIELD>` 环境变量设置的值始终优先。
+
+</Accordion>
+<Accordion title="服务器运行时可以使用命令行吗？">
+
+可以，但两者是**各自独立的进程**：
+
+- 任务都记录在同一个数据库里，Web UI 的 **任务** 面板和 `mizuoto job list` 都能看到双方的任务。
+- 命令行的任务在自己的进程里前台运行，不参与服务器的 GPU 排队，也会加载自己的模型：同一个模型可能在显存里加载两份。
+- `mizuoto job cancel` 只能取消本进程的任务，对服务器正在运行的任务会报 "is not running"。取消服务器的任务请用 Web UI，或 `POST /api/v1/jobs/{id}/cancel`。
+- `mizuoto config set` 直接写 `settings.toml`，服务器约 1 秒内读到改动；服务器地址和端口要在下次启动时才生效。改动某个引擎的 `engines.<id>.*` 设置会卸载该引擎的模型，下次使用时按新设置加载。
+
+</Accordion>
+</Accordions>
+
+## 访问令牌
+
+<Accordions>
+<Accordion title="打开网页时要求输入访问令牌？">
+
+服务器设置了 `server.access_token` 时，界面弹出 **访问令牌** 对话框（“该服务器需要访问令牌。”），输入一次即可。接口请求没有令牌时返回 401 `auth_required`；令牌可以放在 `Authorization: Bearer <令牌>` 头、`mizuoto_token` cookie 或 `?token=` 查询参数里，见 [HTTP 接口](/docs/advanced-api)。
+
+在 **设置** › **常规** 中可以 **设置令牌** 或 **清除令牌**，也可以用命令行：
+
+```bash
+mizuoto config set server.access_token "一个足够长的随机字符串"
+mizuoto config set server.access_token null      # 清除
+```
+
+忘记令牌时，在服务器所在的机器上设置一个新的即可。
+
+</Accordion>
+<Accordion title="绑定到 0.0.0.0 后需要令牌吗？">
+
+Mizuoto 不强制要求，但请设置一个。`mizuoto webui --host 0.0.0.0` 时服务器只在日志里警告 "Binding to 0.0.0.0 makes the server reachable from other machines."，不再检查 `Host` 头；没有令牌时，任何能连到这个地址的人都能使用全部功能（下载模型、删除结果等）。读取服务器上的路径、在文件夹中显示等操作始终只对服务器本机的浏览器开放。
+
+</Accordion>
+</Accordions>
+
+## 首次运行
+
+<Accordions>
+<Accordion title="第一次启动 Mizuoto 时会怎样？">
+
+Web UI 直接打开 **合成** 页，演示引擎（dummy）立即可用，它用音调代替语音；没有单独的设置向导。在 **设置** › **下载** 中选择下载来源，在 **设置** › **计算** 中（或用 `mizuoto doctor`）检查 torch，然后在 **模型** 中下载模型，或在所选模型尚未下载时点替代 **合成** 的那个按钮下载，进度可在 **任务** 中查看。详见 [首次运行](/docs/first-run)。
+
+</Accordion>
+</Accordions>
+
+## torch 与引擎
+
+<Accordions>
+<Accordion title="引擎显示“不可用”？">
+
+引擎需要 torch（只有演示引擎不需要）和它的实现：除了 Fish Speech 和 IndexTTS 是单独的发行包，其他引擎都内置在 Mizuoto 中。引擎卡片和 `mizuoto doctor <引擎>` 会说明缺什么：
+
+- `torch`：安装 `mizuoto doctor` 指出的构建（见[安装](/docs/installation#安装方式)）。
+- `mizuoto-fishspeech` 或 `mizuoto-indextts`：把它的 wheel 装到 Mizuoto 所用的 Python 中，例如 `pip install dist/mizuoto_indextts-*.whl`。
+
+然后重启 Mizuoto。使用这类模型会以 `engine_not_installed`（退出码 7）失败，提示中带有安装命令。
+
+</Accordion>
+<Accordion title="torch 没有用上显卡？">
+
+torch 的构建必须与硬件匹配：NVIDIA 用 CUDA 构建（不高于驱动支持的版本），AMD 用 ROCm 构建，Intel 用 XPU 构建，Apple 芯片用 PyPI 上的默认构建。`mizuoto doctor` 会进行对照，并打印把正确构建装进 Mizuoto 所用 Python 的命令，例如：
+
+```bash
+python -m pip install --upgrade --force-reinstall "torch>=2.8" --index-url https://download.pytorch.org/whl/cu128
+```
+
+**设置** › **计算** 中也显示同样的检查结果。提示 "sees no GPU: CUDA_VISIBLE_DEVICES hides them" 表示启动 Mizuoto 的环境中设置了这个变量。
+
+</Accordion>
+<Accordion title="日语或韩语文本报错（capability_not_supported）？">
+
+GPT-SoVITS 的日语和韩语前端、IndexTTS-2.5 的日语是可选扩展：`pip install 'mizuoto[gptsovits-ja]'`（pyopenjtalk 需要从源码构建：要有 CMake 和 C++ 编译器）、`pip install 'mizuoto[gptsovits-ko]'`、`pip install 'mizuoto-indextts[ja]'`。错误提示中带有安装命令；`mizuoto doctor` 也会列出缺少的扩展。见[可选扩展](/docs/installation#可选扩展)。
+
+</Accordion>
+</Accordions>
+
+## 显存与速度
+
+<Accordions>
+<Accordion title="提示显存不足（compute_unavailable）？">
+
+放不下 GPU 的模型会部分加载：放得下的层留在 GPU 上，其余权重在运行时从内存流式加载（较慢，结果中会注明）。无论估算如何，Mizuoto 总是尝试加载模型，只有显存分配真正失败时才以 `compute_unavailable` 失败（退出码 9，HTTP 503；`detail.reason` 为 `out_of_memory`），随后与 ComfyUI 一样卸载所有 GPU 上未在使用的模型。可以：
+
+- 关掉占用 GPU 的其他程序，或在 **内存中的模型** 面板点 **释放显存**（或 **卸载** 某个模型）；
+- 把 **设置** › **计算** › **内存** › **模型如何使用显存** 设为“最多使用一半”或“几乎全部从内存流式加载”（`compute.vram_mode` 的 `low`、`none`），或用 `compute.vram_limit_mb` 限制 Mizuoto 的用量；
+- 换一块 GPU：`mizuoto config set engines.<id>.device cuda:1`（**模型** › **引擎** › **设备**）；
+- 改用 CPU：`mizuoto config set engines.<id>.device cpu`；
+- 换一个更小的模型（如 Qwen3-TTS 0.6B）。
+
+运行中仍然显存不足时，Mizuoto 把更多权重留在内存中、用相同的随机数重新运行这一步（结果相同，速度较慢）；开启 `compute.oom_fallback` 后还会尝试更省显存的方式（分块、更小的批次）。同一块 GPU 上同时运行的任务数由 `compute.gpu_jobs`（默认 1）决定；任务在等待 GPU 时，**仍然运行** 可以让它与正在运行的任务并行（显存足够时）。跨所有引擎和设备同时运行的合成任务数由 `compute.inference_jobs`（默认 1）决定。更多见 [性能与加速](/docs/advanced-performance)。
+
+</Accordion>
+<Accordion title="在 CPU 上很慢？">
+
+每个引擎都能在 CPU 上运行，但比 GPU 慢得多：CPU 上使用 fp32，Fish Speech 这样的大模型尤其慢。可以选更小的模型（Qwen3-TTS 0.6B、GPT-SoVITS v2 系列等），用 [远程主机](/docs/advanced-remote) 把引擎放到有 GPU 的机器上，或在合成时开启流式播放，边生成边听。
+
+</Accordion>
+<Accordion title="模型每次都要重新加载？">
+
+空闲的模型在 `compute.unload_after_minutes`（默认 20 分钟，0 为不卸载）后卸载，单个引擎可用 `engines.<id>.idle_minutes` 覆盖；同时保持加载的模型最多 `compute.max_resident_models` 个（默认 3），超出时先卸载最久未用的空闲模型。`mizuoto runtime` 列出已加载的模型。`engines.<id>.pinned_models` 中的模型不会为腾出空间或因空闲而卸载。见 [性能与加速](/docs/advanced-performance)。
+
+</Accordion>
+</Accordions>
+
+## 许可
+
+<Accordions>
+<Accordion title="提示需要先接受许可（licence_not_accepted）？">
+
+Fish Speech（Fish Audio Research License）和 IndexTTS（bilibili Model Use License）需要接受许可后才能下载模型和共享文件、合成（退出码 5，HTTP 403）。阅读全文后：
+
+```bash
+mizuoto engine licence fishspeech            # 打印许可全文
+mizuoto engine accept-licence fishspeech
+```
+
+或在 **模型** › **引擎** 中点 **接受许可**，勾选 **我已阅读并接受此许可**。接受记录为 `engines.<id>.accepted_licence`（许可 id 与版本）；许可版本更新后需要重新接受。
+
+</Accordion>
+<Accordion title="用 IndexTTS 克隆需要填写同意声明吗？">
+
+不需要。引擎的使用受其许可约束（接受时会显示许可全文），结果下方的提示也会提醒：IndexTTS 的免责声明禁止未经声音主人许可克隆其声音。`mizuoto speak --consent` 已经去掉，API 会忽略 `voice_spec.consent`。音色或数据集的同意说明（`mizuoto voice add --consent …`、`voice edit --consent`、`dataset create --consent`）如果填写了仍会保存，但不再是必需的。
+
+</Accordion>
+<Accordion title="哪些结果不能商用、不能用于训练？">
+
+- F5-TTS 的预训练权重是 CC-BY-NC-4.0，结果不得商用，从它微调出的模型同样如此。
+- Fish Speech 的许可不允许商用。
+- Fish Speech 和 IndexTTS 的结果不能作为训练其他引擎的数据：加入数据集时会保留结果的许可标签，训练时拒绝这些片段。
+- 结果会带上引擎的许可标签和说明（例如 "Built with Fish Audio"），显示在结果下方。
+
+各引擎的许可见 [引擎详解](/docs/advanced-engines)。
+
+</Accordion>
+</Accordions>
+
+## 下载
+
+<Accordions>
+<Accordion title="下载很慢或连不上 Hugging Face？">
+
+在 **设置** › **下载** › **下载来源** 选 **hf-mirror.com** 或 **ModelScope**，或用 `mizuoto config set downloads.source hf-mirror`。也可以把 **仓库** 设为 **优先使用 mizuoto-model 镜像**。每个文件在一个来源失败时会自动换下一个来源。详见 [模型下载与镜像](/docs/advanced-downloads)。
+
+</Accordion>
+<Accordion title="需要通过代理下载？">
+
+模型下载读取标准的代理环境变量 `HTTPS_PROXY`、`HTTP_PROXY`、`ALL_PROXY`、`NO_PROXY`。在启动 `mizuoto webui` 的终端或服务中设置即可。
+
+</Accordion>
+<Accordion title="下载中断了，或模型显示“部分下载”“已损坏”？">
+
+- 中断的下载再下载一次即可，未完成的文件（`.part`）会从断点续传。
+- **部分下载** 也可能是缺少它需要的共享文件，下载一次模型就会补上。
+- **已损坏**：运行 `mizuoto model verify <模型>` 列出损坏的文件，删除这些文件（或 `mizuoto model delete <模型>`）后重新下载；大小正确的文件不会重新下载。
+- 所有来源都失败时报 `download_failed`（退出码 12），错误详情列出试过的来源和最后几条错误。
+
+</Accordion>
+<Accordion title="Hugging Face 要求登录？">
+
+设置环境变量 `HF_TOKEN`，Mizuoto 会把它发送给 huggingface.co（只发给它，不发给镜像）。
+
+</Accordion>
+</Accordions>
+
+## 日志
+
+<Accordions>
+<Accordion title="日志在哪里？">
+
+| 日志 | 位置 | 查看 |
+| --- | --- | --- |
+| 任务日志 | `<数据文件夹>/jobs/<任务 id>.log` | **任务** › **日志**；`mizuoto job log <任务 id>`；`GET /api/v1/jobs/{id}/log` |
+| 服务器日志 | 标准错误输出（启动 `mizuoto webui` 的终端） | — |
+
+日志级别用环境变量 `MIZUOTO_LOG_LEVEL`（`DEBUG`、`INFO`、`WARNING`、`ERROR`，默认 `INFO`）设置；每条命令都接受 `--debug`。
+
+引擎出错时，请求以 `engine_error`（退出码 10）失败，错误详情中带有异常及其调用栈（网页界面中错误下方的 **详情**；命令行中 `mizuoto job show <任务 id> --json` 的 `error`）。上一个请求失败的引擎会连同错误列在 **内存中的模型** 面板中。
+
+</Accordion>
+</Accordions>
+
+## 远程主机
+
+<Accordions>
+<Accordion title="远程主机显示“离线”或“被拒绝”？">
+
+- **离线**：连不上 agent。确认那台机器上 `mizuoto agent` 正在运行，且监听的是能从本机访问的地址（默认只监听 `127.0.0.1`，需要 `--host 0.0.0.0`）；检查地址、端口（默认 7870）和防火墙；两边的 TLS 设置要一致。
+- **被拒绝**：令牌不对，或两边的 Mizuoto 版本不兼容。用 `mizuoto remote add <名称> <地址> --token <令牌>` 重新填写令牌；令牌在 agent 那台机器的 `settings.toml` 中（`remote.agent.token`）。
+
+远程主机不可用时，用到它的请求以 `remote_unavailable`（退出码 14）失败；`mizuoto remote use <引擎> --local` 让引擎回到本机运行。详见 [远程主机](/docs/advanced-remote)。
+
+</Accordion>
+</Accordions>
+
+命令行的约定和退出码见 [命令行概览](/docs/cli)；安装方式见 [安装](/docs/installation)。

@@ -1,0 +1,84 @@
+---
+title: "IndexTTS"
+description: "Mizuoto 单独发行包 mizuoto-indextts 中实现的 IndexTTS 引擎：IndexTTS-1.5、2 和 2.5，带束采样的 GPT-2、条件编码、情感与 s2mel 解码器，哪些做法与上游完全一致，显存与 GPU 解码，以及对照结果。"
+icon: Smile
+---
+
+哔哩哔哩的零样本语音合成（[index-tts/index-tts](https://github.com/index-tts/index-tts)，bilibili Model Use License）。移植版同样受该许可约束，所以作为单独的发行包发布：`mizuoto-indextts`（`packages/native/indextts`，包名 `mizuoto_indextts`，附 `LICENSE.txt`），注册在 `mizuoto.engines` 下（`indextts = mizuoto_indextts:IndexTtsEngine`）。下载和合成都需要先接受许可，克隆还需要一份同意声明。在 CPU 上以 fp32、相同种子运行时，IndexTTS-1.5、2 和 2.5 在完整链路中与 Mizuoto 0.1 完全相同。面向用户的说明见 [引擎详解](/docs/advanced-engines#indextts)。
+
+## 变体与文件
+
+| 变体 | 目录模型 | 采样率 | 新增内容 |
+| --- | --- | --- | --- |
+| `v1_5` | `indextts/v1.5` | 24 kHz | 无文本克隆，中文和英文 |
+| `v2` | `indextts/v2` | 22.05 kHz | 情感来自一段音频、八个权重或一句描述 |
+| `v2_5` | `indextts/v2.5` | 22.05 kHz | 日语和西班牙语、语言 token，以及语速（`duration_factor = 1 / speed`） |
+
+- 1.5 读取 `config.yaml`、其中指定的 GPT 和 BigVGAN 检查点以及 SentencePiece 模型；音色缓存是 `cond_mel.pt`。
+- 2 和 2.5 读取 `config.yaml`、`gpt.pth`、`s2mel.pth`、`wav2vec2bert_stats.pt`、说话人与情感矩阵、`glossary.yaml` 和情感模型的目录（`qwen0.6bemo4-merge`）；2.5 还读取 `codec.pth` 和它的 tiktoken 词表。共享资源：`indextts/w2v-bert`、`indextts/campplus`（`campplus_cn_common.bin`）、`indextts/bigvgan`，以及仅 2 需要的 `indextts/semantic-codec`（2.5 从不读取它，所以它的目录条目不下载它）。
+
+精度：默认 fp32。在 CUDA GPU 上，`engines.indextts.dtype` 为 `fp16` 时 IndexTTS-2 的 GPT 用 fp16 运行；2.5 在其为 `auto` 或 `bf16` 时用 bf16，与 0.1 的选择相同。
+
+## 工作原理
+
+IndexTTS-2 对每个文本分段：
+
+1. **音色提示**（随音色缓存）：22.05 kHz 的音频（最多 15 秒）及其 16 kHz 副本；w2v-BERT 2.0 的第 17 层隐藏状态经归一化后作为 GPT 的条件；MaskGCT 语义编解码器把它量化为解码器的提示编码；CAM++ 给出风格；mel 是解码器的提示。
+2. **情感**：来自说话人音频本身、另一段音频（按 `emo_alpha` 混合），或通过情感矩阵混入的八个权重（按 CAM++ 相似度选行）；描述由情感模型（Qwen3-0.6B，贪心解码）转换为权重。
+3. **GPT**（`UnifiedVoice`，24 层 GPT-2）：用束采样生成语义编码，再对这些编码做一遍前向以得到隐变量。
+4. **s2mel**：长度调节器和作为 CFM 的 Seed-VC DiT（25 步欧拉，引导强度 0.7）生成 mel。
+5. **BigVGAN v2** 生成 22.05 kHz 音频；各分段之间插入静音拼接，尾部淡出，结果量化为 16 位，与上游的返回值相同。
+
+2.5 不用 w2v-BERT 上的 Conformer 和 perceiver，而是用投影后的 CAM++ 嵌入和语言嵌入作为 GPT 的条件；文本通过带 `<|lang|>` 前缀的 tiktoken 读取；编码由它自己的编解码器（RepCodec、Vocos 主干、×2 上采样）转换为解码器特征，而不是用 GPT 的隐变量。1.5 没有情感：参考音频的 log-mel 作为 GPT 的条件，BigVGAN v1 配合其 ECAPA 说话人编码器直接把 GPT 的隐变量变成音频。
+
+| 模块 | 内容 |
+| --- | --- |
+| `engine.py` | `IndexTTS2.infer`（2、2.5）和 1.5 的路径（`LoadedIndexTts15`）：条件编码、情感、分段、DiT、BigVGAN、淡出 |
+| `gpt.py` | `UnifiedVoice`：transformers 4.52 的 GPT-2（`Conv1D` 即 `addmm`、tanh GELU、SDPA）及其基于 `BeamSearchScorer` 的束采样 |
+| `conditioning.py` | IndexTTS 的 Conformer 和 perceiver 重采样器 |
+| `codec.py` | 2.5 的 `EnhancedCodec` 解码 |
+| `qwen_emotion.py` | 情感模型：Qwen3-0.6B，贪心解码，它的对话模板，把回答解析为八个权重 |
+| `text.py` | 1.5/2 的前端：通过 kaldifst 应用的 WeTextProcessing FST（`TnProcessor`）、`TextNormalizer`、SentencePiece、`split_segments` |
+| `text25.py` | 2.5 的前端：标点映射、规范化、日语用 fugashi、带 `<\|lang\|>` 的 tiktoken |
+| `assets/tn/` | WeTextProcessing 的中英文 tagger 和 verbaliser FST（10 MB） |
+
+共享：`nn/ssl/w2vbert.py`、`nn/codecs/repcodec.py`、`nn/transformer/seedvc.py`、`nn/vocoders/bigvgan.py`（v2；v1 配 ECAPA）、`nn/speaker/campplus_torch.py`、`nn/vocoders/vocos.py`、`nn/dsp/`（`seamless`、`kaldi`、`mel`、`resample`、`wav`）、`runtime/lm/qwen.py`、`runtime/sampling.py`、`runtime/graphs.py`、`text/normalize/wetext.py`、`text/tokenize/bpe.py`、`runtime/compile.py`。
+
+## 与上游一致的做法
+
+- **按 transformers 4.52 的计算方式实现 GPT-2**：`Conv1D` 即 `addmm`，tanh GELU，SDPA 在提示上因果且不带掩码，在每个新 token 上不带掩码。
+- **束采样**，即上游所用的旧版 transformers 路径：log-softmax 依次经过重复惩罚（作用于所有 id，包括提示的占位 id）、温度、top-k 和 top-p（至少保留两个），加上各束的分数，不放回地抽取 `2 × num_beams` 个候选，再由 `BeamSearchScorer` 维护假设。
+- **IndexTTS-1.5 不用 KV 缓存**，除非以 fp16 运行，与上游相同：每一步都重新计算整个序列，用缓存的话求和结果会不同。
+- **抽样顺序**：所有抽样都按上游的顺序（先 GPT，后 DiT 的噪声）来自请求的生成器。
+- **情感嵌入**从音频以 16 kHz 重新读取，而不是由 22.05 kHz 的副本重采样得到：它是音色缓存中单独的一个字段。
+- **文本（1.5、2）** 用 WeTextProcessing 自己的 FST 通过 kaldifst 做规范化。上游在 Linux 上运行 pynini，在其他平台用另一套 FST；Mizuoto 在所有平台上都给出 Linux 上的行为。人名和拼音按首次出现的顺序编号（上游用 `set` 的顺序，每次运行都可能不同）。
+- **2.5 的文本**：zh、en、ja、es 以外的语言（以及未指定语言）以 `zhen` 发送，与上游相同。上游同样没有 NeMo 的日语和西班牙语规范化，所以这类文本原样通过；日语需要 fugashi（`mizuoto-indextts[ja]`）。
+
+## 有意的差异
+
+- **不做 w2v-BERT 的 layer drop 抽样**：在 eval 模式下它们从不改变输出。
+- **尺寸来自配置。** 上游写死的尺寸（w2v-BERT 的宽度、`gpt_layer`）改为取自配置，这样小型测试模型也能构建；真实模型得到的数值相同。
+- **严格加载。** 检查点严格加载；上游对缺失的键保留随机权重（已发布的检查点中没有缺失的键）。
+- **未移植**：TensorRT、上游的加速引擎和 BigVGAN 的 CUDA 内核（0.1 的加载选项 `use_accel`、`use_trt`、`trt_precision`、`use_cuda_kernel`），以及 2.5 的低显存文本切分（上游在显存不足 10 GB 的 GPU 上把文本切成 40 个字符的片段；Mizuoto 由运行时管理显存）。`use_torch_compile` 会为 s2mel DiT 和 BigVGAN 开启 `compute.compile`。
+
+## 显存与速度
+
+阶段：音色未缓存时依次是 w2v-BERT、CAM++、语义编解码器和长度调节器（情感音频只用 w2v-BERT）；有情感文本时是情感模型；然后是 GPT（`kind="sequence"`；它的 GPT-2 `Conv1D` 层像线性层一样流式加载）、s2mel 和 BigVGAN。克隆已缓存的音色时从不放置 w2v-BERT 或 CAM++。开启 `compute.oom_fallback` 时，若 BigVGAN 显存不足，就分块解码（IndexTTS 2/2.5）。GPT 的工作内存按每个分段估算：其文本 token 数和每个 token 24 个编码（实际语速约为 5），不超过 `max_mel_tokens`，计入每一束，按它实际计算所用的 dtype。
+
+束采样原来每一步约等待设备十次（`torch.multinomial` 的检查、评分器用 `.item()` 读取每个候选、停止判断、束重排、位置嵌入的下标张量）。现在只等一次：抽样用 `multinomial` 自己的 `topk(p / Exp(1), 2 × beams)`（`runtime.sampling.multinomial_draws`，在 CPU 和 CUDA 上 id 和生成器状态都相同）；候选的分数、token 和所属束一次读回，评分器在主机上根据这些值做决定；位置嵌入直接取表中的一行。开启 `compute.cuda_graphs`（NVIDIA，GPT 完整位于设备上并使用 KV 缓存：IndexTTS 2/2.5，以及 fp16 下的 1.5）时，所有束的 GPT-2 单 token 步骤以 CUDA 图运行在每层注意力的两侧；缓存、它的束重排和采样仍以 eager 方式进行。音频相同，按 1.5 的尺寸每步快 2.6–3.2 倍。
+
+CPU 上以 fp32 运行 `compute.compile`：s2mel DiT 的热启动时间减少 7 %，BigVGAN 减少 20 %；音频与 eager 相差不超过 6.1e-5（87.7 dB）。
+
+## 训练
+
+无：IndexTTS 没有公开其语音合成模型的训练代码，清单中也没有声明任何训练方法。
+
+## 对照结果
+
+在 CPU 上以 fp32 运行时，IndexTTS-1.5、2 和 2.5 在完整链路的全部四个用例中都与 0.1 逐采样相同：一个 1.5 克隆、一个 2 克隆、带情感权重的 IndexTTS-2 和一个 2.5 中文克隆。在组件层面，情感模型、每个文本前端以及带和不带 KV 缓存的 GPT 也都相同。契约套件通过（18 项测试）。
+
+## 限制
+
+- 没有训练方法。
+- 2.5 的日语和西班牙语文本不做规范化（与上游相同）；日语需要 `ja` 附加依赖。
+- 结果不能用于训练其他引擎（`trains_others = false`），克隆需要许可要求的同意声明。

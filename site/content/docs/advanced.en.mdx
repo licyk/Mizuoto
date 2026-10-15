@@ -1,0 +1,18 @@
+---
+title: "Overview"
+description: "The advanced section is for readers who already use Mizuoto and want to know more about the engines, the API, remote hosts, performance, downloads, containers and calling it from Python."
+icon: Compass
+---
+
+<Cards>
+  <Card title="Engines in depth" href="/docs/advanced-engines" description="The seven speech engines and speech recognition: catalogue models, capabilities, voice modes, languages, licences, training methods, and what each one needs installed." />
+  <Card title="HTTP API" href="/docs/advanced-api" description="The REST API under /api/v1, the access token and origin checks, jobs and ?wait=true, events at /ws, streaming synthesis, and the OpenAI-compatible /v1/audio/speech." />
+  <Card title="Remote hosts" href="/docs/advanced-remote" description="Run mizuoto agent on another machine and let engines run there; voices, outputs and the UI stay on this one." />
+  <Card title="Performance" href="/docs/advanced-performance" description="Loaded models and memory, running out of GPU memory, devices and precision, torch.compile, and micro-batching." />
+  <Card title="Model downloads and mirrors" href="/docs/advanced-downloads" description="Download sources and their order, resuming and SHA-256 checks, HF_TOKEN, shared assets, importing a model folder, and the mizuoto-model mirror or one of your own." />
+  <Card title="Docker" href="/docs/advanced-docker" description="The Dockerfile's stages and build arguments, GPUs, volumes, the access token and the environment variables the image sets." />
+  <Card title="Using Mizuoto from Python" href="/docs/advanced-embed" description="Call the core services with open_services(), or embed the server and web UI in your program with MizuotoServer." />
+  <Card title="FAQ" href="/docs/advanced-faq" description="Ports, the access token, the first run, torch and missing engines, GPU memory, CPU speed, licences, downloads, logs and remote hosts." />
+</Cards>
+
+Settings and environment variables for the command line are in [Configuration and environment variables](/docs/cli-config); the web UI's settings in [Settings](/docs/guide-settings).

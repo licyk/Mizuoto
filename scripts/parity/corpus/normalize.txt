@@ -1,0 +1,397 @@
+// Text normalisation parity corpus: one text per line (lines starting with // are comments).
+今天是2024年3月15日，气温是-5℃到12℃。
+这件衣服打8折，原价199.99元，现价159.99元。
+请拨打电话13812345678或者010-87654321联系我们。
+会议在下午3:30开始，预计持续1.5小时。
+他跑了100米只用了9.58秒，打破了世界纪录。
+公司的营收增长了23.5%，利润达到了1,234,567元。
+比分是3:2，主队获胜。
+这个房间有25平方米，面积是5m×5m。
+我住在幸福路108号3单元502室。
+2的3次方等于8，√16=4。
+x-2=0的解是x=2。
+550 + 320 = 870 千卡。
+哪儿有卖冰棍儿的？小孩儿都喜欢。
+一块儿去吧，就在那儿。
+这是第1章第2节的内容。
+他出生于1990年，今年34岁。
+温度约≈37.5度，体重<60公斤。
+请于2025-01-01前提交，逾期不候。
+时间：08:00-17:30（周一至周五）。
+价格区间是100~200元。
+该股票今天上涨了3.14%，收盘价为$45.67。
+【重要通知】明天放假一天——请注意安排。
+（备注）这是一个测试。
+`code` 不应该被读出来。
+# 标题一
+- 列表项一
+- 列表项二
+这是**加粗**的文字和[链接](https://example.com)。
+![图片](https://example.com/a.png)这里有一张图片。
+你好😀世界🎉！
+他说：“明天见。”
+1/3的人选择了A，2/3的人选择了B。
+第3名到第10名都有奖励。
+今天是星期3，明天是星期4。
+我有2个苹果和3.5个橘子。
+距离是10km，速度是60km/h。
+重量为5kg，体积为2L。
+用了0.001秒。
+负数-15和正数+20。
+2024年的GDP是126万亿元。
+电话号码：400-800-8888。
+邮编是100080。
+身份证号码是11010519491231002X。
+网址是www.example.com，邮箱是test@example.com。
+iPhone 15 Pro Max的价格是9999元。
+COVID-19疫情从2019年开始。
+我们在3楼的302会议室开会。
+The meeting starts at 3:30 PM on March 15, 2024.
+It costs $19.99, or about €18.50.
+The temperature dropped to -5°C last night.
+Call me at 555-123-4567 tomorrow.
+He finished 1st, she was 2nd and they were 3rd.
+The population is 1,234,567 people.
+Interest rose by 2.5% in 2023.
+Room 101 is on the 1st floor.
+We need 3/4 cup of sugar and 1/2 cup of milk.
+The year 1999 was a long time ago.
+Dr. Smith lives at 221B Baker St.
+The ratio is 16:9 and the score is 3-2.
+It weighs 2.5kg and measures 30cm.
+I have 2 cats and 1 dog.
+Version 2.0.1 was released on 2024-01-01.
+Mr. Jones paid £100 for 3 tickets.
+The flight is at 08:45 and lands at 14:20.
+CO2 levels are at 420 ppm.
+The answer is 42.
+I'm 25 years old, and I don't like it.
+Please read chapter 11, page 237.
+He scored 98.6 out of 100.
+The speed limit is 65 mph.
+In the 1980s, computers were slow.
+This is **bold** and _italic_ text with [a link](https://example.com).
+Hello 👋 world 🌍!
+“Quoted” text with ‘single’ quotes.
+Line one
+Line two
+Tabs	between	words.
+A-1 and B-2 are the codes.
+We sold 10k units.
+It's 10 o'clock.
+The 2nd of May.
+Pi is approximately 3.14159.
+Population: 7.9 billion.
+Call 911 now.
+The year 2000 problem.
+He was born on 12/25/1990.
+$5 million dollars.
+50% off everything.
+Room temperature is 20-25 degrees.
+Hello, this is a short test of the speech model.
+VoxCPM2 brings studio-quality multilingual speech synthesis.
+混合 English 和中文 123 句子。
+(A young woman, gentle and sweet voice)Hello, welcome to VoxCPM2!
+（年轻女性，温柔甜美）欢迎使用VoxCPM2！
+Привет, мир! 123
+こんにちは、世界！2024年
+大约307626759公里！
+编号7。
+961～1，
+4/35
+编号15，
+284.62022倍
+-71609
+编号8684559
+第1169次，
+4948902/1
+8.251796694倍。
+温度7度，
+增长了980%，
+价格是176300539元！
+4/3541
+80/62870，
+9～8，
+大约915423106公里。
+2985040点787225237分！
+比例为70917:511195225。
+4568.470倍！
+9920～3807！
+大约4209公里，
+大约35767公里，
+第2次！
+5点518851194分！
+281850201点461分！
+大约95公里！
+增长了1247525%！
+大约183公里
+99121点2分
+共有805人参加！
+7年6月8日！
+874点288分
+2/7736545！
+-3758！
+第99次。
+684838818.1483倍！
+价格是7165343元。
+第8次！
+628792532年2244月2日。
+1点1分
+大约5公里
+51784/93！
+编号67555。
+温度72度！
+367257479点3674分，
+-5264
+增长了1%！
+9310502～35474
+增长了6%！
+-562，
+大约7750432公里
+45596年3036459月491日。
+888402695点160616855分。
+增长了1%
+共有5601人参加
+6点7分！
+5135938年761936032月3日！
+6点5分，
+增长了527635256%。
+79232～18
+共有926195425人参加
+405216102年2月324日，
+大约7099公里。
+-3！
+9042158～67185！
+编号9！
+温度879度
+大约56016公里！
+674214202/8366472！
+比例为1:29
+编号71。
+7年88月7日，
+温度8度，
+3962～6！
+编号227
+64/7065。
+编号24
+第540次
+温度7209630度。
+共有6人参加
+编号4025！
+第845次！
+284年93885月8日
+增长了2971741%。
+温度79217度。
+-28。
+编号70！
+温度603度！
+价格是8元
+价格是11917元，
+编号579。
+价格是9385510元！
+23793/3！
+温度7度！
+增长了57654%！
+增长了7%，
+803727127.123445362倍。
+比例为515460249:3458178
+比例为3:8！
+2/65678，
+883311279点37分！
+44349点75429分！
+68675点11分
+编号4865486
+3年8586288月9800398日！
+第536次，
+28点48分！
+温度274度，
+8167年151月43146日
+3年176945078月6144日！
+比例为2:756
+价格是7436669元，
+203112244年56月2日，
+共有17人参加
+3236607～6！
+编号4
+8年3月2日
+890637489.566543429倍！
+9点5分。
+比例为435519677:6879，
+编号5。
+温度48度！
+7点9390分
+6616286.5倍
+7.916304300倍，
+比例为85:37829
+第4次。
+比例为8853:1882742！
+编号2137295。
+共有5人参加。
+价格是3元
+-47
+增长了3%！
+增长了6%！
+价格是48元！
+77～2，
+8351点9855068分。
+增长了7800%
+3026年315933059月8191日！
+比例为8:55
+98235.304倍！
+比例为28:7477092
+-244109038
+646649640年2月9631730日！
+9.2985倍，
+-3477。
+6～234723912！
+比例为5:6，
+It costs $6891,
+number 6
+the 640th time,
+It costs $8739.
+6227396 to 94825
+8/5
+2/97112/5
+It costs $28649.
+4979 people came
+about 85 km
+-6852.
+2566007.19 times.
+about 8307369 km.
+-709,
+a ratio of 90:422!
+3 degrees
+44 people came,
+up 8%!
+a ratio of 203193182:2,
+about 42367 km.
+the 17th time!
+163682083.665 times.
+981 degrees.
+466912329/13279/7976869.
+-73766!
+1.4 times.
+at 55087:4,
+number 4368
+4169881 degrees!
+816986022.8751169 times!
+number 5759920,
+up 7089%!
+31322 to 1497469.
+5250291/50,
+9492/4767763!
+at 65:60610,
+1060071 people came.
+79390 degrees!
+6 degrees,
+93/271/11363!
+at 88:94,
+the 4th time.
+1 to 4,
+-625896449!
+up 7%,
+at 8236007:7171879,
+up 7964%,
+number 859589307
+4.30865 times
+a ratio of 5438:6
+2 people came.
+-4,
+44567 to 84.
+It costs $73095!
+the 10th time,
+77698 people came
+66185/8473
+It costs $8,
+about 1243261 km.
+a ratio of 168:8.
+223723637/2.
+a ratio of 9:324142859!
+It costs $815,
+It costs $46460!
+up 7%,
+It costs $1!
+a ratio of 1583:24766!
+a ratio of 69:4359642
+a ratio of 1:4!
+286 people came!
+the 821849879th time,
+about 573624785 km
+up 2302513%,
+5458/928/9116748.
+204 to 59371.
+4 degrees
+about 9700102 km!
+up 7%
+93008/3
+8/1/2!
+at 4:81!
+at 68:96
+at 941:6139!
+It costs $954505475!
+6258765 degrees
+at 767311784:2,
+45.1 times.
+up 3438267%
+6 degrees!
+about 277375321 km!
+964.30 times!
+283979528/457805213/7.
+a ratio of 1:3
+at 5:521662389
+-5.
+-737105589!
+at 962:88446
+It costs $5036!
+965/6
+38524/1682/2133703,
+3 to 418697557.
+number 3,
+6890337 degrees,
+1743183 people came.
+at 9:47
+about 3 km!
+9/6958!
+88.6 times!
+It costs $263757401.
+568196221.8189029 times,
+number 1
+-9,
+-4
+up 7%.
+up 9%
+-806700866.
+-8,
+-683951755
+about 6 km,
+49679/42.
+459835668.68 times.
+57/2830/50822,
+5730/169,
+about 6 km,
+9 degrees.
+864371300 people came.
+a ratio of 77:4123698.
+It costs $1963059,
+688 degrees!
+It costs $266595633,
+934982427 to 5222648
+number 17!
+up 4747358%.
+It costs $3!
+number 6!
+the 8th time,
+a ratio of 8:9588893,
+the 2545th time
+6394 people came.
+up 1%!
+4/9!
+6874 people came,
+683283598 to 391!
+number 1
+9 degrees.
+up 69%.
+672.1109 times.
+49.6 times!
+79.8 times
+8207 degrees

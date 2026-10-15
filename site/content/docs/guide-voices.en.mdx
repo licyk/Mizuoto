@@ -1,0 +1,120 @@
+---
+title: "Voices"
+description: "The voice library: make voices from audio, design them, add preset speakers, manage clips, transcripts and fine-tuned weights, see which models can use them, export and import."
+icon: Users
+---
+
+**Voices** is the voice library. A voice can be used again and again in **Speak**, **Projects** and **Tools**; when you change models, Mizuoto works out how the new model can use it.
+
+There are four kinds:
+
+| Kind | Where it comes from |
+| --- | --- |
+| **From a clip** | One or more reference clips with their transcripts, for cloning |
+| **Designed** | A voice a design model made from a description; the clip it spoke becomes its main clip, so other models can clone it too |
+| **Preset** | A model's preset speaker, for that model only |
+| **Trained** | A voice with its own fine-tuned weights, from training (see [Train](/docs/guide-train)) |
+
+Each voice is a folder under `voices/<name>/` in the data folder (`voice.json` and FLAC clips in `references/`). The list is a scan of those folders, so a voice folder copied in appears too.
+
+## The list
+
+At the top: **Search voices**, chips to filter by kind, **Import a voice** and **New voice**. Each card shows the name, kind, description, language, **Clips: N** and their total length; **Play its clip** plays the main clip, and **Use in Speak** opens Speak with the voice chosen. Click a card to open the voice's page.
+
+## A new voice
+
+Click **New voice**, type a **Name**, then choose a way:
+
+<Tabs items={["From audio", "Design", "Preset"]}>
+<Tab value="From audio">
+
+1. Add one or more reference clips: drop or choose files, **Record** (3 to 30 seconds of clear speech works best), **Server files** or **Earlier results**.
+2. Each clip gets a **What is said in the clip** field. It may stay empty: **Missing transcripts are filled by speech recognition when it is installed.**
+3. Choose the **Language** (or **Any language**).
+4. Click **Create**.
+
+</Tab>
+<Tab value="Design">
+
+You need an installed model that designs voices, such as Qwen3-TTS 1.7B VoiceDesign; without one the dialog says **No design model is installed.**
+
+1. Choose the **Design model**.
+2. Describe the voice under **The voice, described**, for example "A warm, low male voice, calm and a little hoarse".
+3. **What the voice says in its sample** is the sentence to listen to; change it if you like.
+4. Click **Generate**. Each click makes one candidate under **Candidates** (the last 4 are kept); listen to each.
+5. Click **Keep this one** beside the one you like: it becomes a **Designed** voice.
+
+</Tab>
+<Tab value="Preset">
+
+1. Choose the **Model** (only installed models with preset speakers are listed).
+2. Choose the **Speaker**.
+3. Click **Create**.
+
+</Tab>
+</Tabs>
+
+Any result can become a voice too: **Keep as a voice** in its menu.
+
+## The voice's page
+
+The top shows the name and kind; a designed voice also shows **Designed with** *model* and its description, a preset voice **Speaker** *name* **of** *model*.
+
+### Reference clips
+
+(Not for preset voices.) One row per clip: a play button, the waveform, its length and sample rate, and:
+
+- the **Main clip** badge, or **Make it the main clip**. The main clip comes first when the voice is cloned, and is the one played from the list.
+- a remove button (one clip must remain).
+- below it, the clip's transcript; click **Save** (or press Enter) after changing it.
+
+**Transcribe again** has speech recognition transcribe every clip again; **Add a clip** adds another.
+
+### Fine-tuned weights
+
+(For voices from a clip and trained voices.) A voice can carry its own fine-tuned weights for an engine; today that is GPT-SoVITS: a GPT `.ckpt` and a SoVITS `.pth`.
+
+1. Choose the **Engine**.
+2. **Choose the gpt file (.ckpt)** and **Choose the sovits file (.pth)**.
+3. Click **Add the weights**; when the upload is done it says **Weights for GPT-SoVITS added**.
+
+The weights' version is read from the files. GPT-SoVITS models of the same version switch to these weights when they use the voice (marked **own weights** under **Which models can use it**); models of another version warn and clone as usual. **The voice keeps its clips too: the engine still needs a reference clip with the weights.** Weights exported by a training experiment are added to the voice for you.
+
+### Which models can use it
+
+Each installed model, and whether and how it can use the voice: **Clone**, **Clone (no transcript)**, **Preset speaker**, **Designed** or **Trained**, with badges such as **own weights**, **transcribed first** or **trimmed to fit**; models that cannot say why.
+
+Rows that clone have a **Prepare** button: it computes and caches what the model needs from the clips ahead of time, so the first synthesis is faster. Otherwise the first synthesis does it once by itself.
+
+### Try it
+
+Choose a usable **Model**, change the **Text** if you like, and click **Speak**. The results are listed below.
+
+### Details
+
+**Name**, **Language**, **Tags** (comma-separated) and **Description**; click **Save** after changing them.
+
+### The page footer
+
+- **Delete**: moves the voice to the data folder's trash (`trash/`).
+- **Export**: downloads a zip with the voice's details, clips and fine-tuned weights.
+- **Use in Speak**: opens Speak with this voice.
+
+## Import
+
+Click **Import a voice** on the list and choose an exported zip.
+
+## Command line
+
+```bash
+mizuoto voice add Me --ref me.wav                                     # from audio; missing transcripts by ASR
+mizuoto voice design Narrator -m qwen3tts/1.7b-voice-design -d "A warm, low male voice, calm and slow"
+mizuoto voice from-preset qwen3tts/1.7b-custom-voice vivian           # a preset speaker
+mizuoto voice fit narrator -m qwen3tts/1.7b-base                      # whether and how a model can use it
+mizuoto voice prepare narrator -m qwen3tts/1.7b-base                  # prepare ahead of time
+mizuoto voice add-weights me -e gptsovits -f gpt=me.ckpt -f sovits=me.pth
+mizuoto voice export narrator -o narrator.zip
+mizuoto voice import narrator.zip
+```
+
+The other commands (`add-ref`, `set-transcript`, `retranscribe`, `edit`, `remove`…) are in `mizuoto voice --help` and the [command reference](/docs/cli-commands). `voice add`, `voice from-output` and `voice edit` take `--consent`, an optional note on whose voice it is that is stored with the voice (`voice info` prints it); nothing requires it.

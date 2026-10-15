@@ -1,0 +1,31 @@
+{
+ "repo": "openbmb/VoxCPM-0.5B",
+ "revision": "b2e656f7524303fdaf84591c75bbb87203d7c98d",
+ "files": [
+  {
+   "path": "audiovae.pth",
+   "size": 301494192,
+   "sha256": "5b93f34c771281679b0ff93be3d1c1681eb1f301c3892e701db8f10a725b20a9"
+  },
+  {
+   "path": "config.json",
+   "size": 2602,
+   "sha256": "3e4c4501e1b712e18f302b69944c6b82cf374098ad0e1a991506e55416dbc947"
+  },
+  {
+   "path": "pytorch_model.bin",
+   "size": 1304698606,
+   "sha256": "62cee3da3fa803a7eb7a8fa47318ab9a6d88abe17b9d51062852f6ac86b52e3a"
+  },
+  {
+   "path": "tokenizer.json",
+   "size": 3676778,
+   "sha256": "63443666e076f48a575030d4861e5bdbf64b71632b48e75d4e867c46dd980aa5"
+  },
+  {
+   "path": "tokenizer_config.json",
+   "size": 4952,
+   "sha256": "466575c55f0cf49530666c2e46ed14f26237dbd227ba7f4bb3bbec93df90edfc"
+  }
+ ]
+}

@@ -1,0 +1,238 @@
+---
+title: "FAQ"
+description: "Common questions by topic: starting up, the access token, torch and engines, GPU memory, licences, downloads, logs and remote hosts."
+icon: CircleQuestionMark
+---
+
+When something goes wrong, read the job's log first (**Log** in the **Jobs** panel, or `mizuoto job log <job id>`), then run `mizuoto doctor`: it checks torch's build against the hardware, whether each engine is available and which optional extras are missing, and gives the commands that fix what it finds.
+
+## Starting up and data
+
+<Accordions>
+<Accordion title="The port is already in use">
+
+The default port is 7869. When it is taken, the server tries the next ports (20 at most) and logs "Port 7869 is unavailable. Using port 7870."; the browser opens the port actually used, and stdout gets a line `SERVER_READY url=…` once it listens.
+
+```bash
+mizuoto webui --port 8000                 # this once
+mizuoto config set server.port 8000       # from now on (at the next start)
+mizuoto webui --strict-port               # fail instead (exit code 3)
+```
+
+</Accordion>
+<Accordion title="Where is my data?">
+
+The default data folder:
+
+| System | Location |
+| --- | --- |
+| Windows | `%APPDATA%\mizuoto` |
+| macOS | `~/Library/Application Support/mizuoto` |
+| Linux | `$XDG_DATA_HOME/mizuoto`, by default `~/.local/share/mizuoto` |
+
+It holds `settings.toml`, the database `mizuoto.db`, `models/`, `voices/`, `outputs/`, `datasets/`, `experiments/`, `projects/`, `cache/`, `jobs/` (job logs) and `logs/`.
+
+Move it with the `MIZUOTO_DATA_DIR` environment variable or `mizuoto webui --data-dir <path>`; to move only one kind of file, change `paths.*` (**Settings** › **Storage**). `data_dir` and `resolved_paths` in `mizuoto config show` give the folders in use, and the web UI shows the **Data folder** and **Settings file** in **Settings** › **About**. See [Configuration](/docs/cli-config).
+
+</Accordion>
+<Accordion title="How do I reset the settings?">
+
+Stop the server, then delete or rename `settings.toml` (`mizuoto config path` prints where it is). The next start uses every default; voices, models and outputs are untouched. Values set by `MIZUOTO_<GROUP>__<FIELD>` environment variables still win.
+
+</Accordion>
+<Accordion title="Can I use the command line while the server runs?">
+
+Yes, but they are **separate processes**:
+
+- Jobs go into the same database, so the web UI's **Jobs** panel and `mizuoto job list` show both sides' jobs.
+- A command runs its job in the foreground in its own process: it does not queue with the server's GPU jobs and loads its own models, so the same model can be loaded in GPU memory twice.
+- `mizuoto job cancel` reaches only its own process's jobs; for a job the server runs it answers "is not running". Cancel the server's jobs in the web UI or with `POST /api/v1/jobs/{id}/cancel`.
+- `mizuoto config set` writes `settings.toml`; the server reads the change within about a second. The server's address and port take effect at its next start. A change to an engine's `engines.<id>.*` unloads that engine's models, which load with the new settings on next use.
+
+</Accordion>
+</Accordions>
+
+## Access token
+
+<Accordions>
+<Accordion title="The page asks for an access token">
+
+With `server.access_token` set, the UI shows the **Access token** dialog ("This server asks for its access token."); enter it once. An API request without it gets 401 `auth_required`; send it as an `Authorization: Bearer <token>` header, the `mizuoto_token` cookie or a `?token=` query parameter (see [HTTP API](/docs/advanced-api)).
+
+**Settings** › **General** has **Set token** and **Clear token**; on the command line:
+
+```bash
+mizuoto config set server.access_token "a long random string"
+mizuoto config set server.access_token null      # clear it
+```
+
+A forgotten token is replaced by setting a new one on the server machine.
+
+</Accordion>
+<Accordion title="Do I need a token when binding to 0.0.0.0?">
+
+Mizuoto does not require one, but set one. With `mizuoto webui --host 0.0.0.0` the server only logs "Binding to 0.0.0.0 makes the server reachable from other machines." and stops checking the `Host` header; without a token, anyone who can reach the address can do everything (download models, delete outputs…). Reading server paths and showing files in a folder stay limited to a browser on the server's own machine.
+
+</Accordion>
+</Accordions>
+
+## First run
+
+<Accordions>
+<Accordion title="What happens the first time I start Mizuoto?">
+
+The web UI opens on **Speak**, where the dummy engine works right away (it speaks in tones); there is no setup screen. Choose the download source under **Settings** › **Downloads**, check torch under **Settings** › **Compute** (or with `mizuoto doctor`), then download models from **Models**, or with the button that replaces **Speak** when the chosen model is not downloaded, and follow them in **Jobs**. See [First run](/docs/first-run).
+
+</Accordion>
+</Accordions>
+
+## Torch and engines
+
+<Accordions>
+<Accordion title="An engine is Not available">
+
+An engine needs torch (only the dummy engine runs without it) and its implementation: every engine is built into Mizuoto except Fish Speech and IndexTTS, which are distributions of their own. The engine card and `mizuoto doctor <engine>` say what is missing:
+
+- `torch`: install the build `mizuoto doctor` names (see [Installation](/docs/installation#ways-to-install)).
+- `mizuoto-fishspeech` or `mizuoto-indextts`: install its wheel into Mizuoto's Python, such as `pip install dist/mizuoto_indextts-*.whl`.
+
+Then restart Mizuoto. Using such a model fails with `engine_not_installed` (exit code 7) and the install command in the hint.
+
+</Accordion>
+<Accordion title="torch does not use my GPU">
+
+torch's build must match the hardware: a CUDA build for NVIDIA (no newer than the driver supports), a ROCm build for AMD, the XPU build for Intel, PyPI's own build on Apple silicon. `mizuoto doctor` compares them and prints the command that installs the right build into Mizuoto's Python, such as:
+
+```bash
+python -m pip install --upgrade --force-reinstall "torch>=2.8" --index-url https://download.pytorch.org/whl/cu128
+```
+
+The same check shows in **Settings** › **Compute**. "sees no GPU: CUDA_VISIBLE_DEVICES hides them" means the variable is set where Mizuoto starts.
+
+</Accordion>
+<Accordion title="Japanese or Korean text fails (capability_not_supported)">
+
+GPT-SoVITS's Japanese and Korean front ends and IndexTTS-2.5's Japanese are optional extras: `pip install 'mizuoto[gptsovits-ja]'` (pyopenjtalk is built from source: it needs CMake and a C++ compiler), `pip install 'mizuoto[gptsovits-ko]'`, `pip install 'mizuoto-indextts[ja]'`. The error's hint gives the command; `mizuoto doctor` lists the missing ones. See [Optional extras](/docs/installation#optional-extras).
+
+</Accordion>
+</Accordions>
+
+## GPU memory and speed
+
+<Accordions>
+<Accordion title="Not enough GPU memory (compute_unavailable)">
+
+A model that does not fit its GPU loads partly: the layers that fit stay on the GPU and the rest of its weights stream from RAM as they run (slower; the result says so). Mizuoto always tries to load a model, whatever the estimate says, and fails with `compute_unavailable` (exit code 9, HTTP 503; `detail.reason` is `out_of_memory`) only when an allocation really fails. It then unloads every model not in use from every GPU, as ComfyUI does. You can:
+
+- close the other program holding the GPU, or click **Free GPU memory** (or **Unload** a model) in the **Models in memory** panel;
+- set **Settings** › **Compute** › **Memory** › **How models use GPU memory** to *low* or *none* (`compute.vram_mode`), or cap Mizuoto's share with `compute.vram_limit_mb`;
+- use another GPU: `mizuoto config set engines.<id>.device cuda:1` (**Models** › **Engines** › **Device**);
+- use the CPU: `mizuoto config set engines.<id>.device cpu`;
+- pick a smaller model (Qwen3-TTS 0.6B, for one).
+
+When memory runs out during a request anyway, Mizuoto runs the step again with more of its weights in RAM and the same random draws (the same result, slower); with `compute.oom_fallback` it then tries a cheaper way (tiles, smaller batches). `compute.gpu_jobs` (default 1) sets how many jobs run at once on one GPU; a job waiting for the GPU can be started beside the running one with **Run anyway** when the memory suffices. `compute.inference_jobs` (default 1) sets how many synthesis jobs run at once across all engines and devices. More in [Performance](/docs/advanced-performance).
+
+</Accordion>
+<Accordion title="It is slow on the CPU">
+
+Every engine runs on a CPU, much more slowly than on a GPU: the CPU runs in fp32, and large models such as Fish Speech are especially slow. Pick smaller models (Qwen3-TTS 0.6B, the GPT-SoVITS v2 family…), run the engine on a GPU machine as a [remote host](/docs/advanced-remote), or turn on streaming playback to hear the audio as it is made.
+
+</Accordion>
+<Accordion title="The model loads again every time">
+
+Idle models are unloaded after `compute.unload_after_minutes` (default 20; 0 never unloads), which `engines.<id>.idle_minutes` overrides per engine; at most `compute.max_resident_models` models (default 3) stay loaded, the least recently used idle one making room first. `mizuoto runtime` lists the loaded models. Models in `engines.<id>.pinned_models` are not unloaded to make room or for being idle. See [Performance](/docs/advanced-performance).
+
+</Accordion>
+</Accordions>
+
+## Licences
+
+<Accordions>
+<Accordion title="'must be accepted first' (licence_not_accepted)">
+
+Fish Speech (Fish Audio Research License) and IndexTTS (bilibili Model Use License) need their licence accepted before their models and shared files are downloaded, or they synthesize (exit code 5, HTTP 403). Read it, then:
+
+```bash
+mizuoto engine licence fishspeech            # print the full text
+mizuoto engine accept-licence fishspeech
+```
+
+or click **Accept the licence** in **Models** › **Engines** and tick **I have read and accept this licence**. The acceptance is stored as `engines.<id>.accepted_licence` (the licence's id and version); a new licence version must be accepted again.
+
+</Accordion>
+<Accordion title="Does cloning with IndexTTS need a consent statement?">
+
+No. The engine's licence, accepted with its full text in front of you, governs its use, and the notice under its results reminds you that cloning a voice without its owner's permission is forbidden by the IndexTTS disclaimer. `mizuoto speak --consent` no longer exists, and the API ignores `voice_spec.consent`. A voice's or dataset's consent note (`mizuoto voice add --consent …`, `voice edit --consent`, `dataset create --consent`) is still stored if you give one, but nothing requires it.
+
+</Accordion>
+<Accordion title="Which results are non-commercial or kept out of training?">
+
+- F5-TTS's pretrained weights are CC-BY-NC-4.0: its results are not for commercial use, and neither are models fine-tuned from them.
+- Fish Speech's licence does not allow commercial use.
+- Results of Fish Speech and IndexTTS cannot train other engines: datasets keep the outputs' licence tags and training refuses those clips.
+- Results carry the engine's licence tags and notices (such as "Built with Fish Audio"), shown under the result.
+
+Each engine's licence is in [Engines in depth](/docs/advanced-engines).
+
+</Accordion>
+</Accordions>
+
+## Downloads
+
+<Accordions>
+<Accordion title="Downloads are slow, or Hugging Face is unreachable">
+
+Choose **hf-mirror.com** or **ModelScope** in **Settings** › **Downloads** › **Download source**, or `mizuoto config set downloads.source hf-mirror`; or set **Repository** to **mizuoto-model mirror first**. A file that fails on one source comes from the next one by itself. See [Model downloads and mirrors](/docs/advanced-downloads).
+
+</Accordion>
+<Accordion title="I need a proxy">
+
+Model downloads read the standard proxy variables `HTTPS_PROXY`, `HTTP_PROXY`, `ALL_PROXY` and `NO_PROXY`. Set them where `mizuoto webui` is started.
+
+</Accordion>
+<Accordion title="A download stopped, or a model is Partly downloaded or Damaged">
+
+- Download it again: unfinished files (`.part`) resume where they stopped.
+- **Partly downloaded** can also mean a shared file it needs is missing; downloading the model again fetches it.
+- **Damaged**: `mizuoto model verify <model>` lists the damaged files; delete them (or `mizuoto model delete <model>`) and download again, since files of the right size are not downloaded again.
+- When every source fails the job ends with `download_failed` (exit code 12), whose detail lists the sources tried and the last errors.
+
+</Accordion>
+<Accordion title="Hugging Face wants me to sign in">
+
+Set the `HF_TOKEN` environment variable; Mizuoto sends it to huggingface.co (and only there, never to a mirror).
+
+</Accordion>
+</Accordions>
+
+## Logs
+
+<Accordions>
+<Accordion title="Where are the logs?">
+
+| Log | Location | How to read it |
+| --- | --- | --- |
+| A job's log | `<data folder>/jobs/<job id>.log` | **Jobs** › **Log**; `mizuoto job log <job id>`; `GET /api/v1/jobs/{id}/log` |
+| The server's log | standard error (the terminal that started `mizuoto webui`) | — |
+
+`MIZUOTO_LOG_LEVEL` sets the level (`DEBUG`, `INFO`, `WARNING`, `ERROR`; default `INFO`), and every command takes `--debug`.
+
+When an engine fails, the request fails with `engine_error` (exit code 10), whose detail carries the exception and its traceback (**Details** under the error in the web UI; the job's `error` in `mizuoto job show <job id> --json`). The **Models in memory** panel lists an engine whose last request failed, with the error.
+
+</Accordion>
+</Accordions>
+
+## Remote hosts
+
+<Accordions>
+<Accordion title="A remote host is Offline or Refused">
+
+- **Offline**: the agent cannot be reached. Check that `mizuoto agent` runs on that machine and listens on an address this machine can reach (it listens on `127.0.0.1` unless given `--host 0.0.0.0`); check the address, the port (7870 by default) and the firewall; TLS must be on on both sides or on neither.
+- **Refused**: the token is wrong, or the two Mizuoto versions do not match. Give the token again with `mizuoto remote add <name> <address> --token <token>`; it is in the agent machine's `settings.toml` (`remote.agent.token`).
+
+Requests to an unavailable host fail with `remote_unavailable` (exit code 14); `mizuoto remote use <engine> --local` runs the engine here again. See [Remote hosts](/docs/advanced-remote).
+
+</Accordion>
+</Accordions>
+
+For the command line's conventions and exit codes see [Command line overview](/docs/cli); for installing, see [Installation](/docs/installation).

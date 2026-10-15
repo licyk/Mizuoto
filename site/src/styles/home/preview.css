@@ -1,0 +1,380 @@
+/*
+ * Speak screen preview.
+ *
+ * All hover timing comes from the interaction channel (`.page-interactive` /
+ * `.page-interactive-part` in the component); this file only describes
+ * appearance and how the preview compacts on short viewports.
+ */
+
+.product-preview {
+  position: relative;
+  min-width: 0;
+  margin: 0;
+  filter: drop-shadow(0 36px 48px rgb(17 24 12 / 28%));
+  transform: perspective(1200px) rotateY(-2deg) rotateX(1deg);
+  transform-origin: center left;
+}
+
+.product-preview::before {
+  position: absolute;
+  z-index: -1;
+  inset: 10% -5% -8% 18%;
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--page-accent) 34%, transparent);
+  content: "";
+  filter: blur(54px);
+}
+
+/* Stacked under the copy, the perspective tilt reads as a mistake. */
+@container page-section (max-width: 61.999rem) {
+  .product-preview {
+    width: min(44rem, 100%);
+    justify-self: center;
+    transform: none;
+  }
+}
+
+.product-preview-window {
+  animation: home-preview-enter var(--page-enter) var(--page-ease-enter) 160ms both;
+}
+
+@keyframes home-preview-enter {
+  from {
+    opacity: 0;
+    transform: translateY(18px) scale(0.985);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+.product-preview-window {
+  overflow: hidden;
+  border: 1px solid rgb(255 255 255 / 12%);
+  border-radius: 1.3rem;
+  background: var(--page-preview-bg);
+  /* The third shadow is present-but-transparent at rest so the hover state
+   * interpolates shadow-for-shadow rather than across differing list lengths. */
+  box-shadow:
+    inset 0 1px rgb(255 255 255 / 7%),
+    0 0 0 1px rgb(16 24 12 / 30%),
+    0 22px 60px rgb(14 20 10 / 0%);
+  color: #eef2e8;
+}
+
+@media (any-hover: hover) {
+  .product-preview:hover .product-preview-window {
+    border-color: rgb(172 210 142 / 24%);
+    box-shadow:
+      inset 0 1px rgb(255 255 255 / 8%),
+      0 0 0 1px rgb(172 210 142 / 10%),
+      0 22px 60px rgb(14 20 10 / 22%);
+  }
+}
+
+.product-preview:focus-within .product-preview-window {
+  border-color: rgb(172 210 142 / 24%);
+}
+
+.product-preview-titlebar {
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  align-items: center;
+  min-height: 3.25rem;
+  padding: 0 1rem;
+  border-bottom: 1px solid var(--page-preview-border);
+  background: rgb(255 255 255 / 2%);
+}
+
+.product-preview-window-controls {
+  display: flex;
+  gap: 0.35rem;
+}
+
+.product-preview-window-controls span {
+  width: 0.52rem;
+  height: 0.52rem;
+  border-radius: 50%;
+  background: rgb(255 255 255 / 16%);
+}
+
+.product-preview-window-controls span:first-child {
+  background: #5f8046;
+}
+
+.product-preview-brand {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  font-size: 0.8rem;
+  font-weight: 650;
+}
+
+.product-preview-brand-mark {
+  display: inline-flex;
+  width: 1.45rem;
+  height: 1.45rem;
+  align-items: center;
+  justify-content: center;
+  border-radius: 0.42rem;
+  background: rgb(172 210 142 / 14%);
+  color: #acd28e;
+}
+
+.product-preview-brand-mark svg {
+  width: 0.85rem;
+  height: 0.85rem;
+}
+
+.product-preview-titlebar-title {
+  justify-self: end;
+  color: rgb(255 255 255 / 52%);
+  font-size: 0.72rem;
+  font-weight: 600;
+}
+
+.product-preview-body {
+  display: grid;
+  gap: 0.75rem;
+  padding: clamp(0.85rem, 2vw, 1.4rem);
+}
+
+.product-preview-fields {
+  display: grid;
+  grid-template-columns: minmax(0, 1.35fr) minmax(0, 1fr);
+  gap: 0.7rem;
+}
+
+.product-preview-field,
+.product-preview-text {
+  min-width: 0;
+  padding: 0.6rem 0.75rem;
+  border: 1px solid var(--page-preview-border);
+  border-radius: 0.7rem;
+  background: var(--page-preview-surface);
+}
+
+.product-preview-field > span,
+.product-preview-text > span {
+  display: block;
+  color: rgb(255 255 255 / 42%);
+  font-size: 0.6rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.product-preview-field > strong {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  margin-top: 0.25rem;
+  overflow: hidden;
+  font-size: 0.74rem;
+  font-weight: 620;
+  white-space: nowrap;
+}
+
+.product-preview-field > strong svg {
+  width: 0.85rem;
+  height: 0.85rem;
+  flex: none;
+  color: rgb(255 255 255 / 45%);
+}
+
+.product-preview-field > strong svg:last-child {
+  margin-left: auto;
+}
+
+.product-preview-text {
+  display: grid;
+  gap: 0.35rem;
+}
+
+.product-preview-text p {
+  min-height: 3.6em;
+  color: rgb(255 255 255 / 82%);
+  font-size: 0.76rem;
+  line-height: 1.6;
+}
+
+.product-preview-text small {
+  justify-self: end;
+  color: rgb(255 255 255 / 36%);
+  font-size: 0.6rem;
+}
+
+.product-preview-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.6rem;
+}
+
+.product-preview-chip,
+.product-preview-speak {
+  display: inline-flex;
+  min-height: 2.1rem;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.4rem 0.8rem;
+  border-radius: 999px;
+  font-size: 0.72rem;
+  font-weight: 650;
+  white-space: nowrap;
+}
+
+.product-preview-chip {
+  border: 1px solid rgb(172 210 142 / 30%);
+  background: rgb(172 210 142 / 12%);
+  color: #c8eea8;
+}
+
+.product-preview-speak {
+  padding-inline: 1.1rem;
+  background: #acd28e;
+  color: #1a3705;
+}
+
+.product-preview-chip svg,
+.product-preview-speak svg {
+  width: 0.85rem;
+  height: 0.85rem;
+}
+
+.product-preview-result {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.72rem;
+  border: 1px solid var(--page-preview-border);
+  border-radius: 0.72rem;
+  background: rgb(255 255 255 / 3%);
+}
+
+.product-preview-play {
+  display: inline-flex;
+  width: 2.1rem;
+  height: 2.1rem;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  background: rgb(172 210 142 / 14%);
+  color: #acd28e;
+}
+
+.product-preview-play svg {
+  width: 0.85rem;
+  height: 0.85rem;
+}
+
+.product-preview-result-body {
+  display: grid;
+  gap: 0.45rem;
+  min-width: 0;
+}
+
+.product-preview-result-heading {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.product-preview-result-heading strong {
+  overflow: hidden;
+  font-size: 0.68rem;
+  font-weight: 620;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.product-preview-result-heading small {
+  color: rgb(255 255 255 / 38%);
+  font-size: 0.58rem;
+  white-space: nowrap;
+}
+
+.product-preview-wave {
+  position: relative;
+  display: flex;
+  height: 2.2rem;
+  align-items: center;
+  gap: 2px;
+  overflow: hidden;
+}
+
+.product-preview-wave > span:not(.product-preview-playhead) {
+  flex: 1;
+  min-width: 1px;
+  border-radius: 999px;
+  background: linear-gradient(180deg, #acd28e, #789b5d);
+  opacity: 0.85;
+}
+
+/*
+ * The played part: a tint over the bars with the playhead at its right edge,
+ * slid in from the left. A transform runs on the compositor, so the loop costs
+ * no layout; without motion it rests part of the way through.
+ */
+.product-preview-playhead {
+  position: absolute;
+  inset: 0;
+  border-right: 2px solid #f5f8ee;
+  background: rgb(200 238 168 / 10%);
+  transform: translateX(-58%);
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .product-preview-playhead {
+    animation: home-preview-play 7s linear infinite;
+  }
+}
+
+@keyframes home-preview-play {
+  from {
+    transform: translateX(-100%);
+  }
+
+  to {
+    transform: translateX(0);
+  }
+}
+
+/*
+ * Short-viewport compaction: drop the rows that carry no argument so the hero
+ * still fits without shrinking the parts that do.
+ */
+@media (max-height: 780px) {
+  .product-preview-text small {
+    display: none;
+  }
+}
+
+@media (max-height: 700px) {
+  .product-preview-actions {
+    display: none;
+  }
+}
+
+/* --- narrow layout --- */
+
+@container page-section (max-width: 34rem) {
+  .product-preview-titlebar {
+    grid-template-columns: 1fr auto;
+  }
+
+  .product-preview-window-controls {
+    display: none;
+  }
+
+  .product-preview-fields {
+    grid-template-columns: 1fr;
+  }
+
+  .product-preview-result-heading small {
+    display: none;
+  }
+}

@@ -1,0 +1,228 @@
+---
+title: "HTTP API 与命令行"
+description: "FastAPI 应用怎样组装、安全中间件和错误怎样映射、事件怎样进入 OpenAPI 并生成 Web UI 的类型，以及怎样新增一个路由和一条命令。"
+icon: Plug
+---
+
+API（`mizuoto/api/`）和命令行（`mizuoto/cli/`）是同一个核心之上的两层薄壳：解析输入、调用一个核心方法、整理输出。本页讲这两层的结构和约定；核心层本身见[架构](/docs/development-architecture)，Web UI 怎样消费这里的接口见 [Web UI](/docs/development-webui)。
+
+## 应用：`create_app()`
+
+`mizuoto/api/app.py` 的 `create_app(services, bound_host, bound_port, extra_hosts, serve_ui, api_prefix)` 构建整个应用。服务由调用者拥有（`mizuoto webui` 用 `build_services(start_background=True)` 构建、`mizuoto.embed.MizuotoServer` 在宿主应用里构建），应用只把它挂在 `app.state.services` 上。
+
+```python
+ROUTERS = (app_info, settings, compute, engines, runtime, models, assets, voices, audio_router,
+           tts, outputs, presets, datasets, train, projects, remote, jobs)
+
+for module in ROUTERS:
+    app.include_router(module.router, prefix=f"{prefix}/api")
+app.include_router(openai.router, prefix=prefix)
+app.mount(f"{prefix}/ws", socket_bridge.asgi_app(), name="socket")
+```
+
+| 挂载点 | 内容 |
+| --- | --- |
+| `{prefix}/api/v1/...` | 每种资源一个路由模块，`routers/<资源>.py`，各自声明 `APIRouter(prefix="/v1/<资源>")` |
+| `{prefix}/v1/...` | `routers/openai.py`：OpenAI 兼容的 `POST /v1/audio/speech` 与 `GET /v1/models` |
+| `{prefix}/ws` | `sockets.py` 的 `SocketBridge`：EventBus → socket.io，只从服务端推向客户端 |
+| `{prefix}/docs`、`{prefix}/openapi.json` | FastAPI 自带的 Swagger 页面与模式 |
+| `{prefix}/` | `static.py` 的 `SPAStaticFiles`，最后注册，只接收前面都没匹配的路径 |
+
+`api_prefix` 把上面全部移到一个子路径下，供宿主应用挂载（见[嵌入](/docs/advanced-embed)）。Web UI 不需要随之改动：它从自身脚本的 URL 推出根地址（`webui/src/api/baseUrl.ts`）。
+
+中间件依次是可选的 `CORSMiddleware`（只在 `server.allowed_origins` 非空时）、`GZipMiddleware`（4 KB 以上）和 `SecurityMiddleware`。lifespan 只负责启动和停止 socket 桥。
+
+### 依赖：`deps.py`
+
+服务从 `app.state` 取，而不是全局变量：
+
+```python
+ServicesDep = Annotated[Services, Depends(get_services)]
+LocalDep = Depends(require_local)
+```
+
+`is_local(request)` 的含义是"服务器本机上的浏览器"：客户端地址是回环地址，**并且**请求的主机名也是回环名。同一台机器上的隧道或反向代理也从回环地址连进来，但会转发公网的 `Host`，所以不算本地。需要本地的路由（列出服务器目录、按服务器路径登记音频、`/models/identify`、`/models/import`、`reveal`、`POST /voices/{id}/weights`、`/engines/{id}/ops/{op}`、数据集的文件夹导入）用 `dependencies=[LocalDep]` 声明，失败时是 403 `not_local`。服务器路径还要求位于 `paths.browse_roots` 之内，这一层检查在核心层。
+
+### 安全中间件：`security.py`
+
+一个可以删除和移动文件的 API，对每个 HTTP 与 WebSocket 请求做三项检查（全部在路由之前，纯 ASGI 实现）：
+
+1. **Host**：绑定在回环地址时，`Host` 必须是 `localhost`、`127.0.0.1`、`::1`、绑定的主机名或 `extra_hosts` 中的名字，否则 400 `bad_host`。这挡住 DNS 重绑定。`extra_hosts` 按引用保存，隧道启动后加入的公网名立即生效。
+2. **Origin**：改变状态的请求（非 `GET`/`HEAD`/`OPTIONS`）和所有 WebSocket 握手，若带 `Origin`，必须是页面自身的源或 `server.allowed_origins` 中的一个；不带 `Origin` 时，`Sec-Fetch-Site` 只能是 `same-origin`、`none` 或缺失。否则 403 `bad_origin`。
+3. **令牌**：设置了 `server.access_token` 时，`/api/`、`/ws/`、`/v1/`、`/openapi.json` 和 `/docs` 下的请求都要携带它：`Authorization: Bearer`、`mizuoto_token` cookie 或 `token` 查询参数，用 `hmac.compare_digest` 比较。缺失或不符是 401 `auth_required`。`/api/v1/app/health` 例外，界面外壳要先加载才能询问令牌。
+
+WebSocket 请求被拒时直接以 1008 关闭。socket.io 的 `connect` 处理器（`SocketBridge._on_connect`）还会再检查一次 `auth.token`。
+
+### 错误 → HTTP：`errors.py`
+
+核心层的每个错误（`mizuoto/core/errors.py`）都带 `code`、`http_status` 和 `exit_code`；`install_error_handlers()` 把任何 `MizuotoError` 变成同一个形状：
+
+```json
+{"code": "model_missing", "message": "…", "detail": {"hint": "mizuoto model download …"}}
+```
+
+`ERROR_RESPONSES` 在每个路由器上声明 400/403/404/409 的 `ErrorResponse` 模型，生成的客户端因此知道错误的形状。部分映射：
+
+| 异常 | `code` | HTTP | 退出码 |
+| --- | --- | --- | --- |
+| `NotFoundError` | `not_found` | 404 | 2 |
+| `ConflictError` / `BusyError` | `conflict` / `busy` | 409 | 3 |
+| `ValidationError`、`InvalidPathError` | `invalid_input`、`invalid_path` | 400 | 4 |
+| `CapabilityError`、`ParameterError`、`ReferenceInvalidError`、`LanguageError` | `capability_not_supported` 等 | 422 | 4 |
+| `LicenceError` | `licence_not_accepted` | 403 | 5 |
+| `ModelMissingError`、`EnvMissingError`、`AssetMissingError` | `model_missing`、`engine_not_installed`（引擎需要的包没装）、`asset_missing` | 409 | 7 |
+| `ComputeError` | `compute_unavailable` | 503 | 9 |
+| `WorkerError` / `EngineError` | `worker_failed` / `engine_error` | 502 / 500 | 10 |
+| `OperationTimeoutError` | `timeout` | 504 | 11 |
+| `DownloadError` / `InstallError` | `download_failed` / `install_failed` | 502 / 500 | 12 / 13 |
+| `RemoteError` | `remote_unavailable` | 502 | 14 |
+| `CancelledError` | `cancelled` | 499 | 130 |
+
+code 字符串定义在 `mizuoto/core/codes.py`（只用标准库），引擎和训练阶段不依赖 pydantic 也能使用；`error_from_code()` 从 code 重建对应的类。
+
+### 路由的写法
+
+以 `routers/projects.py` 为例：
+
+```python
+router = APIRouter(prefix="/v1/projects", tags=["projects"], responses=ERROR_RESPONSES)
+
+@router.post("/{project_id}/render", operation_id="render_project")
+def render(services: ServicesDep, project_id: str, body: RenderRequest) -> Job:
+    return services.projects.render(project_id, body, origin="api")
+```
+
+约定：
+
+- **一个操作，一个核心方法。** 路由体只解析、调用、返回；请求体和返回值都是核心层的 `Record` 模型，API 的 JSON 因而等于 CLI 的 `--json`。
+- **每个路由都写 `operation_id`**，它是 OpenAPI 中操作的名字。
+- **普通 `def`**：涉及磁盘和数据库的路由在线程池里运行。只有读原始请求体的上传（`uploads.spool()` 把它流式写入临时文件，从不按 multipart 解析）和 WebSocket 是 `async def`。
+- **长操作返回 `Job`。** `POST /tts/speak?wait=true` 用 `JobService.wait` 等待，超过 `timeout` 抛 `OperationTimeoutError`（504，`detail.job_id` 指向仍在运行的任务）。
+- **音频文件**用 `files.audio_response()`：`FileResponse` 支持 `Range`，长文件可以拖动。流式合成见 `streaming.py`（分块 WAV 或裸 PCM，采样率在 `X-Mizuoto-Sample-Rate`，任务 id 在 `X-Mizuoto-Job`）。
+
+### 运行时路由
+
+模型在服务器进程里，所以别的程序（以及 `mizuoto runtime`）要通过 API 查看和释放它们。`routers/runtime.py`：
+
+| 路由 | 核心方法 | 返回 |
+| --- | --- | --- |
+| `GET /api/v1/runtime` | `runtime.status()` | `RuntimeStatus`：已安装 torch 的版本、已加载的模型（引擎、设备、字节数、最近使用、是否忙、远程主机）和各引擎的状态 |
+| `POST /api/v1/runtime/unload` | `runtime.unload(body.model)` | 卸载 `UnloadRequest.model` 指定的模型（为 `null` 时卸载所有没在用的模型）之后的 `RuntimeStatus` |
+| `GET /api/v1/runtime/doctor` | `runtime.doctor()` | `DoctorReport`：torch 构建与硬件是否匹配、推荐的构建及其安装命令、每个引擎、附加依赖和训练器的检查结果，以及旧的 `<data>/envs` 的大小 |
+
+`GET /api/v1/engines/{id}/doctor` 是单个引擎的同一份报告。引擎详情（`EngineStatus`）带 `available` 和 `missing`（`torch`、`mizuoto-fishspeech` 等），不再有环境信息；`GET /api/v1/app/meta` 带 `torch`，即已安装的版本或 `null`。`POST /api/v1/compute/release`（**释放显存**）卸载所有空闲引擎的模型。这些接口的模型定义在 `mizuoto/core/inference/models.py`。
+
+## OpenAPI 与事件
+
+socket 事件不是 HTTP 路由，FastAPI 本不会把它们写进模式。`openapi.py` 的 `MizuotoAPI` 覆盖 `openapi()`：遍历 `EventBase.get_events()`（`mizuoto/core/events/models.py` 中每个带 `__event_name__` 的子类），把各自的模型加入 `components.schemas`，再加一个 `ServerEvents` 对象，事件名 → 模型：
+
+```python
+components["ServerEvents"] = {"type": "object", "properties": events, "required": sorted(events)}
+```
+
+当前的事件：`settings_changed`、`job_updated`、`job_log`、`jobs_cleared`、`outputs_added`、`outputs_removed`、`runtime_changed`、`compute_changed`、`engines_changed`、`voices_changed`、`datasets_changed`、`projects_changed`、`experiments_changed`、`train_metrics`、`presets_changed`、`models_changed`。每个事件携带快照而不是活对象：socket 桥稍后在事件循环上序列化它，而任务线程还在写。桥从 EventBus 订阅（在线程里被调用，用 `call_soon_threadsafe` 进入事件循环），按事件名 `emit`。
+
+<Callout type="info" title="REST 是事实来源">
+socket 只推送变化。客户端收到事件后修补或作废对应的查询，重连后重新拉取屏幕上的内容；任何状态都必须能通过 REST 读到。
+</Callout>
+
+## 为 Web UI 生成类型
+
+`scripts/generate_openapi.py` 在临时数据目录里构建服务和应用（`serve_ui=False`），打印 `app.openapi()`，不启动服务器。`python scripts/dev.py typegen` 把它交给 `openapi-typescript`，写出 `mizuoto/webui/src/api/schema.d.ts`：
+
+```bash
+python scripts/dev.py openapi         # 打印模式
+python scripts/dev.py typegen         # 重新生成 schema.d.ts（提交它）
+python scripts/dev.py typegen-check   # CI：重新生成后 git diff --exit-code
+```
+
+`--default-non-nullable false` 让请求体中带默认值的字段保持可选；`Record` 设置了 `json_schema_serialization_defaults_required`，响应中的这些字段则是必填，类型与服务器实际发送的一致。
+
+既作请求体又作响应的模型（`SpeakRequest` 在输出的"重新运行"里被返回；项目的 `Chapter`、`Line`、`Speaker`；`CommonParams`、`VoiceInput`、`EmotionInput`、`OutputSpec`……）在模式中分成 `-Input` 和 `-Output` 两份。界面发送 `S['SpeakRequest-Input']`，读取 `S['SpeakRequest-Output']`；`webui/src/api/types.ts` 为常用的几个起了别名。
+
+## 新增一个路由
+
+<Steps>
+<Step>
+
+**核心方法。** 在 `mizuoto/core/<领域>/service.py` 写方法，参数和返回值是 `Record` 模型（`mizuoto/core/<领域>/models.py`）；错误只用 `core/errors.py` 的类。若它改变了界面要显示的东西，发布一个事件（新事件就在 `core/events/models.py` 加一个 `EventBase` 子类，模式会自动带上它）。
+
+</Step>
+<Step>
+
+**路由。** 在 `mizuoto/api/routers/` 对应的模块里加函数，带 `operation_id`；新资源则新建模块并加入 `app.py` 的 `ROUTERS`。读服务器路径的操作加 `dependencies=[LocalDep]`。
+
+</Step>
+<Step>
+
+**类型。** 运行 `python scripts/dev.py typegen`，提交 `schema.d.ts`。
+
+</Step>
+<Step>
+
+**测试。** 在 `tests/api/test_api.py` 用 `TestClient` 对着 dummy 引擎测试；改变状态的请求带 `headers={"origin": "http://localhost"}`（文件里的 `ORIGIN`）。
+
+</Step>
+</Steps>
+
+## 命令行
+
+`mizuoto/cli/` 用 Typer。结构：
+
+| 文件 | 作用 |
+| --- | --- |
+| `app.py` | `get_app()` 注册全部命令（且只在这里注册）；`main()` 统一处理错误和退出码 |
+| `commands/*.py` | 每条命令是一个普通函数，参数用 `Annotated[..., typer.Option(...)]` 声明 |
+| `factory.py` | `typer_factory()`（命令按字母排序的 `AlphabeticalMixedGroup`）、给每条命令和每个组都加 `--debug` 并把领域错误变成退出码的 `DebugTyperCommand`、`report_error()`；`typer._click` 的私有导入只在这里 |
+| `output.py` | `open_services()`（每条命令构建一次服务，不启动后台线程）、`print_json()`、`print_table()` |
+| `progress.py` | `job_progress(services)`：订阅同一个 EventBus，把任务进度画成 stderr 上的 Rich 进度条；`finish(job)` |
+
+一条命令的典型形状（`commands/projects.py`）：
+
+```python
+def project_list(json_output: Annotated[bool, typer.Option("--json", help="Print JSON")] = False) -> None:
+    """List the projects."""
+    with open_services() as services:
+        projects = services.projects.list_projects()
+        if json_output:
+            print_json(projects)
+            return
+        print_table(None, ["Slug", "Name", ...], rows)
+```
+
+`print_json()` 用 `model_dump(mode="json")`，与 API 序列化的方式相同。命令行不启动调度器：会产生任务的命令用核心方法的 `wait=True`（内部是 `jobs.run_now`，在当前线程前台执行，Ctrl+C 取消），外面套 `job_progress`。
+
+错误：`DebugTyperCommand.invoke` 捕获 `MizuotoError`，`report_error()` 打印消息，`detail["hint"]` 中有修复命令时再打印一行，然后以错误的 `exit_code` 退出。重模块（核心模型、uvicorn）在函数内导入：`tests/test_architecture.py` 检查导入 `mizuoto.cli.app` 既不加载 torch 也不加载 fastapi。
+
+### 新增一条命令
+
+<Steps>
+<Step>
+
+在 `mizuoto/cli/commands/<组>.py` 写一个带完整注解的普通函数，提供 `--json`，调用与 API 路由相同的核心方法。
+
+</Step>
+<Step>
+
+在 `mizuoto/cli/app.py` 的 `get_app()` 中注册，名字和帮助文字写在注册处：
+
+```python
+project_cli = typer_factory(help="Long-form scripts read by a cast of voices")
+project_cli.command(help="List projects", name="list")(project_list)
+...
+app.add_typer(project_cli, name="project")
+```
+
+</Step>
+<Step>
+
+把它加进 `tests/cli/test_cli.py` 的 `EXPECTED_TREE`。`test_command_tree` 比较整棵命令树，漏加或多加都会失败：
+
+```python
+"project": {k: None for k in ("cast", "delete", "export", "import", "list", "new", "render", "script", "set", "show")},
+```
+
+</Step>
+</Steps>
+
+一个名字不能既是命令又是命令组，所以环境变量列表是 `mizuoto env vars`，而不是 `mizuoto env`。

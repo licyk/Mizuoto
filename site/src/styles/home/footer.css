@@ -1,0 +1,108 @@
+.home-footer {
+  padding: 2rem 0 2.5rem;
+  border-top: 1px solid var(--color-fd-border);
+}
+
+.home-footer-layout {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 2rem;
+}
+
+.home-footer-identity {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+
+.home-footer strong {
+  font-size: 0.9rem;
+  font-weight: 680;
+}
+
+.home-footer-copyright {
+  color: var(--color-fd-muted-foreground);
+  font-size: 0.75rem;
+}
+
+.home-footer-end {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 0.9rem;
+}
+
+.home-footer-nav {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 1.2rem;
+  color: var(--color-fd-muted-foreground);
+  font-size: 0.75rem;
+}
+
+/*
+ * Icon-only links. The negative inline margin pulls the first/last glyph back
+ * to the column edge so the row optically aligns with the text links above,
+ * whose box has no padding of its own.
+ */
+.home-footer-social {
+  display: flex;
+  margin-right: -0.475rem;
+  gap: 0.15rem;
+}
+
+.home-footer-social-link {
+  display: inline-flex;
+  width: 2rem;
+  height: 2rem;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  border-radius: 0.5rem;
+  color: var(--color-fd-muted-foreground);
+}
+
+.home-footer-social-link svg {
+  width: 1.05rem;
+  height: 1.05rem;
+}
+
+@media (any-hover: hover) {
+  .home-footer-link:hover {
+    color: var(--color-fd-foreground);
+  }
+
+  .home-footer-social-link:hover {
+    background: var(--color-fd-accent);
+    color: var(--color-fd-accent-foreground);
+  }
+}
+
+.home-footer-social-link:focus-visible {
+  outline: 2px solid var(--page-accent-strong);
+  outline-offset: 2px;
+}
+
+/* The footer sits outside the section grid, so it responds to the viewport
+ * rather than to a section container. */
+@media (max-width: 640px) {
+  .home-footer-layout {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .home-footer-end {
+    align-items: flex-start;
+  }
+
+  .home-footer-nav {
+    justify-content: flex-start;
+  }
+
+  .home-footer-social {
+    margin-right: 0;
+    margin-left: -0.475rem;
+  }
+}

@@ -1,0 +1,98 @@
+---
+title: "Models"
+description: "The Models screen: download, verify, delete and import catalogue models; engine cards (availability, device, precision, enabled, options, checks, licence); and shared files."
+icon: Library
+---
+
+**Models** has three tabs: **Models** (each engine's catalogue), **Engines** (each engine's availability and settings) and **Shared files** (files several models of an engine share).
+
+## Models
+
+Models are grouped by engine: speech engines first, then helpers such as speech recognition, the dummy engine last. When an engine is not available, its group says what it needs: *engine* **needs** *torch* **to use these models (mizuoto doctor).**
+
+One row per model, with its name, variant, size, GPU memory (**N GB of GPU memory**) and description, and its state:
+
+| State | Meaning |
+| --- | --- |
+| **Not downloaded** | Not downloaded yet |
+| **Downloading** | Being downloaded; shows the amount done, the speed and the time left |
+| **Partly downloaded** | A folder that was not finished, or a shared file it needs is missing |
+| **Installed** | Downloaded, every file checked |
+| **Damaged** | A file's size differs, or a verification failed |
+| **Built in** | The dummy engine's model; nothing to download |
+
+What you can do:
+
+- **Download** fetches the missing files. Downloads resume, every file is checked against its size and SHA-256, and when a source lacks a file the next source is tried (see [Download sources](/docs/advanced-downloads)). Shared files it needs come along.
+- **Verify** computes the SHA-256 of every file of an installed model again. It says **All N files are intact**, or lists **Damaged:** *files*. Delete a damaged model and download it again.
+- The delete button deletes the model's files (asking **Delete** *model*? **It can be downloaded again.**).
+
+### Import a model folder
+
+When you already have a model's files (an earlier download, a copy from elsewhere, a fine-tune), click **Import a model folder** and choose a folder on the server. The button shows only in a browser on the server machine.
+
+Mizuoto works out the engine and variant from the files:
+
+- when the file sizes match a catalogue model, it checks their SHA-256 and imports the folder as that model;
+- otherwise it imports it as a user model, `engine/folder-name`.
+
+The command line can name it, or move rather than copy: `mizuoto model import <folder> [--name name] [--move]`.
+
+## Engines
+
+One card per engine:
+
+- Under the title, the number of models and the licence's name (speech recognition says **Used by Mizuoto itself**); at the right **Available** or **Not available**, and **On** *host* when the engine runs on a remote host.
+- A line about the engine. When it is not available, what it needs: **Needs** *torch* (or *mizuoto-indextts*…)**, which is not installed: mizuoto doctor says how to install it.** Every engine is part of Mizuoto except the licence-gated ones, which are packages of their own (see [First run](/docs/first-run#torch-and-the-engines)).
+
+### Device, precision, enabled
+
+- **Device**: **Automatic**, the devices of this machine the engine supports (such as `cuda:0`, `cpu`), and the devices of each remote host you added where the engine is available (shown as "host · device"). With a remote device the engine runs on that machine, the card shows **On** *host*, and its packages are managed there (see [Remote hosts](/docs/advanced-remote)).
+- **Precision**: **Automatic**, `bf16`, `fp16` or `fp32`.
+- **Enabled**: when off, the engine's models cannot be used; Speak then offers an **Enable** button at the bottom.
+
+Changing these unloads the engine's models; the next use loads them with the new settings.
+
+### Options
+
+When an engine has load options, its card has **Options**:
+
+| Engine | Options |
+| --- | --- |
+| CosyVoice | `fp16`: half precision on the GPU, faster and slightly different |
+| IndexTTS 2 / 2.5 | `use_qwen_emo` (the emotion model for described emotions, about 1.2 GB), `use_torch_compile` |
+| F5-TTS | `ode_method` (`euler` or `midpoint`) |
+| Qwen3-TTS | `fused_projections`: a fast mode, a few percent faster on a GPU, no longer bit-identical |
+
+**Changes apply when the model loads next (its models are unloaded now).** The setting **Compile models (torch.compile)** under **Settings › Compute** speeds up several engines at once. More in [Performance](/docs/advanced-performance).
+
+### Check this machine
+
+Expand **Check this machine** for the engine's checks on this machine: torch and its build against the GPU, whether the engine is available, and the optional extras it can use (such as GPT-SoVITS's Japanese front end), with a command to fix each problem. The command line: `mizuoto doctor <engine>`.
+
+### Licence
+
+Licence-gated engines (Fish Speech, IndexTTS) have an **Accept the licence** button that opens the full licence; once accepted the card shows **Licence accepted**. See [First run](/docs/first-run#licence-gated-engines).
+
+## Shared files
+
+**Files several models of an engine share, downloaded once with the first model that needs them.** For example GPT-SoVITS's encoders, G2PW, the NLTK data, the Open JTalk dictionary and the discriminators used for training; IndexTTS-2's w2v-BERT, semantic codec, CAM++ and BigVGAN; and CosyVoice's text normalisation grammars.
+
+Each row shows the name, size, description and **used by** *models*. Each can be downloaded or deleted on its own. A model missing a shared file it needs shows as **Partly downloaded**. Shared files are kept in `models/_assets/<engine>/` in the data folder.
+
+## Command line
+
+```bash
+mizuoto model list
+mizuoto model download qwen3tts/1.7b-base qwen3tts/1.7b-voice-design
+mizuoto model verify qwen3tts/1.7b-base
+mizuoto model delete qwen3tts/1.7b-base
+mizuoto model import /path/to/folder --name my-model
+mizuoto engine list
+mizuoto engine info qwen3tts
+mizuoto doctor qwen3tts
+mizuoto runtime                      # the models loaded now
+mizuoto asset list
+mizuoto asset download gptsovits/s2d-v2pro
+mizuoto config set engines.cosyvoice.device cuda:1
+```

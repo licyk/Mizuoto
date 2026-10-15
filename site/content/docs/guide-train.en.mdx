@@ -1,0 +1,164 @@
+---
+title: "Train"
+description: "The Train screen: build and prepare datasets, then run each engine's own fine-tuning recipe stage by stage in experiments, with losses and previews, exported as a voice's weights or a new model."
+icon: GraduationCap
+---
+
+**Train** fine-tunes models on your own recordings, in two steps:
+
+1. A **dataset**: clips of one voice with their text.
+2. An **experiment**: a model to start from and a way to train it, run on the dataset stage by stage with the engine's own fine-tuning recipe, implemented in Mizuoto. The result is **a voice's own weights** (added to a voice in the library) or **a new model** (listed under **Models**).
+
+The tabs at the top switch between **Experiments** and **Datasets**; at the right is **New experiment** or **New dataset**.
+
+## What can be trained
+
+| Engine | Methods | Result | Device |
+| --- | --- | --- | --- |
+| GPT-SoVITS | Fine-tune a voice | the voice's GPT and SoVITS weights | GPU; a CPU for small trials |
+| F5-TTS | Fine-tune the model | a new model | GPU; a CPU for small trials |
+| Qwen3-TTS (Base models) | Teach it a speaker | a new model (a CustomVoice model whose preset speaker is the voice) | GPU; a CPU for small trials |
+| OmniVoice | Fine-tune the model, Fine-tune with LoRA | a new model | GPU; a CPU for small trials |
+| VoxCPM | Fine-tune the model, Fine-tune with LoRA | a new model (a LoRA keeps the base weights beside its adapters) | GPU; a CPU for small trials (VoxCPM2's full fine-tune needs about 40 GB) |
+| CosyVoice (300M, 2, 3) | Fine-tune the language model, Fine-tune the LLM and the flow | a new model | GPU; a CPU for small trials |
+| Fish Speech | Fine-tune with LoRA | a new model (still under the Fish Audio research licence) | a GPU with 24 GB recommended |
+
+Training needs nothing beyond Mizuoto and torch: every method runs in Mizuoto's own Python, each stage in a process of its own. Some methods need shared files used only for training, such as GPT-SoVITS's pretrained discriminators (`mizuoto asset download gptsovits/s2d-v2pro`). When something is missing, the new-experiment dialog marks the method **not available** and gives the command to run.
+
+<Callout type="info" title="Training runs on this machine">
+
+Training always runs on this machine, never on a remote host; when an engine's device is on a remote host, its methods are not available. A fine-tune takes its device for itself while it runs. Choose the device under **Settings › Training › Training device**; by default it is **The engine’s device**.
+
+</Callout>
+
+## Datasets
+
+### A new dataset
+
+1. On the **Datasets** tab, click **New dataset**.
+2. Type the **Dataset name**, choose the **Language**, and optionally a **Description**.
+3. Click **Create**; the dataset's page opens.
+
+A dataset is saved in `datasets/<name>/` in the data folder: `dataset.json`, `manifest.jsonl` with one row per clip, and FLAC clips in `audio/`.
+
+### Adding clips
+
+The **Add clips** part of a dataset's page offers several sources:
+
+- **Audio files or recordings**: drop or choose files, **Record**, or **Server files**. Optionally say who speaks in them under **Speaker**, then click **Add (N)**.
+- **A voice’s clips**: choose a library voice and click **Add** to add its reference clips and their text.
+- **Earlier results**: pick synthesized results. They come with their licence tags; results whose licence forbids training other engines (Fish Speech's, for example) are refused when training.
+- **Add a server folder** (only in a browser on the server machine): choose the **Folder layout**, then the folder:
+
+| Folder layout | Contents |
+| --- | --- |
+| **Find out** | Decided from the folder's contents |
+| **Audio files (a .lab or .txt beside each)** | Plain audio files |
+| **GPT-SoVITS .list** | GPT-SoVITS's annotation file |
+| **LJSpeech (metadata.csv)** | The LJSpeech layout |
+| **CSV (audio_file\|text)** | One audio file name and its text per line |
+
+### Prepare
+
+**Cuts long recordings at their pauses, fills missing texts with speech recognition and evens out the levels. Run it after adding clips.**
+
+| Setting | Default | What it does |
+| --- | --- | --- |
+| **Cut long clips** | on | At silences, as GPT-SoVITS’s slicer |
+| **Transcribe** | on | Clips without text, with speech recognition (which must be installed) |
+| **Even out levels** | on | Each clip’s peak at -1 dBFS |
+| **Longest clip (s)** | 12 | Only longer clips are cut |
+| **Shortest piece kept (s)** | 1 | Shorter pieces are dropped |
+| **Silence below (dB)** | -34 | What counts as silence |
+| **Language they speak** | — | The language for speech recognition |
+
+Click **Prepare**; it runs as a job, with its progress below.
+
+### The report
+
+Once there are clips, the **Report** shows:
+
+- **Usable clips: usable/all · length**;
+- a histogram of **Clip lengths**;
+- the issues: **too short**, **too long**, **without text**, **clipping**, each with **Show them** to list only those clips;
+- other warnings, and **Licences of the clips**.
+
+### Editing clips
+
+**Clips** lists 50 clips a page; search their text or filter by an issue. Each clip has:
+
+- a play button and its length;
+- its text (labelled with the speaker; without text it says **No text: transcribe it or type it**); save with the save button or Enter;
+- **Use it for training** / **Leave it out of training**: an excluded clip stays in the dataset but is not trained on;
+- a remove button.
+
+**Details** holds the name, language and description. At the bottom: **Delete** (to the trash; experiments made from it can no longer run) and **Train on it** (a new experiment on this dataset).
+
+## Experiments
+
+### A new experiment
+
+1. On the **Experiments** tab, click **New experiment** (or **Train on it** on a dataset's page).
+2. **Model to start from**: only installed models that can be trained. Without any, the dialog says which engines can train.
+3. **Training**: the methods for this model; unavailable ones are marked **(not available)** with the reason (shared files missing, the engine not available or on a remote host…). Below are the method's description, its stages, what it makes (**Makes a voice’s own weights** or **Makes a new model**) and the least speech it needs.
+4. **Dataset**; when the dataset has less usable speech than the method needs, creating fails and says how much it has and needs.
+5. **Experiment name**: "dataset-model" by default; **Letters, digits, - _ and .**
+6. When the result is a voice's weights, **Voice to give the weights**: a library voice, or **A new voice** (made from three of the dataset's clips of 3 to 10 seconds).
+7. The main settings (epochs, learning rate…) can be changed here; **More settings, and the advanced ones, are on the experiment’s page.**
+8. Click **Create**.
+
+An experiment is saved in `experiments/<engine>/<name>/`.
+
+### Stages
+
+The experiment's page shows the base model, the dataset, the result and the language. **Stages** is a row of steps, each **Not run**, **Running**, **Done**, **Out of date** or **Failed**.
+
+| Button | What it does |
+| --- | --- |
+| **Run** | Runs from the first stage that is not done (or out of date) to the last; reads **Finished** when all are done |
+| **Run this stage** | Runs only the selected stage; the earlier ones must be done |
+| **Start over** | After confirming, runs every stage again from the first |
+
+Click a stage to see its description, when it finished and its results, or its error.
+
+A run is one **Train** job whose steps are the stages; its card shows under the stages.
+
+**Out of date**: each finished stage records what it read — the dataset, the base model's revision and the settings it uses, and the earlier stages' results. When any of these changes, that stage and every stage after it are **Out of date** (**What this stage read has changed since it ran (the dataset, the model or a setting it uses): run it again.**). Running a stage again also makes the finished stages after it out of date, since they read its old files.
+
+### Losses
+
+**Losses** draws the curves live while a training stage runs; switch between training stages when there are several, and turn curves on and off with the chips. Before any data it says **The losses appear here while a training stage runs**.
+
+### Settings
+
+**Settings** holds the method's hyperparameters (number fields), the rest under **Advanced**. **Changing a setting makes the stages that use it, and those after them, out of date.** Click **Save** after changing them.
+
+### Previews and exports
+
+- **Previews**: with **Settings › Training › Speak a preview after training** on, the export stage speaks a sample with what was trained; it is listed here.
+- **Exported**: the exported **Voice** (**Open** it or **Use in Speak**) or **Model** (**Models** opens the Models screen). Exported weights are added to the chosen voice; an exported model appears in the model list as `engine/name`.
+
+**Delete** at the bottom moves the experiment and its work files to the trash; what it exported stays.
+
+## CPU and GPU
+
+- A fine-tune needs a GPU in practice; Fish Speech's LoRA recommends 24 GB of GPU memory.
+- Every engine also trains on a CPU, which is enough to check the whole run works with little data and few steps.
+- **Settings › Training** also has **Training precision**, **Checkpoints kept per run** and **Memory**: *Standard* trains as each recipe does; *Low* adds gradient checkpointing (each block of the model runs again in the backward pass instead of keeping its activations) and keeps what is not needed off the GPU, with the same results, about a third slower; *Lowest* also keeps the optimizer's state in RAM and streams LoRA's frozen weights from RAM, whose results differ slightly. A method's own **gradient_checkpointing** hyperparameter overrides it.
+- When you pick a method for a new experiment, the dialog shows roughly how much GPU memory a run needs with each Memory setting; a run whose estimate exceeds the GPU's free memory says so in its log, with the setting that would fit. On a GPU each logged step also reports **memory/peak_mb**, what it really used.
+
+## Command line
+
+```bash
+mizuoto dataset create Narrator --lang en
+mizuoto dataset add narrator recordings/          # a .lab or .txt beside a clip is its text
+mizuoto dataset import narrator ljspeech/ --layout ljspeech
+mizuoto dataset prepare narrator                  # cut, transcribe, normalise
+mizuoto dataset check narrator
+mizuoto asset download gptsovits/s2d-v2pro        # v2Pro's pretrained discriminator
+mizuoto train methods gptsovits/v2pro-base        # what can be trained, with which settings
+mizuoto train new narrator --base gptsovits/v2pro-base --dataset narrator --hp sovits_epochs=8
+mizuoto train run narrator                        # continues from the first stage that is not done
+mizuoto train run narrator --stage <stage-id>     # one stage only
+mizuoto train metrics narrator
+```

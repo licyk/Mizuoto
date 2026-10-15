@@ -1,0 +1,413 @@
+---
+title: "HTTP 接口"
+description: "Mizuoto 的 REST 接口、访问控制、任务、事件推送、流式合成和兼容 OpenAI 的 /v1/audio/speech，附 curl 与 Python 示例。"
+icon: Code
+---
+
+`mizuoto webui` 启动的服务器同时提供网页界面和 HTTP 接口。网页界面能做的事都通过这套接口完成，所以脚本和其他程序也能做同样的事。
+
+## 地址与文档
+
+| 内容 | 地址 |
+| --- | --- |
+| REST 接口 | `http://127.0.0.1:7869/api/v1/...` |
+| 交互式文档（Swagger UI） | `http://127.0.0.1:7869/docs` |
+| OpenAPI 结构 | `http://127.0.0.1:7869/openapi.json` |
+| 事件（socket.io） | `http://127.0.0.1:7869/ws`，socket.io 路径为 `/ws/socket.io` |
+| 流式合成（WebSocket） | `ws://127.0.0.1:7869/api/v1/tts/stream` |
+| 兼容 OpenAI 的接口 | `http://127.0.0.1:7869/v1/audio/speech`、`/v1/models` |
+
+端口以实际启动的为准（默认 7869，被占用时会顺延，见 [命令行概览](/docs/cli)）。用 `mizuoto webui --api-prefix /voice` 启动时，上表的所有地址（接口、文档、socket 和网页界面）都移到这个前缀下，例如 `http://127.0.0.1:7869/voice/api/v1/...`、`http://127.0.0.1:7869/voice/v1/audio/speech`。
+
+OpenAPI 结构里也列出了 socket 推送的事件类型，可以用它生成客户端类型。
+
+## 资源一览
+
+所有 REST 路由都在 `/api/v1` 下：
+
+| 分组 | 主要路由 | 用途 |
+| --- | --- | --- |
+| app | `GET /app/version`、`GET /app/health`、`GET /app/meta` | 版本、健康检查（无需令牌）、首次运行等信息和 torch 版本 |
+| settings | `GET /settings`、`PATCH /settings` | 读取设置（令牌只显示是否已设置）；按深度合并写入一部分设置 |
+| compute | `GET /compute/info`、`GET /compute/usage`、`POST /compute/release` | 设备、显存占用，释放空闲的显存 |
+| engines | `GET /engines`、`GET`/`PATCH /engines/{id}`、`GET`/`POST`/`DELETE /engines/{id}/licence`、`GET /engines/{id}/doctor` | 引擎状态（可用，或缺什么）与配置、许可、单个引擎的检查 |
+| runtime | `GET /runtime`、`POST /runtime/unload`、`GET /runtime/doctor` | 已加载的模型、卸载模型、`mizuoto doctor` 的检查 |
+| models | `GET /models`、`POST /models/download`、`GET`/`DELETE /models/{engine}/{name}`、`POST .../verify`、`GET .../speakers` | 模型目录、下载、校验、删除 |
+| assets | `GET /assets`、`POST /assets/download`、`DELETE /assets/{engine}/{name}` | 共享文件 |
+| voices | `GET`/`POST /voices`、`GET`/`PATCH`/`DELETE /voices/{id}`、`.../references`、`.../fit`、`.../prepare`、`.../export`、`PUT /voices/import` | 音色库 |
+| audio | `PUT /audio/files`、`GET /audio/files/{id}`、`.../content`、`POST /audio/transcribe` | 上传音频、语音识别 |
+| tts | `POST /tts/plan`、`POST /tts/speak`、`POST /tts/convert`、`POST /tts/edit`、`GET /tts/models/{engine}/{name}/spec`、WS `/tts/stream` | 合成、转换、编辑、模型能接受的参数 |
+| outputs | `GET /outputs`、`GET`/`PATCH /outputs/{id}`、`.../content`、`.../rerun`、`POST /outputs/delete`、`POST /outputs/zip` | 合成结果 |
+| presets | `GET`/`POST /presets`、`PATCH`/`DELETE /presets/{id}`、`POST .../default` | 参数预设 |
+| datasets | `GET`/`POST /datasets`、`.../files`、`.../import`、`.../prepare`、`.../report`、`.../rows` | 训练数据集 |
+| train | `GET /train/methods`、`GET`/`POST /train/experiments`、`POST .../{engine}/{name}/run`、`GET .../metrics` | 实验与训练 |
+| projects | `GET`/`POST /projects`、`.../script`、`.../render`、`.../export` | 项目（长篇朗读） |
+| remote | `GET /remote/hosts`、`PUT`/`DELETE /remote/hosts/{name}`、`PUT /remote/engines/{id}` | 远程主机，见 [远程主机](/docs/advanced-remote) |
+| jobs | `GET /jobs`、`GET /jobs/{id}`、`GET .../log`、`POST .../cancel`、`.../retry`、`.../run-anyway`、`DELETE` | 任务 |
+
+每个字段的说明见 `/docs` 或 `/openapi.json`。
+
+### 与命令行一致
+
+每个操作在核心里只有一个方法，接口和命令行都只是解析参数、调用它、再输出结果。所以列表和查询类命令的 `mizuoto … --json` 与对应接口返回的 JSON 结构相同，例如 `mizuoto model list --json` 与 `GET /api/v1/models`。例外是 `mizuoto speak --json`，它打印 `{"job": …, "outputs": […]}`，比接口多附上了结果记录。
+
+### 已加载的模型与检查
+
+| 路由 | 返回 |
+| --- | --- |
+| `GET /api/v1/runtime` | `RuntimeStatus`：`torch`（版本，或 `null`）、`models`（每个已加载模型的 `model_id`、`engine`、`device`、`bytes`、`last_used`、`busy`、`remote`）和 `engines`（每个引擎的 `device`、`state`、`current_request`、`last_error`） |
+| `POST /api/v1/runtime/unload` | 请求体 `{"model": "qwen3tts/1.7b-base"}` 卸载这个模型（未加载时返回 404）；`{"model": null}` 卸载所有未在使用的模型。返回新的 `RuntimeStatus` |
+| `GET /api/v1/runtime/doctor` | `DoctorReport`：`torch`、`torch_build`、`recommended_build`、`install_command` 以及 `findings`（`level` 为 `ok` / `warning` / `error`，`engine`、`check`、`message`、`fix`） |
+
+`GET /api/v1/engines/{id}/doctor` 给出单个引擎的检查结果。模型在服务器的进程中，这些路由描述的就是这个进程。
+
+## 错误
+
+出错时返回对应的 HTTP 状态码和统一的结构：
+
+```json
+{"code": "not_found", "message": "Unknown model: nope/x", "detail": {"kind": "model", "id": "nope/x", "hint": "mizuoto model list"}}
+```
+
+`detail` 随错误而不同；`detail.hint` 存在时是一条能解决问题的命令或说明。请求体本身不合法（缺字段、类型不对）时是 FastAPI 的 422，结构为 `{"detail": [...]}`。
+
+| `code` | HTTP | 命令行退出码 | 含义 |
+| --- | --- | --- | --- |
+| `internal_error` | 500 | 1 | 未分类的内部错误 |
+| `not_found` | 404 | 2 | 模型、音色、任务、结果或引擎不存在 |
+| `conflict`、`busy` | 409 | 3 | 名称冲突，或与进行中的操作冲突 |
+| `invalid_input`、`invalid_path` | 400 | 4 | 输入不合法；路径越出允许的范围 |
+| `capability_not_supported`、`parameter_not_supported`、`parameter_out_of_range`、`reference_invalid`、`language_not_supported` | 422 | 4 | 模型做不到、不接受这个参数或取值超出范围、参考音频不可用、不支持这种语言 |
+| `not_local` | 403 | 4 | 只能在服务器本机的浏览器中使用 |
+| `licence_not_accepted` | 403 | 5 | 还没有接受引擎的许可 |
+| `model_missing`、`engine_not_installed`、`asset_missing` | 409 | 7 | 模型未下载、引擎需要的包未安装（torch、`mizuoto-fishspeech`、`mizuoto-indextts`；`detail.missing` 列出它们）、共享文件缺失 |
+| `device_unavailable` | 409 | 8 | 设备不存在或不可用 |
+| `compute_unavailable` | 503 | 9 | 没有可用的设备，或显存不足 |
+| `worker_failed` | 502 | 10 | 训练阶段的进程或远程代理退出或不再响应 |
+| `engine_error` | 500 | 10 | 引擎抛出了异常 |
+| `timeout` | 504 | 11 | 超时（例如 `wait=true` 等待超时） |
+| `download_failed` | 502 | 12 | 所有来源都下载失败 |
+| `remote_unavailable` | 502 | 14 | 远程主机连不上、拒绝了令牌或协议版本不同 |
+| `cancelled` | 499 | 130 | 已取消 |
+
+访问控制本身的拒绝另有三种：`bad_host`（400）、`bad_origin`（403）、`auth_required`（401）。
+
+## 访问控制
+
+每个请求依次经过三项检查（`mizuoto/api/security.py`）：
+
+1. **Host 头。** 服务器绑定在本机地址（默认 `127.0.0.1`）时，`Host` 必须是 `localhost`、`127.0.0.1`、`::1`、绑定的地址，或嵌入方用 `extra_hosts` / `allow_host()` 加入的名称，否则返回 400 `bad_host`。这可以防止 DNS 重绑定。绑定到非本机地址（如 `0.0.0.0`）时不检查 `Host`。
+2. **来源（Origin）。** 改变状态的请求（`GET`、`HEAD`、`OPTIONS` 以外）和 WebSocket，如果带 `Origin`，它必须是页面自己的来源或列在 `server.allowed_origins` 中，否则返回 403 `bad_origin`；没有 `Origin` 但 `Sec-Fetch-Site` 表明是跨站请求时同样拒绝。curl、Python 等非浏览器客户端不带这些头，不受影响。`server.allowed_origins` 非空时服务器还会为这些来源开启 CORS。
+3. **访问令牌。** 设置了 `server.access_token` 时，`/api/`、`/ws/`、`/v1/`、`/openapi.json` 和 `/docs` 下的每个请求都要带上令牌，否则返回 401 `auth_required`。唯一的例外是 `GET /api/v1/app/health`。令牌可以用以下任一方式提供：
+
+| 方式 | 示例 |
+| --- | --- |
+| Bearer 头 | `Authorization: Bearer <令牌>` |
+| Cookie | `mizuoto_token=<令牌>` |
+| 查询参数 | `?token=<令牌>`（浏览器里的 WebSocket 无法加请求头时使用） |
+| socket.io 连接 | `auth={"token": "<令牌>"}` |
+
+```bash
+mizuoto config set server.access_token "一个足够长的随机字符串"
+```
+
+网页界面遇到 401 时会弹出 **访问令牌** 对话框，要求输入一次。
+
+<Callout type="warn" title="开放到其他电脑时">
+用 `--host 0.0.0.0` 绑定后，服务器会在日志里提醒它可以被其他机器访问，但并不强制要求令牌。接口能删除文件、下载模型、读取服务器上的音频，请设置访问令牌，或放在防火墙、VPN、带身份验证的反向代理之后。
+</Callout>
+
+### 只能在本机使用的路由
+
+下面这些路由会读写服务器磁盘上的任意位置，只接受**服务器本机的浏览器**（客户端地址和请求的主机名都是本机回环地址），否则返回 403 `not_local`。通过隧道或同机反向代理转发的请求不算本机。
+
+| 路由 | 用途 |
+| --- | --- |
+| `GET /audio/browse`、`POST /audio/files/paths` | 浏览、登记服务器上的音频文件 |
+| `POST /models/identify`、`POST /models/import` | 识别、导入服务器上的模型文件夹 |
+| `POST /voices/{id}/weights` | 从服务器路径添加音色的微调权重 |
+| `POST /datasets/{id}/import` | 把服务器上的一个文件夹导入数据集 |
+| `POST /outputs/{id}/reveal` | 在文件管理器中显示结果 |
+| `POST /engines/{id}/ops/{op}` | 引擎专属操作（参数可能指向服务器文件） |
+
+其中浏览和登记的路径还必须位于 `paths.browse_roots` 之内（留空时为主文件夹、数据文件夹和所有驱动器/卷）。远程客户端请改用上传：`PUT /audio/files`，或按角色上传权重 `PUT /voices/{id}/weights/{engine}/{role}`。
+
+## 任务
+
+耗时的操作（合成、下载、训练、项目生成……）返回一个任务（Job），而不是等它完成：
+
+```json
+{"id": "j1a13058b6acbeab2259", "kind": "speak", "state": "queued", "progress": null, "result": null, "error": null, ...}
+```
+
+`state` 依次经过 `queued`、`waiting`（等待 GPU、引擎或其他资源，`waiting_for` 说明在等什么）、`running`，最后是 `completed`、`failed`、`cancelled` 或 `interrupted`（服务器在任务运行中退出）。完成后 `result` 中有结果，失败时 `error` 有 `code`、`message`、`detail`。
+
+| 操作 | 路由 |
+| --- | --- |
+| 查询 | `GET /api/v1/jobs/{id}`；列表 `GET /api/v1/jobs?state=active` |
+| 日志 | `GET /api/v1/jobs/{id}/log?offset=0`（返回 `lines` 和 `next_offset`，下次从这里继续读） |
+| 取消 | `POST /api/v1/jobs/{id}/cancel` |
+| 重试 | `POST /api/v1/jobs/{id}/retry`（失败、已取消或已中断的任务） |
+| 不排队直接运行 | `POST /api/v1/jobs/{id}/run-anyway`（在等 GPU 的任务；确认显存够用时） |
+
+合成可以直接等待结果：`POST /api/v1/tts/speak?wait=true&timeout=600`。任务结束后返回完成的任务，`result.output_id`（批量时为 `result.output_ids`）是结果的 id；超过 `timeout` 秒（默认 600，最多 3600）仍未结束时返回 504 `timeout`，`detail.job_id` 是仍在继续运行的任务，之后照常查询即可。
+
+结果音频用 `GET /api/v1/outputs/{id}/content` 下载，`GET /api/v1/outputs/{id}` 返回它的参数、时长、采样率和生成耗时。
+
+不想轮询的话，订阅 [事件](#事件) 中的 `job_updated`。
+
+## 示例
+
+### 合成并下载
+
+<Tabs items={["curl", "Python"]}>
+<Tab value="curl">
+
+```bash
+BASE=http://127.0.0.1:7869
+AUTH="Authorization: Bearer $MIZUOTO_TOKEN"   # 没有设置令牌时可省略
+
+job=$(curl -s -H "$AUTH" -H "Content-Type: application/json" \
+  "$BASE/api/v1/tts/speak?wait=true" \
+  -d '{"model": "qwen3tts/1.7b-custom-voice", "text": "你好，欢迎使用 Mizuoto。", "voice_spec": {"preset": "vivian"}, "style": {"instruct": "语气轻快"}}')
+id=$(echo "$job" | jq -r .result.output_id)
+curl -s -H "$AUTH" "$BASE/api/v1/outputs/$id/content" -o hello.wav
+```
+
+</Tab>
+<Tab value="Python">
+
+```python
+import httpx
+
+client = httpx.Client(base_url="http://127.0.0.1:7869/api/v1", headers={"Authorization": "Bearer <令牌>"}, timeout=None)
+
+req = {
+    "model": "qwen3tts/1.7b-custom-voice",
+    "text": "你好，欢迎使用 Mizuoto。",
+    "voice_spec": {"preset": "vivian"},
+    "params": {"seed": 42},
+    "output": {"format": "mp3"},
+}
+job = client.post("/tts/speak", params={"wait": True}, json=req).raise_for_status().json()
+if job["state"] != "completed":
+    raise RuntimeError(job["error"])
+audio = client.get(f"/outputs/{job['result']['output_id']}/content").content
+open("hello.mp3", "wb").write(audio)
+```
+
+</Tab>
+</Tabs>
+
+请求体就是 `SpeakRequest`，主要字段如下（完整定义见 `/docs`）：
+
+| 字段 | 说明 |
+| --- | --- |
+| `model` | `<引擎>/<模型>`，如 `cosyvoice/cosyvoice3-0.5b` |
+| `text` / `texts` | 文本；`texts` 是一批文本，每条一个结果（模型需支持批量） |
+| `language` | `zh`、`en`……或 `auto` |
+| `voice` | 音色库中音色的 id 或短名 |
+| `voice_spec` | 临时给出的音色，只填一种方式：`references`（`[{"audio_id" 或 "path", "transcript"}]`）、`preset`、`description` / `attributes`（`consent` 字段会被忽略） |
+| `style` | `instruct`（指令），`emotion`（`audio_id` / `path`、`vector`、`text`、`strength`） |
+| `params` | 通用参数：`temperature`、`top_p`、`top_k`、`speed`、`seed`、`segment_silence_ms`…… |
+| `engine_options` | 引擎专属选项 |
+| `output` | `format`（`wav`、`flac`、`mp3`、`ogg`、`m4a`）、`sample_rate`、`normalize`、`name` |
+| `segmentation` | `engine`（默认）或 `mizuoto`：由谁切分长文本 |
+| `strict` | 是否拒绝模型不接受的参数；不填时用 `tts.strict_params` |
+
+`voice`、`voice_spec` 都不给时使用模型自带的音色（模型需支持）。只想检查请求而不运行，用 `POST /api/v1/tts/plan`，它返回分段、生效的参数和警告。
+
+### 上传一段音频并克隆
+
+`PUT /api/v1/audio/files` 的请求体就是文件本身（不是 multipart），`name` 查询参数给出文件名。返回的 `id` 作为参考音频的 `audio_id`：
+
+<Tabs items={["curl", "Python"]}>
+<Tab value="curl">
+
+```bash
+audio_id=$(curl -s -H "$AUTH" -X PUT --data-binary @ref.wav \
+  "$BASE/api/v1/audio/files?name=ref.wav" | jq -r .id)
+
+curl -s -H "$AUTH" -H "Content-Type: application/json" "$BASE/api/v1/tts/speak?wait=true" -d @- <<EOF
+{"model": "qwen3tts/1.7b-base", "text": "这是克隆出来的声音。",
+ "voice_spec": {"references": [{"audio_id": "$audio_id", "transcript": "参考音频里说的话。"}]}}
+EOF
+```
+
+</Tab>
+<Tab value="Python">
+
+```python
+with open("ref.wav", "rb") as f:
+    uploaded = client.put("/audio/files", params={"name": "ref.wav"}, content=f.read()).raise_for_status().json()
+
+req = {
+    "model": "qwen3tts/1.7b-base",
+    "text": "这是克隆出来的声音。",
+    "voice_spec": {"references": [{"audio_id": uploaded["id"], "transcript": "参考音频里说的话。"}]},
+}
+job = client.post("/tts/speak", params={"wait": True}, json=req).raise_for_status().json()
+```
+
+</Tab>
+</Tabs>
+
+不给 `transcript` 时，若开启了 `tts.auto_transcribe` 且已下载语音识别模型，会自动识别；否则模型要支持无文本克隆。想长期使用这个音色，把它加进音色库（`POST /api/v1/voices`），之后用 `"voice": "<id>"` 引用。
+
+## 事件
+
+服务器通过 socket.io 推送事件，挂在 `/ws`（socket.io 路径 `/ws/socket.io`）。推送只有服务器到客户端一个方向；所有操作仍走 REST，REST 的结果是准的，事件只用来及时刷新。
+
+| 事件 | 内容 |
+| --- | --- |
+| `job_updated` | `job`：任务的最新状态、进度、下载速度 |
+| `job_log` | `job_id`、`offset`、`lines`（最多 50 行，其余用 REST 读取） |
+| `jobs_cleared` | `ids` |
+| `outputs_added` / `outputs_removed` | `ids`（新增时还有 `job_id`） |
+| `voices_changed`、`presets_changed`、`models_changed`、`datasets_changed`、`projects_changed` | `ids` |
+| `experiments_changed` | `names`（`<引擎>/<名称>`） |
+| `train_metrics` | `experiment`、`stage`、`points`（训练损失） |
+| `engines_changed` | `engines` |
+| `runtime_changed` | `runtime`：torch 版本、已加载的模型和各引擎的状态（与 `GET /runtime` 相同） |
+| `compute_changed` | `usage`：设备与显存占用 |
+| `settings_changed` | `keys`：改变的设置项 |
+
+```python
+import socketio  # pip install "python-socketio[client]"
+
+sio = socketio.Client()
+
+@sio.on("job_updated")
+def on_job(data):
+    job = data["job"]
+    print(job["id"], job["state"], job["progress"])
+
+sio.connect("http://127.0.0.1:7869", socketio_path="/ws/socket.io", auth={"token": "<令牌>"})
+sio.wait()
+```
+
+## 流式合成
+
+### WebSocket：`/api/v1/tts/stream`
+
+边生成边收到音频。协议如下：
+
+1. 客户端发送一条 JSON 文本消息，内容是一个 `SpeakRequest`。
+2. 服务器回复 `{"type": "queued", "job_id": …}`。
+3. 开始生成时回复 `{"type": "start", "job_id": …, "sample_rate": 24000, "granularity": "token" | "segment" | "emulated"}`。
+4. 之后是二进制消息：单声道 16 位小端 PCM，采样率为 `start` 中的值；每一段开始前有一条 `{"type": "segment", "index": n}`。
+5. 最后是 `{"type": "end", "job_id": …, "output_ids": […], "output_id": …}`，或 `{"type": "error", "code", "message", "detail"}`。
+
+二进制消息一定是音频，其他消息都是 JSON 文本。整段结果仍然照常保存为一个结果（`output_id`）。客户端随时可以发送 `{"type": "cancel"}` 取消。
+
+`granularity` 说明音频有多“细”：`token` 是模型逐 token 输出（CosyVoice），`segment` 是每段一次，`emulated` 是模型本身不分段输出、由 Mizuoto 切分文本来模拟。
+
+**流式文本输入**：模型支持 **流式文本输入**（CosyVoice 2 和 3）时，请求中设 `"text_stream": true`，`text` 只是开头；之后发送 `{"type": "text", "text": "…"}` 追加文本，最后发送 `{"type": "flush"}`。在 `flush` 之前断开连接会取消任务。
+
+```python
+import asyncio, json
+import websockets  # pip install websockets
+
+async def main():
+    url = "ws://127.0.0.1:7869/api/v1/tts/stream?token=<令牌>"
+    req = {"model": "cosyvoice/cosyvoice2-0.5b", "text": "边生成边播放。", "voice": "my-voice"}
+    pcm = bytearray()
+    async with websockets.connect(url) as ws:
+        await ws.send(json.dumps(req))
+        async for message in ws:
+            if isinstance(message, bytes):
+                pcm += message           # 交给播放器，或累积起来
+                continue
+            event = json.loads(message)
+            if event["type"] == "start":
+                rate = event["sample_rate"]
+            elif event["type"] in ("end", "error"):
+                print(event)
+                break
+    print(len(pcm) // 2 / rate, "秒")
+
+asyncio.run(main())
+```
+
+### HTTP：`POST /tts/speak?stream=true`
+
+不方便用 WebSocket 时，同一个请求加上 `stream=true`，响应就是边生成边发送的音频（分块传输）：
+
+| 参数 | 响应 |
+| --- | --- |
+| `stream_format=wav`（默认） | 长度未知的 WAV（头部之后直接是 PCM16 数据） |
+| `stream_format=pcm` | 单声道 16 位小端 PCM，没有文件头 |
+
+响应头 `X-Mizuoto-Sample-Rate` 是采样率，`X-Mizuoto-Job` 是任务 id（结果仍会保存）。这种方式不支持流式文本输入。
+
+```bash
+curl -sN -H "$AUTH" -H "Content-Type: application/json" \
+  "$BASE/api/v1/tts/speak?stream=true" \
+  -d '{"model": "qwen3tts/1.7b-custom-voice", "text": "边生成边播放。", "voice_spec": {"preset": "vivian"}}' \
+  | ffplay -nodisp -autoexit -
+```
+
+## 兼容 OpenAI 的接口
+
+为 OpenAI 语音接口编写的客户端可以直接使用 Mizuoto。这两个路由在 `/v1` 下（不在 `/api` 下；有 `--api-prefix` 时在 `<前缀>/v1`），同样需要访问令牌：
+
+| 路由 | 说明 |
+| --- | --- |
+| `POST /v1/audio/speech` | 朗读 `input`，返回音频 |
+| `GET /v1/models` | 已安装的语音模型（不含语音识别），以及 `tts.model_aliases` 中的别名 |
+
+请求字段的对应关系：
+
+| 字段 | Mizuoto 中的处理 |
+| --- | --- |
+| `model` | Mizuoto 的模型 id；或 `tts.model_aliases` 中的别名；都不是时用 `tts.default_model`；仍没有则返回 404 |
+| `voice` | 音色库中的音色（id 或短名）；或模型的预置说话人；或 OpenAI 的音色名（`alloy`、`ash`、`ballad`、`cedar`、`coral`、`echo`、`fable`、`marin`、`nova`、`onyx`、`sage`、`shimmer`、`verse`），这些名字会落到模型自带的音色，模型没有自带音色时用它的第一个预置说话人。其他名字返回 404 |
+| `instructions` | 只在模型支持 **指令** 时使用，否则忽略 |
+| `speed` | 0.25–4；模型不接受语速时丢弃 |
+| `response_format` | `mp3`（默认）、`opus`（生成 ogg）、`aac`（生成 m4a）、`flac`、`wav`、`pcm`（24 kHz 单声道 16 位小端，无文件头） |
+| `stream_format` | `audio` 且格式为 `wav` 或 `pcm` 时边生成边发送；`sse` 不支持 |
+
+这个接口按宽松模式处理参数：模型不接受的参数被丢弃，而不是报错。错误采用 OpenAI 的格式 `{"error": {"message", "type", "param", "code"}}`，其中 `code` 是 Mizuoto 的错误代码。成功的响应带有 `X-Mizuoto-Job` 和 `X-Mizuoto-Model` 头。
+
+先给常用的名字起别名：
+
+```bash
+mizuoto config set tts.model_aliases '{"tts-1": "qwen3tts/1.7b-custom-voice", "tts-1-hd": "cosyvoice/cosyvoice3-0.5b"}'
+mizuoto config set tts.default_model qwen3tts/1.7b-custom-voice
+```
+
+<Tabs items={["openai 库", "curl"]}>
+<Tab value="openai 库">
+
+```python
+from openai import OpenAI
+
+# api_key：设置了访问令牌时填令牌，否则任意字符串
+client = OpenAI(base_url="http://127.0.0.1:7869/v1", api_key="<令牌>")
+
+with client.audio.speech.with_streaming_response.create(
+    model="tts-1",
+    voice="vivian",
+    input="你好，这是兼容 OpenAI 的接口。",
+    instructions="用平静的语气",
+    response_format="mp3",
+) as response:
+    response.stream_to_file("speech.mp3")
+```
+
+</Tab>
+<Tab value="curl">
+
+```bash
+curl -s -H "$AUTH" -H "Content-Type: application/json" "$BASE/v1/audio/speech" \
+  -d '{"model": "tts-1", "input": "你好。", "voice": "alloy", "response_format": "wav"}' -o speech.wav
+```
+
+</Tab>
+</Tabs>
+
+## 下一步
+
+- [在 Python 中使用](/docs/advanced-embed)：不经过 HTTP，直接调用核心服务，或把服务器嵌入自己的程序。
+- [命令行](/docs/cli)：同样的操作在终端里完成。
+- [远程主机](/docs/advanced-remote)：让引擎在另一台机器上运行。

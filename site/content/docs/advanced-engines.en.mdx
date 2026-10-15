@@ -1,0 +1,234 @@
+---
+title: "Engines in depth"
+description: "The seven speech synthesis engines and the speech recognition engine one by one: catalogue models, capabilities, voice modes, languages, licences, training methods and what each needs installed."
+icon: Boxes
+---
+
+The data on this page comes from each engine's manifest (`mizuoto/core/engines/manifests/<id>.toml`). To see what applies on your machine, use the command line:
+
+```bash
+mizuoto engine list                     # engines, availability, licences
+mizuoto doctor                          # what each engine still needs on this machine
+mizuoto engine info qwen3tts            # variants, parameters, options and models
+mizuoto model spec qwen3tts/1.7b-base   # the voice modes, languages and parameters this model takes
+mizuoto model speakers cosyvoice/cosyvoice-300m-sft   # preset speakers
+```
+
+In the web UI, **Models** › **Engines** lists each engine's availability, device, precision, licence and **Options**, and **Models** › **Models** lists the catalogue.
+
+How each engine is implemented, and how exactly it reproduces its upstream project, is in the [Engine reference](/docs/engines).
+
+## At a glance
+
+| Engine (id) | Models | Sample rate | Languages | Best at | Training | Licence |
+| --- | --- | --- | --- | --- | --- | --- |
+| Qwen3-TTS (`qwen3tts`) | 1.7B / 0.6B Base and CustomVoice, 1.7B VoiceDesign | 24 kHz | 10 | cloning, preset speakers with instructions, voices from a description | a speaker | Apache-2.0 |
+| CosyVoice (`cosyvoice`) | Fun-CosyVoice 3 0.5B, CosyVoice 2 0.5B, 300M / SFT / Instruct | 22.05 / 24 kHz | zh en ja ko yue (more in v3) | token-level streaming, streamed text input, voice conversion, instructions | LLM, LLM + flow | Apache-2.0 |
+| F5-TTS (`f5tts`) | F5-TTS v1 Base, F5-TTS Base, E2-TTS Base | 24 kHz | zh, en | exact duration, speech editing | full fine-tune | MIT code, CC-BY-NC-4.0 weights |
+| GPT-SoVITS (`gptsovits`) | v2, v2Pro, v2ProPlus, v4, v5 Turbo | 32 / 48 kHz | zh en ja ko yue | few-shot cloning from 3–10 s, a voice's own weights | a voice's weights | MIT |
+| OmniVoice (`omnivoice`) | OmniVoice | 24 kHz | 600+ | many languages, voices from attributes, its own voice | full, LoRA | Apache-2.0 |
+| VoxCPM (`voxcpm`) | VoxCPM2, 1.5, 0.5B | 48 / 44.1 / 16 kHz | 30 (1.5 and 0.5B: zh, en) | cloning with or without a transcript, voices from a description, instructions | full, LoRA | Apache-2.0 |
+| Fish Speech (`fishspeech`) | S2 Pro | 44.1 kHz | about 50 | expressive cloning, several clips, dialogue | LoRA | Fish Audio Research License (gated) |
+| IndexTTS (`indextts`) | IndexTTS-1.5, 2, 2.5 | 24 / 22.05 kHz | zh, en (2.5 adds ja, es) | cloning without a transcript, emotion control | none | bilibili Model Use License (gated) |
+| Speech recognition (`asr`) | Whisper large-v3-turbo | 16 kHz | about 100 | transcripts for reference clips and datasets | none | MIT |
+
+Capability names match the UI, such as **Clone a voice**, **Clone without a transcript**, **Preset speakers**, **Design from a description**, **Design from attributes**, **Its own voice**, **Instructions**, **Streaming**, **Streaming text**, **Batches** and **Long text**. "Reference clips" below gives the length window per clip; a clip outside it is refused or cut according to `tts.reference_policy` (see [Configuration](/docs/cli-config)).
+
+### What each engine needs
+
+Every engine is implemented in Mizuoto and runs in the server's own process, in the one Python environment Mizuoto is installed in. An engine is **available** when torch imports there and its implementation is installed; `mizuoto doctor` (and **Models** › **Engines**) says which engines are available and, for the others, what is missing and the command that installs it.
+
+| Engine | Needs | Optional extras | Devices |
+| --- | --- | --- | --- |
+| Qwen3-TTS, CosyVoice, F5-TTS, OmniVoice, VoxCPM, speech recognition | torch (2.8 or newer) | — | GPU (NVIDIA, AMD, Intel, Apple), CPU |
+| GPT-SoVITS | torch | `mizuoto[gptsovits-ja]` (Japanese: pyopenjtalk 0.4.1, built from source with CMake and a C++ compiler), `mizuoto[gptsovits-ko]` (Korean: python-mecab-ko, jamo) | GPU (NVIDIA, AMD, Intel, Apple), CPU |
+| Fish Speech | torch, the `mizuoto-fishspeech` distribution | — | GPU (NVIDIA, AMD, Intel, Apple), CPU |
+| IndexTTS | torch, the `mizuoto-indextts` distribution | `mizuoto-indextts[ja]` (IndexTTS-2.5's Japanese: fugashi, unidic-lite) | GPU (NVIDIA, AMD, Intel, Apple), CPU |
+
+- The licence-gated engines are distributions of their own because of their licences; they register themselves with Mizuoto when installed in the same environment. Their models still need the licence accepted (below).
+- A text in a language whose optional extra is missing fails with `capability_not_supported` and the install command in the hint, for instance `pip install 'mizuoto[gptsovits-ja]'`.
+- Every engine runs on a CPU too, much more slowly. The speed-up option is `compute.compile`, in [Performance](/docs/advanced-performance).
+
+### Licences
+
+| Licence | Engines | What it means |
+| --- | --- | --- |
+| Gated | Fish Speech (`fish-audio-research@2026-03-07`), IndexTTS (`bilibili-model-use@2025-09-09`) | The engine is a distribution of its own (`mizuoto-fishspeech`, `mizuoto-indextts`); downloading models and shared files, and synthesis, need the licence accepted first: **Accept the licence** in **Models** › **Engines**, or `mizuoto engine accept-licence <id>`. `mizuoto engine licence <id>` prints the full text |
+| Non-commercial weights | F5-TTS | The pretrained weights are CC-BY-NC-4.0; nothing to accept, but results are tagged and carry a notice |
+| Not for training other engines | Fish Speech, IndexTTS (`trains_others = false`) | Their results cannot be added to another engine's training datasets |
+
+Results carry the engine's licence tags and notices (Fish Speech's "Built with Fish Audio", for instance), shown under the result.
+
+## Qwen3-TTS
+
+Alibaba Qwen's 12 Hz speech LLM. Best for: high-quality cloning in ten languages, preset speakers steered by instructions (emotion, pace, style), and new voices from a one-sentence description.
+
+| Model | Variant | Size | GPU memory | Recommended |
+| --- | --- | --- | --- | --- |
+| `qwen3tts/1.7b-base` | Base (cloning) | 4.3 GB | 6.5 GB | yes |
+| `qwen3tts/0.6b-base` | Base (cloning) | 2.4 GB | 4 GB | |
+| `qwen3tts/1.7b-custom-voice` | CustomVoice (preset speakers, instructions) | 4.3 GB | 6.5 GB | yes |
+| `qwen3tts/0.6b-custom-voice` | CustomVoice 0.6B (preset speakers) | 2.4 GB | 4 GB | |
+| `qwen3tts/1.7b-voice-design` | VoiceDesign (voice from a description) | 4.3 GB | 6.5 GB | yes |
+
+- **Capabilities**: Base has **Clone a voice** and **Clone without a transcript**; CustomVoice has **Preset speakers** and **Instructions** (the 0.6B has no instructions: upstream drops them silently, so Mizuoto does not declare them); VoiceDesign has **Design from a description**. Every variant has **Batches** (up to 8) and **Seed**.
+- **Preset speakers**: aiden, dylan, eric, ono_anna, ryan, serena, sohee, uncle_fu, vivian.
+- **Languages**: zh, en, de, it, pt, es, ja, ko, fr, ru.
+- **Reference clips**: 1–30 s, at least 16 kHz (3–20 s works best). With the clip's transcript it follows the voice more closely.
+- **Long text**: upstream does not split it, so Mizuoto does.
+- **Training**: **Teach it a speaker** (`speaker`, Base only): upstream's single-speaker fine-tune (`sft_12hz.py`), reimplemented; the Base model learns the dataset's voice and is exported as a new CustomVoice model with that voice as its preset speaker. A few minutes of one speaker; 24 GB of GPU memory or more for the 1.7B.
+- **Load options**: Attention follows the [attention settings](/docs/advanced-performance). `fused_projections` (off) is a fast mode: each layer's q/k/v and gate/up projections become one product each, a few percent faster on a GPU, where the audio is then no longer bit-identical to the original implementation's (outputs list `fused_projections`).
+
+## CosyVoice
+
+Alibaba Tongyi's LLM + flow-matching TTS. Best for: low-latency token-level streaming, speaking text as it is written (streamed text input), converting a recording to another voice, and instructions for dialects, emotions and speed.
+
+| Model | Variant | Size | GPU memory | Recommended |
+| --- | --- | --- | --- | --- |
+| `cosyvoice/cosyvoice3-0.5b` | Fun-CosyVoice 3 | 4.2 GB | 6 GB | yes |
+| `cosyvoice/cosyvoice2-0.5b` | CosyVoice 2 | 2.9 GB | 5 GB | yes |
+| `cosyvoice/cosyvoice-300m` | CosyVoice 1 (300M) | 2.2 GB | 3.5 GB | |
+| `cosyvoice/cosyvoice-300m-sft` | CosyVoice 1 SFT (preset speakers) | 2.2 GB | 3.5 GB | |
+| `cosyvoice/cosyvoice-300m-instruct` | CosyVoice 1 Instruct | 2.2 GB | 3.5 GB | |
+
+| Variant | Sample rate | Main capabilities |
+| --- | --- | --- |
+| v1_base | 22.05 kHz | **Clone a voice**, **Clone without a transcript**, **Voice conversion**, **Streaming**, **Speed**, **Inline tags**, **Long text** |
+| v1_sft | 22.05 kHz | the above plus **Preset speakers** (no inline tags) |
+| v1_instruct | 22.05 kHz | **Preset speakers**, **Instructions**, **Streaming**, **Speed**, **Inline tags**, **Long text** (no cloning) |
+| v2 | 24 kHz | **Clone a voice**, **Clone without a transcript**, **Instructions**, **Voice conversion**, **Streaming**, **Streaming text**, **Speed**, **Inline tags**, **Long text** |
+| v3 | 24 kHz | as v2, plus **Pronunciation**, without **Long text** |
+
+- **Languages**: zh, en, ja, ko, yue; v3: zh, en, ja, ko, de, es, fr, it, ru, yue.
+- **Preset speakers** (v1 SFT / Instruct): 中文女, 中文男, 日语男, 粤语女, 英文女, 英文男, 韩语女.
+- **Inline tags**: v1 `[laughter]`, `[breath]`, `<strong></strong>`; v2 adds `<laughter></laughter>`; v3 has eleven, such as `[breath]`, `[laughter]`, `[cough]`, `[sigh]`.
+- **Reference clips**: 1–30 s, at least 16 kHz.
+- **Streaming**: v2/v3 stream token by token; streamed text input needs the reference clip's transcript (zero-shot cloning or instruct2).
+- **Training** (GPU or CPU): **Fine-tune the language model** (`llm`) and **Fine-tune the LLM and the flow** (`llm_flow`), from v1_base, v2 or v3, following upstream's LibriTTS recipe; at least 60 s of data; exported as a new model. The LLM alone makes prosody and pronunciation follow the dataset; with the flow the timbre follows too.
+- **Shared files**: `cosyvoice/wetext` (13 MB, the text normalisation grammars that write out numbers, dates and units), downloaded with the first model.
+- **Load option**: `fp16` (half precision on the GPU: faster, slightly different).
+
+## F5-TTS
+
+A flow-matching TTS that clones a voice from a short clip and its transcript. Best for: exact control of the generated duration, and replacing a few words of a recording (speech editing).
+
+| Model | Variant | Size | GPU memory | Recommended |
+| --- | --- | --- | --- | --- |
+| `f5tts/v1-base` | F5-TTS v1 Base | 1.3 GB | 2.5 GB | yes |
+| `f5tts/base` | F5-TTS Base | 1.3 GB | 2.5 GB | |
+| `f5tts/e2-base` | E2-TTS Base | 1.3 GB | 2.5 GB | |
+
+- **Capabilities** (all three variants): **Clone a voice**, **Speed**, **Duration**, **Long text**, **Seed**, **Streaming** (chunk by chunk), **Speech editing**. Cloning needs the clip's transcript: when it is missing, it is transcribed if `tts.auto_transcribe` is on and the speech recognition model is downloaded.
+- **Languages**: zh, en. 24 kHz.
+- **Reference clips**: 1–12 s, at least 16 kHz.
+- **Licence**: MIT code, CC-BY-NC-4.0 pretrained weights (trained on Emilia): not for commercial use. Nothing to accept; results carry a notice.
+- **Training**: **Fine-tune the model** (`full`): upstream's `finetune_cli` recipe, the whole model trained further and exported as a new model of the same kind. Best with an hour of speech or more; a GPU is all but required. The result inherits CC-BY-NC-4.0.
+- **Load option**: `ode_method` (`euler` or `midpoint`).
+
+## GPT-SoVITS
+
+Few-shot cloning from a 3–10 s clip, and the classic fine-tuning path: a voice can have its own GPT and SoVITS weights, switched in per request. Best for: a voice of your own trained on a few minutes of recordings.
+
+| Model | Variant | Size | GPU memory | Recommended |
+| --- | --- | --- | --- | --- |
+| `gptsovits/v2-base` | v2 | 249 MB | 2.5 GB | |
+| `gptsovits/v2pro-base` | v2Pro | 303 MB | 2.5 GB | yes |
+| `gptsovits/v2proplus-base` | v2ProPlus | 339 MB | 2.8 GB | |
+| `gptsovits/v4-base` | v4 | 937 MB | 4 GB | |
+| `gptsovits/v5turbo-base` | v5 Turbo | 934 MB | 4 GB | |
+
+- **Capabilities**: **Clone a voice**, **Several clips** (up to 4), **Trained voices**, **Speed**, **Batches** (up to 20), **Long text**, **Streaming**, **Seed**; v2, v2Pro and v2ProPlus also **Clone without a transcript**.
+- **Sample rate**: 32 kHz for v2 / v2Pro / v2ProPlus, 48 kHz for v4 / v5 Turbo.
+- **Languages**: zh, en, ja, ko, yue. Japanese needs the optional extra `mizuoto[gptsovits-ja]`, Korean `mizuoto[gptsovits-ko]`.
+- **Reference clips**: 3–10 s.
+- **Voice weights**: a voice can carry a GPT (`.ckpt`) and SoVITS (`.pth`) pair, used when its version matches the model's variant (otherwise Mizuoto warns and clones). Add them with `mizuoto voice add-weights <voice> -e gptsovits -f gpt=x.ckpt -f sovits=y.pth`.
+- **Shared files**: every model needs `gptsovits/encoders` (1.0 GB), `gptsovits/g2pw` (562 MB), `gptsovits/nltk-data` and `gptsovits/open-jtalk`, downloaded with the first model; training v2, v2Pro and v2ProPlus also needs the matching discriminator `gptsovits/s2d-*`.
+- **Training**: **Fine-tune a voice** (`speaker`): upstream's own recipe (text features, speech features, semantic tokens, train SoVITS, train GPT), exported as the voice's own pair of weights. One to ten minutes of one speaker; minutes on a GPU, hours on a CPU. v4 and v5 Turbo train SoVITS as a LoRA.
+
+## OmniVoice
+
+Xiaomi's diffusion language model TTS. Best for: rare languages (over 600), speaking without any reference in the model's own voice, and voices designed from attributes such as gender, age, pitch, accent and Chinese dialect.
+
+| Model | Variant | Size | GPU memory | Recommended |
+| --- | --- | --- | --- | --- |
+| `omnivoice/omnivoice` | OmniVoice | 3.1 GB | 5 GB | yes |
+
+- **Capabilities**: **Clone a voice**, **Design from attributes**, **Its own voice**, **Inline tags**, **Pronunciation**, **Speed**, **Duration**, **Batches** (up to 8), **Long text**, **Seed**. Mizuoto always passes the clip's transcript when cloning (speech recognition fills it in when missing), so OmniVoice never loads Whisper itself.
+- **Design attributes**: gender (male, female), age (child … elderly), pitch (very low pitch … very high pitch), style (whisper), accent (ten, such as american accent), dialect (twelve Chinese dialects such as 河南话, 四川话, 东北话). Free-text descriptions are not taken.
+- **Inline tags**: thirteen, such as `[laughter]`, `[sigh]`, `[question-en]`, `[surprise-wa]`.
+- **Reference clips**: 1–20 s, at least 16 kHz. 24 kHz output.
+- **Training**: **Fine-tune the model** (`full`) and **Fine-tune with LoRA** (`lora`, merged at export), both exported as a new model. The full fine-tune suits hours of speech for a new language or style and needs 24 GB of GPU memory or more; LoRA is lighter.
+
+## VoxCPM
+
+OpenBMB's tokenizer-free TTS: it generates continuous speech latents patch by patch (a MiniCPM-4 language model and a small diffusion model per patch), with no speech codes in between. Best for: natural cloning, with or without the clip's transcript; voices made from a sentence of description; style instructions on a cloned voice; 30 languages at 48 kHz (VoxCPM2).
+
+| Model | Variant | Size | GPU memory | Recommended |
+| --- | --- | --- | --- | --- |
+| `voxcpm/2` | VoxCPM2 | 5.0 GB | 6.5 GB | yes |
+| `voxcpm/1.5` | VoxCPM 1.5 | 2.0 GB | 3 GB | |
+| `voxcpm/0.5b` | VoxCPM 0.5B | 1.6 GB | 2.5 GB | |
+
+- **Capabilities**: VoxCPM2: **Clone a voice**, **Clone without a transcript**, **Design from a description**, **Instructions**, **Its own voice**, **Streaming** (one chunk per 40 ms patch), **Seed**. VoxCPM 1.5 and 0.5B: **Clone a voice** (the transcript is needed; speech recognition fills it in), **Its own voice**, **Streaming**, **Seed**.
+- **Cloning**: with the clip's transcript, VoxCPM2 is given the clip both as an isolated reference and as the start of the speech to continue, as upstream's demo does (the option **reference_prefix** off keeps only the continuation); without it, as the reference alone. VoxCPM 1.5 and 0.5B continue the clip.
+- **Descriptions and instructions** (VoxCPM2): written in parentheses before the text, as upstream does it: `(A young woman, gentle and sweet voice)Hello`. Either language works; Chinese dialects are asked for this way (粤语, 四川话…).
+- **Parameters**: **Steps** (the diffusion's Euler steps per patch, 10), **Guidance scale** (2.0), **Text normalisation** (off; numbers, dates and symbols written out by wetext), **Max new tokens** (patches, 4096). Options: `min_len`, `retry_badcase` (on: a result much longer than its text is generated again with the next seed, at most `retry_badcase_max_times`; not when streaming), `retry_badcase_ratio_threshold`, `reference_prefix`.
+- **Languages**: VoxCPM2 30 (ar, my, zh, da, nl, en, fi, fr, de, el, he, hi, id, it, ja, km, ko, lo, ms, no, pl, pt, ru, es, sw, sv, tl, th, tr, vi), with no language tag: it reads the text as written. VoxCPM 1.5 and 0.5B: zh, en.
+- **Reference clips**: 1–30 s, at least 16 kHz. Output: 48 kHz (VoxCPM2), 44.1 kHz (1.5), 16 kHz (0.5B).
+- **Precision**: the models' own bf16 on every device but Apple's (fp32 there), as upstream; `engines.voxcpm.dtype fp32` for full precision.
+- **Not included**: upstream's optional denoiser for the reference clip (ZipEnhancer, a ModelScope pipeline) and its timestamps; both are off by default upstream.
+- **Training**: **Fine-tune the model** (`full`) and **Fine-tune with LoRA** (`lora`), upstream's own recipes (`train_voxcpm_finetune.py` with its configurations per model), both exported as a new model; a LoRA model keeps the base weights beside its adapters and applies them when it loads, as upstream does. A hyperparameter left at 0 takes the recipe's value for the model. On a GPU it trains as upstream does (float32 weights under bf16 autocast); on a CPU in float32 (upstream itself cannot train off CUDA). VoxCPM2's full fine-tune needs about 40 GB of memory; LoRA far less.
+
+## Fish Speech
+
+Fish Audio S2 Pro: a dual-autoregressive model trained on about ten million hours in some fifty languages. Best for: expressive cloning, free-form inline tags such as `[laughing]`, and dialogue between speakers.
+
+| Model | Variant | Size | GPU memory | Recommended |
+| --- | --- | --- | --- | --- |
+| `fishspeech/s2-pro` | S2 Pro | 10.5 GB | 22 GB | yes |
+
+- **Capabilities**: **Clone a voice**, **Several clips** (up to 4), **Inline tags**, **Dialogue**, **Streaming** (by segment), **Seed**. 44.1 kHz.
+- **Reference clips**: 2–30 s.
+- **Licence**: Fish Audio Research License, gated (`fish-audio-research@2026-03-07`); not for commercial use; results cannot train other engines; results show "Built with Fish Audio".
+- **Devices**: bf16 on a GPU; fp32 on a CPU (bf16 is emulated there, far slower). About 22 GB of GPU memory.
+- **Training**: **Fine-tune with LoRA** (`lora`, GPU or CPU): upstream's LoRA recipe (semantic tokens, packing, training, merging), exported as a new model. Upstream warns that it learns speaking style more than timbre; 24 GB of GPU memory; the result stays under Fish Audio's research licence.
+- The catalogue has no int8 version: no public repository exists for it.
+
+## IndexTTS
+
+bilibili's zero-shot TTS: clones from a clip without its transcript. Best for: emotion control — IndexTTS-2 takes the emotion from a clip, eight emotion weights or a description; 2.5 adds Japanese, Spanish and speed.
+
+| Model | Variant | Size | GPU memory | Recommended |
+| --- | --- | --- | --- | --- |
+| `indextts/v1.5` | IndexTTS-1.5 | 1.6 GB | 4 GB | |
+| `indextts/v2` | IndexTTS-2 | 5.6 GB | 9 GB | yes |
+| `indextts/v2.5` | IndexTTS-2.5 | 5.2 GB | 9 GB | |
+
+| Variant | Sample rate | Main capabilities |
+| --- | --- | --- |
+| v1_5 | 24 kHz | **Clone a voice**, **Clone without a transcript**, **Pronunciation**, **Long text** |
+| v2 | 22.05 kHz | the above plus **Emotion from a clip**, **Emotion sliders**, **Emotion from text**, **Streaming** |
+| v2_5 | 22.05 kHz | as v2, plus **Speed**; languages zh, en, ja, es |
+
+- **Emotion weights** (eight, in upstream's order): happy, angry, sad, afraid, disgusted, melancholic, surprised, calm. An emotion clip takes a strength; emotion from text needs the load option `use_qwen_emo` (on by default, about 1.2 GB).
+- **Reference clips**: 1–30 s.
+- **Licence**: bilibili Model Use License, gated (`bilibili-model-use@2025-09-09`); commercial use is allowed, but results cannot train other engines; the notice under results reminds that cloning a voice without its owner's permission is forbidden by the IndexTTS disclaimer.
+- **Languages**: Japanese text for IndexTTS-2.5 needs the optional extra `mizuoto-indextts[ja]`.
+- **Shared files**: IndexTTS-2 and 2.5 need `indextts/w2v-bert` (2.2 GB), `indextts/campplus` and `indextts/bigvgan`, and IndexTTS-2 also `indextts/semantic-codec`; they are downloaded with the model.
+- **Training**: none.
+- **Load options**: `use_qwen_emo` (on by default), `use_torch_compile` (v2/v2.5: compiles the s2mel DiT and BigVGAN, as `compute.compile` does; see [Performance](/docs/advanced-performance)).
+
+## Speech recognition (asr)
+
+An internal engine Mizuoto uses itself: Whisper large-v3-turbo, implemented in Mizuoto, about 100 languages, transcribing reference clips, voices and datasets that have no text. It is not offered as a speech model and does not appear in `GET /v1/models`.
+
+| Model | Size | GPU memory | Recommended |
+| --- | --- | --- | --- |
+| `asr/whisper-large-v3-turbo` | 1.5 GB | 2 GB | yes |
+
+```bash
+mizuoto model download asr/whisper-large-v3-turbo
+mizuoto asr clip.wav --lang zh
+```
+
+Transcripts are cached by the audio's SHA-256 and the model, so the same clip is never transcribed twice. `tts.auto_transcribe` (on by default) and `tts.asr_model` control automatic transcription; see [Configuration](/docs/cli-config).

@@ -1,0 +1,211 @@
+# IndexTTS. Licence-gated.
+id = "indextts"
+title = "IndexTTS"
+description = "bilibili's zero-shot TTS: cloning from a clip with no transcript; IndexTTS-2 adds emotion from a clip, eight emotion weights or a description, and 2.5 speaks Japanese and Spanish too and takes a speed."
+devices = ["cuda", "rocm", "xpu", "mps", "cpu"]
+languages = ["zh", "en"]
+
+[upstream]
+url = "https://github.com/index-tts/index-tts"
+commit = "d9e41aac89fd00b3d71497fddb287b7f24613712"
+
+[licence]
+id = "bilibili-model-use"
+name = "bilibili Model Use License"
+url = "https://github.com/index-tts/index-tts/blob/main/LICENSE"
+version = "2025-09-09"
+gated = true
+commercial = true
+file = "bilibili-model-use.txt"
+trains_others = false
+notice = "Cloning a voice without its owner's permission is forbidden by the IndexTTS disclaimer."
+
+# -- variants -------------------------------------------------------------------------
+
+[variants.v1_5]
+title = "IndexTTS-1.5"
+sample_rate = 24000
+capabilities = ["clone", "clone_no_transcript", "pronunciation", "long_text", "seed"]
+
+[variants.v1_5.reference]
+min_seconds = 1.0
+max_seconds = 30.0
+
+[variants.v2]
+title = "IndexTTS-2"
+sample_rate = 22050
+capabilities = ["clone", "clone_no_transcript", "emotion_audio", "emotion_vector", "emotion_text", "pronunciation", "long_text", "stream_audio", "seed"]
+stream_granularity = "segment"
+emotions = ["happy", "angry", "sad", "afraid", "disgusted", "melancholic", "surprised", "calm"]
+
+[variants.v2.reference]
+min_seconds = 1.0
+max_seconds = 30.0
+
+[variants.v2_5]
+title = "IndexTTS-2.5"
+sample_rate = 22050
+languages = ["zh", "en", "ja", "es"]
+capabilities = ["clone", "clone_no_transcript", "emotion_audio", "emotion_vector", "emotion_text", "pronunciation", "speed", "long_text", "stream_audio", "seed"]
+stream_granularity = "segment"
+emotions = ["happy", "angry", "sad", "afraid", "disgusted", "melancholic", "surprised", "calm"]
+
+[variants.v2_5.reference]
+min_seconds = 1.0
+max_seconds = 30.0
+
+# -- common parameters ----------------------------------------------------------------
+
+[params.temperature]
+target = "temperature"
+min = 0.1
+max = 2.0
+step = 0.05
+default = 0.8
+
+[params.top_p]
+target = "top_p"
+min = 0.0
+max = 1.0
+step = 0.01
+default = 0.8
+
+[params.top_k]
+target = "top_k"
+type = "int"
+min = 0
+max = 100
+default = 30
+
+[params.repetition_penalty]
+target = "repetition_penalty"
+min = 0.1
+max = 20.0
+step = 0.1
+default = 10.0
+
+[params.max_new_tokens]
+target = "max_mel_tokens"
+type = "int"
+min = 50
+max = 3000
+default = 1500
+help = "At most this many mel tokens per segment."
+
+[params.speed]
+target = "duration_factor"
+min = 0.5
+max = 2.0
+step = 0.05
+default = 1.0
+variants = ["v2_5"]
+help = "Sent as its inverse, the duration factor."
+
+[params.seed]
+target = "seed"
+type = "int"
+min = 0
+max = 4294967295
+
+[params.segment_silence_ms]
+target = "interval_silence"
+type = "int"
+min = 0
+max = 5000
+default = 200
+
+# -- engine options -------------------------------------------------------------------
+
+[options.num_beams]
+type = "int"
+default = 3
+min = 1
+max = 10
+help = "Beams of the GPT's search: more is steadier and slower."
+
+[options.length_penalty]
+type = "float"
+default = 0.0
+min = -2.0
+max = 2.0
+step = 0.1
+
+[options.max_text_tokens_per_segment]
+type = "int"
+default = 120
+min = 20
+max = 600
+help = "How long a segment upstream cuts the text into may be, in text tokens."
+
+[options.use_random]
+type = "bool"
+default = false
+help = "Sample the emotion from the emotion matrix rather than take the nearest (IndexTTS-2)."
+
+# -- load options ---------------------------------------------------------------------
+
+[load_options.use_qwen_emo]
+type = "bool"
+default = true
+help = "Load the Qwen emotion model that turns a described emotion into weights (about 1.2 GB)."
+
+[load_options.use_torch_compile]
+type = "bool"
+default = false
+help = "torch.compile the decoder (NVIDIA GPU; the first requests are slow while it compiles)."
+variants = ["v2", "v2_5"]
+
+# -- shared assets --------------------------------------------------------------------
+
+[[assets]]
+id = "indextts/w2v-bert"
+title = "w2v-BERT 2.0"
+description = "Meta's speech encoder IndexTTS-2 takes its semantic features from."
+files = { hf = "facebook/w2v-bert-2.0", include = ["config.json", "preprocessor_config.json", "model.safetensors"], manifest = "indextts-w2v-bert.files.json" }
+
+[[assets]]
+id = "indextts/semantic-codec"
+title = "MaskGCT semantic codec"
+description = "Amphion's semantic codec, which turns w2v-BERT features into tokens."
+files = { hf = "amphion/MaskGCT", subdir = "semantic_codec", include = ["semantic_codec/model.safetensors"], manifest = "indextts-semantic-codec.files.json" }
+
+[[assets]]
+id = "indextts/campplus"
+title = "CAM++"
+description = "The speaker embedding model of IndexTTS-2."
+files = { hf = "funasr/campplus", include = ["campplus_cn_common.bin"], manifest = "indextts-campplus.files.json" }
+
+[[assets]]
+id = "indextts/bigvgan"
+title = "BigVGAN v2 (22 kHz)"
+description = "NVIDIA's vocoder IndexTTS-2 speaks through."
+files = { hf = "nvidia/bigvgan_v2_22khz_80band_256x", include = ["config.json", "bigvgan_generator.pt"], manifest = "indextts-bigvgan.files.json" }
+
+# -- models ---------------------------------------------------------------------------
+
+[[models]]
+id = "indextts/v1.5"
+variant = "v1_5"
+title = "IndexTTS-1.5"
+description = "Chinese and English cloning, stable and quick."
+vram_mb = 4000
+files = { hf = "IndexTeam/IndexTTS-1.5", include = ["config.yaml", "bpe.model", "gpt.pth", "bigvgan_generator.pth"], manifest = "indextts-1.5.files.json" }
+
+[[models]]
+id = "indextts/v2"
+variant = "v2"
+title = "IndexTTS-2"
+description = "Emotion from a clip, weights or a description, kept apart from the timbre."
+vram_mb = 9000
+recommended = true
+assets = ["indextts/w2v-bert", "indextts/semantic-codec", "indextts/campplus", "indextts/bigvgan"]
+files = { hf = "IndexTeam/IndexTTS-2", exclude = [".gitattributes", "*.md", "LICENSE*"], manifest = "indextts-2.files.json" }
+
+[[models]]
+id = "indextts/v2.5"
+variant = "v2_5"
+title = "IndexTTS-2.5"
+description = "IndexTTS-2 with Japanese and Spanish, and a speed."
+vram_mb = 9000
+assets = ["indextts/w2v-bert", "indextts/campplus", "indextts/bigvgan"]
+files = { hf = "IndexTeam/IndexTTS-2.5", exclude = [".gitattributes", "*.md", "LICENSE*"], manifest = "indextts-2.5.files.json" }

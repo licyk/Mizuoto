@@ -1,0 +1,11 @@
+/* Test stylesheet: every motion token at zero, so a transition resolves at once
+   and a test can never wait on one. */
+:root {
+  --md-sys-motion-duration-short1: 0ms; --md-sys-motion-duration-short2: 0ms;
+  --md-sys-motion-duration-short3: 0ms; --md-sys-motion-duration-short4: 0ms;
+  --md-sys-motion-duration-medium1: 0ms; --md-sys-motion-duration-medium2: 0ms;
+  --md-sys-motion-duration-medium3: 0ms; --md-sys-motion-duration-medium4: 0ms;
+  --md-sys-motion-duration-long1: 0ms; --md-sys-motion-duration-long2: 0ms;
+  --md-sys-motion-duration-long3: 0ms; --md-sys-motion-duration-long4: 0ms;
+}
+*, *::before, *::after { transition-duration: 0ms !important; transition-delay: 0ms !important; animation-duration: 0ms !important; }

@@ -1,0 +1,228 @@
+---
+title: "HTTP API and command line"
+description: "How the FastAPI app is assembled, how the security middleware and errors map to HTTP, how events enter the OpenAPI schema and become the web UI's types, and how to add a route and a command."
+icon: Plug
+---
+
+The API (`mizuoto/api/`) and the command line (`mizuoto/cli/`) are two thin shells over one core: parse the input, call one core method, shape the output. This page covers both shells and their conventions; the core itself is in [Architecture](/docs/development-architecture), and how the web UI consumes these endpoints is in [Web UI](/docs/development-webui).
+
+## The app: `create_app()`
+
+`create_app(services, bound_host, bound_port, extra_hosts, serve_ui, api_prefix)` in `mizuoto/api/app.py` builds the whole application. The caller owns the services (`mizuoto webui` builds them with `build_services(start_background=True)`, `mizuoto.embed.MizuotoServer` inside a host application); the app only hangs them on `app.state.services`.
+
+```python
+ROUTERS = (app_info, settings, compute, engines, runtime, models, assets, voices, audio_router,
+           tts, outputs, presets, datasets, train, projects, remote, jobs)
+
+for module in ROUTERS:
+    app.include_router(module.router, prefix=f"{prefix}/api")
+app.include_router(openai.router, prefix=prefix)
+app.mount(f"{prefix}/ws", socket_bridge.asgi_app(), name="socket")
+```
+
+| Mount | Contents |
+| --- | --- |
+| `{prefix}/api/v1/...` | One router module per resource, `routers/<resource>.py`, each with `APIRouter(prefix="/v1/<resource>")` |
+| `{prefix}/v1/...` | `routers/openai.py`: the OpenAI-compatible `POST /v1/audio/speech` and `GET /v1/models` |
+| `{prefix}/ws` | `SocketBridge` in `sockets.py`: EventBus → socket.io, server to client only |
+| `{prefix}/docs`, `{prefix}/openapi.json` | FastAPI's Swagger page and the schema |
+| `{prefix}/` | `SPAStaticFiles` from `static.py`, registered last, so it only gets paths nothing else matched |
+
+`api_prefix` moves all of the above under one sub-path, so a host application can mount it (see [Embedding](/docs/advanced-embed)). The web UI needs no change: it derives its root from the URL of its own script (`webui/src/api/baseUrl.ts`).
+
+Middleware, in order: an optional `CORSMiddleware` (only when `server.allowed_origins` is non-empty), `GZipMiddleware` (above 4 KB) and `SecurityMiddleware`. The lifespan only starts and stops the socket bridge.
+
+### Dependencies: `deps.py`
+
+Services come from `app.state`, not from a global:
+
+```python
+ServicesDep = Annotated[Services, Depends(get_services)]
+LocalDep = Depends(require_local)
+```
+
+`is_local(request)` means "a browser on the server's own machine": the client address is loopback **and** the requested host name is a loopback name. A tunnel or reverse proxy on the same machine also connects from loopback, but forwards its public `Host`, so it is not local. Routes that need it (browsing server folders, registering audio by server path, `/models/identify`, `/models/import`, `reveal`, `POST /voices/{id}/weights`, `/engines/{id}/ops/{op}`, a dataset's folder import) declare `dependencies=[LocalDep]` and fail with 403 `not_local`. Server paths must also lie within `paths.browse_roots`; that check is in the core.
+
+### Security middleware: `security.py`
+
+An API that can delete and move files checks three things on every HTTP and WebSocket request (before any route; plain ASGI):
+
+1. **Host**: when bound to loopback, `Host` must be `localhost`, `127.0.0.1`, `::1`, the bound host or a name in `extra_hosts`, else 400 `bad_host`. This blocks DNS rebinding. `extra_hosts` is kept by reference, so a tunnel's public name added later is accepted at once.
+2. **Origin**: a state-changing request (not `GET`/`HEAD`/`OPTIONS`) and every WebSocket handshake, when it carries `Origin`, must come from the page's own origin or one in `server.allowed_origins`; without `Origin`, `Sec-Fetch-Site` must be `same-origin`, `none` or absent. Else 403 `bad_origin`.
+3. **Token**: when `server.access_token` is set, requests under `/api/`, `/ws/`, `/v1/`, `/openapi.json` and `/docs` must carry it, as `Authorization: Bearer`, the `mizuoto_token` cookie or a `token` query parameter, compared with `hmac.compare_digest`. Missing or wrong is 401 `auth_required`. `/api/v1/app/health` is exempt: the UI shell must load before it can ask for a token.
+
+A refused WebSocket is closed with 1008. socket.io's `connect` handler (`SocketBridge._on_connect`) checks `auth.token` once more.
+
+### Errors → HTTP: `errors.py`
+
+Every core error (`mizuoto/core/errors.py`) carries `code`, `http_status` and `exit_code`; `install_error_handlers()` turns any `MizuotoError` into one shape:
+
+```json
+{"code": "model_missing", "message": "…", "detail": {"hint": "mizuoto model download …"}}
+```
+
+`ERROR_RESPONSES` declares an `ErrorResponse` model for 400/403/404/409 on every router, so the generated client knows the error shape. Part of the mapping:
+
+| Exception | `code` | HTTP | Exit code |
+| --- | --- | --- | --- |
+| `NotFoundError` | `not_found` | 404 | 2 |
+| `ConflictError` / `BusyError` | `conflict` / `busy` | 409 | 3 |
+| `ValidationError`, `InvalidPathError` | `invalid_input`, `invalid_path` | 400 | 4 |
+| `CapabilityError`, `ParameterError`, `ReferenceInvalidError`, `LanguageError` | `capability_not_supported` etc. | 422 | 4 |
+| `LicenceError` | `licence_not_accepted` | 403 | 5 |
+| `ModelMissingError`, `EnvMissingError`, `AssetMissingError` | `model_missing`, `engine_not_installed` (a package the engine needs is missing), `asset_missing` | 409 | 7 |
+| `ComputeError` | `compute_unavailable` | 503 | 9 |
+| `WorkerError` / `EngineError` | `worker_failed` / `engine_error` | 502 / 500 | 10 |
+| `OperationTimeoutError` | `timeout` | 504 | 11 |
+| `DownloadError` / `InstallError` | `download_failed` / `install_failed` | 502 / 500 | 12 / 13 |
+| `RemoteError` | `remote_unavailable` | 502 | 14 |
+| `CancelledError` | `cancelled` | 499 | 130 |
+
+The code strings live in `mizuoto/core/codes.py` (standard library only), so engines and training stages raise them without pydantic; `error_from_code()` rebuilds the class from a code.
+
+### Writing a route
+
+From `routers/projects.py`:
+
+```python
+router = APIRouter(prefix="/v1/projects", tags=["projects"], responses=ERROR_RESPONSES)
+
+@router.post("/{project_id}/render", operation_id="render_project")
+def render(services: ServicesDep, project_id: str, body: RenderRequest) -> Job:
+    return services.projects.render(project_id, body, origin="api")
+```
+
+Conventions:
+
+- **One operation, one core method.** The route body parses, calls and returns; bodies and results are the core's `Record` models, so the API's JSON equals the CLI's `--json`.
+- **Every route has an `operation_id`**, the operation's name in OpenAPI.
+- **Plain `def`**: routes that touch the disk and the database run in the thread pool. Only uploads that read the raw body (`uploads.spool()` streams it to a temporary file, never parsing multipart) and WebSockets are `async def`.
+- **Long operations return a `Job`.** `POST /tts/speak?wait=true` waits with `JobService.wait` and raises `OperationTimeoutError` after `timeout` (504, `detail.job_id` names the job, which goes on).
+- **Audio files** go through `files.audio_response()`: `FileResponse` answers `Range`, so long files can be seeked. Streamed synthesis is in `streaming.py` (chunked WAV or bare PCM, the rate in `X-Mizuoto-Sample-Rate`, the job id in `X-Mizuoto-Job`).
+
+### The runtime routes
+
+The models live in the server's process, so the API is how other programs (and `mizuoto runtime`) see and free them. `routers/runtime.py`:
+
+| Route | Core method | Returns |
+| --- | --- | --- |
+| `GET /api/v1/runtime` | `runtime.status()` | `RuntimeStatus`: the installed torch's version, the loaded models (engine, device, bytes, last use, busy, remote host) and the engines' states |
+| `POST /api/v1/runtime/unload` | `runtime.unload(body.model)` | `RuntimeStatus` after unloading the model named in `UnloadRequest.model`, or every model not in use when it is `null` |
+| `GET /api/v1/runtime/doctor` | `runtime.doctor()` | `DoctorReport`: the torch build against the hardware, the recommended build and its install command, a finding per engine, extra and trainer, and the size of the old `<data>/envs` |
+
+`GET /api/v1/engines/{id}/doctor` is the same report for one engine. An engine's detail (`EngineStatus`) carries `available` and `missing` (`torch`, `mizuoto-fishspeech`…), not an environment, and `GET /api/v1/app/meta` carries `torch`, the installed version or `null`. `POST /api/v1/compute/release` (**Free GPU memory**) unloads every idle engine's models. Their response models are in `mizuoto/core/inference/models.py`.
+
+## OpenAPI with events
+
+Socket events are not HTTP routes, so FastAPI would leave them out of the schema. `MizuotoAPI` in `openapi.py` overrides `openapi()`: it walks `EventBase.get_events()` (every subclass in `mizuoto/core/events/models.py` with an `__event_name__`), adds each model to `components.schemas`, and adds a `ServerEvents` object mapping event names to models:
+
+```python
+components["ServerEvents"] = {"type": "object", "properties": events, "required": sorted(events)}
+```
+
+The events today: `settings_changed`, `job_updated`, `job_log`, `jobs_cleared`, `outputs_added`, `outputs_removed`, `runtime_changed`, `compute_changed`, `engines_changed`, `voices_changed`, `datasets_changed`, `projects_changed`, `experiments_changed`, `train_metrics`, `presets_changed`, `models_changed`. Each carries a snapshot, never a live object: the bridge serialises it later on the event loop while job threads keep writing. The bridge subscribes to the EventBus (called from threads, it crosses into the loop with `call_soon_threadsafe`) and emits each event under its name.
+
+<Callout type="info" title="REST is the source of truth">
+The socket only pushes changes. The client patches or invalidates the queries an event affects and refetches what is on screen after a reconnect; every state must be readable over REST.
+</Callout>
+
+## Types for the web UI
+
+`scripts/generate_openapi.py` builds the services and the app (`serve_ui=False`) in a temporary data folder and prints `app.openapi()` without starting a server. `python scripts/dev.py typegen` feeds it to `openapi-typescript`, which writes `mizuoto/webui/src/api/schema.d.ts`:
+
+```bash
+python scripts/dev.py openapi         # print the schema
+python scripts/dev.py typegen         # regenerate schema.d.ts (commit it)
+python scripts/dev.py typegen-check   # CI: regenerate, then git diff --exit-code
+```
+
+`--default-non-nullable false` keeps defaulted fields of request bodies optional; `Record` sets `json_schema_serialization_defaults_required`, so in responses those fields are required and the types match what the server sends.
+
+Models used both as a request body and in a response (`SpeakRequest`, returned by an output's re-run; a project's `Chapter`, `Line`, `Speaker`; `CommonParams`, `VoiceInput`, `EmotionInput`, `OutputSpec`…) appear twice in the schema, as `-Input` and `-Output`. The UI sends `S['SpeakRequest-Input']` and reads `S['SpeakRequest-Output']`; `webui/src/api/types.ts` aliases the common ones.
+
+## Adding a route
+
+<Steps>
+<Step>
+
+**The core method.** Write it in `mizuoto/core/<area>/service.py`, taking and returning `Record` models (`mizuoto/core/<area>/models.py`); raise only the classes in `core/errors.py`. If it changes something the UI shows, publish an event (a new event is a new `EventBase` subclass in `core/events/models.py`; the schema picks it up).
+
+</Step>
+<Step>
+
+**The route.** Add a function with an `operation_id` to the module in `mizuoto/api/routers/`; a new resource gets a new module, added to `ROUTERS` in `app.py`. Operations that read server paths add `dependencies=[LocalDep]`.
+
+</Step>
+<Step>
+
+**The types.** Run `python scripts/dev.py typegen` and commit `schema.d.ts`.
+
+</Step>
+<Step>
+
+**The test.** Test it in `tests/api/test_api.py` with `TestClient` against the dummy engine; state-changing requests carry `headers={"origin": "http://localhost"}` (`ORIGIN` in that file).
+
+</Step>
+</Steps>
+
+## The command line
+
+`mizuoto/cli/` uses Typer:
+
+| File | Role |
+| --- | --- |
+| `app.py` | `get_app()` registers every command (and nothing else does); `main()` handles errors and exit codes uniformly |
+| `commands/*.py` | Each command is a plain function, its parameters declared with `Annotated[..., typer.Option(...)]` |
+| `factory.py` | `typer_factory()` (groups list commands alphabetically, `AlphabeticalMixedGroup`), `DebugTyperCommand` (adds `--debug` to every command and group and turns domain errors into exit codes), `report_error()`; the private `typer._click` imports are confined here |
+| `output.py` | `open_services()` (services built once per command, no background threads), `print_json()`, `print_table()` |
+| `progress.py` | `job_progress(services)`: subscribes to the same EventBus and draws job progress as a Rich bar on stderr; `finish(job)` |
+
+The usual shape of a command (`commands/projects.py`):
+
+```python
+def project_list(json_output: Annotated[bool, typer.Option("--json", help="Print JSON")] = False) -> None:
+    """List the projects."""
+    with open_services() as services:
+        projects = services.projects.list_projects()
+        if json_output:
+            print_json(projects)
+            return
+        print_table(None, ["Slug", "Name", ...], rows)
+```
+
+`print_json()` uses `model_dump(mode="json")`, as the API serialises. The command line starts no scheduler: commands that make jobs call the core method with `wait=True` (`jobs.run_now` inside: in the foreground, on the calling thread, cancelled by Ctrl+C), wrapped in `job_progress`.
+
+Errors: `DebugTyperCommand.invoke` catches `MizuotoError`; `report_error()` prints the message, and the fixing command when `detail["hint"]` has one, then exits with the error's `exit_code`. Heavy modules (core models, uvicorn) are imported inside functions: `tests/test_architecture.py` checks that importing `mizuoto.cli.app` loads neither torch nor fastapi.
+
+### Adding a command
+
+<Steps>
+<Step>
+
+Write a fully annotated plain function in `mizuoto/cli/commands/<group>.py`, with `--json`, calling the same core method as the API route.
+
+</Step>
+<Step>
+
+Register it in `get_app()` in `mizuoto/cli/app.py`, with its name and help there:
+
+```python
+project_cli = typer_factory(help="Long-form scripts read by a cast of voices")
+project_cli.command(help="List projects", name="list")(project_list)
+...
+app.add_typer(project_cli, name="project")
+```
+
+</Step>
+<Step>
+
+Add it to `EXPECTED_TREE` in `tests/cli/test_cli.py`. `test_command_tree` compares the whole tree, so a missing or extra command fails:
+
+```python
+"project": {k: None for k in ("cast", "delete", "export", "import", "list", "new", "render", "script", "set", "show")},
+```
+
+</Step>
+</Steps>
+
+One name cannot be both a command and a group, so the environment variable listing is `mizuoto env vars`, not `mizuoto env`.

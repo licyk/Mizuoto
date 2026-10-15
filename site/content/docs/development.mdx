@@ -1,0 +1,61 @@
+---
+title: "开发文档"
+description: "面向贡献者的入口：Mizuoto 由哪几部分组成、以什么为准，以及各开发页面分别讲什么。"
+icon: Code
+---
+
+这一部分写给想修改 Mizuoto 的人：修 bug、接入新引擎、加一个训练方法、加一个页面或一条 API。它描述代码现在**是什么样**、遵守哪些规则以及为什么，而不是使用方法（使用方法见[使用教程](/docs/guide)和[命令行](/docs/cli)）。
+
+## 以什么为准
+
+- **代码**及其测试：其他任何内容与它们冲突时，以它们为准。
+- **本站的开发文档**：实现后的设计、规则及其原因，每个领域一页；[引擎参考](/docs/engines)每个引擎一页（复现了上游的哪些行为、
+  有哪些偏差、训练器以及对照结果）。改动某个领域前先读对应页面；设计有变化时同步修改它，中英文都要改。
+- **`AGENTS.md`**（仓库根目录，`CLAUDE.md` 指向它）：给贡献者和编码代理的简短工作记录：代码地图、不能破坏的规则、工作流程，
+  以及哪一页讲什么。
+
+## 一个环境，一个进程
+
+Mizuoto 0.2 是装进同一个 Python 环境的一个发行包。每个引擎（Qwen3-TTS、F5-TTS、OmniVoice、CosyVoice、GPT-SoVITS、VoxCPM、Fish Speech、IndexTTS，以及内部使用的 Whisper 语音识别）都在 Mizuoto 里基于它自己的运行时实现，**在服务器自己的进程里**运行。没有上游代码，没有 transformers，没有引擎专用环境，也没有 worker 进程。
+
+| 发行包 | 位置 | 内容 |
+| --- | --- | --- |
+| `mizuoto` | `mizuoto/` | 核心、API、命令行、Web UI（构建产物 `dist/` 随 wheel 发布）、运行时、通用构件，以及所有采用宽松许可证的引擎 |
+| `mizuoto-fishspeech` | `packages/native/fishspeech/` | Fish Speech，采用 Fish Audio Research License |
+| `mizuoto-indextts` | `packages/native/indextts/` | IndexTTS，采用 bilibili Model Use License |
+
+两个需要接受许可的引擎单独发布，只是因为它们的许可证。它们装进同一个环境，通过 Python 入口点组 `mizuoto.engines` 自行注册。
+
+决定代码放在哪里的边界如今在包内部：**`mizuoto/core` 从不在模块顶层导入 torch**，`mizuoto/core/inference` 是它通往模型代码（`mizuoto.runtime`、`mizuoto.nn`、`mizuoto.engines`、`mizuoto.training`）的唯一入口，并且总在函数内部导入。所以 `mizuoto version`、`mizuoto --help` 和核心自己的测试都不加载 torch，一条从不加载模型的命令也从不导入运行时。[整体架构](/docs/development-architecture)就从这条规则讲起。
+
+## 页面
+
+<Cards>
+  <Card title="开发环境" href="/docs/development-setup" description="装好 CPU 版 torch 的 .venv、需要接受许可的引擎、bun，以及 scripts/dev.py 的全部任务。" />
+  <Card title="开发约定" href="/docs/development-conventions" description="代码风格、分层规则、原生代码的规则、一致性要求、测试、文档与提交。" />
+  <Card title="整体架构" href="/docs/development-architecture" description="目录布局与分层规则、Services 的组装、一个合成请求的全过程、设置、事件、任务、错误。" />
+  <Card title="设计参考与决策" href="/docs/development-design" description="设计的来源（ComfyUI、InvokeAI、SD Model Hub、Material Design 3）以及做出的决定和理由。" />
+  <Card title="运行时" href="/docs/development-runtime" description="设备、模型管理器与模型句柄、请求上下文、全局状态规则、LocalEngine、取消、流式和远程引擎。" />
+  <Card title="显存与内存" href="/docs/development-memory" description="阶段、预算、部分加载与权重流式加载、结果不变的显存不足重试、估算与校准。" />
+  <Card title="加速" href="/docs/development-acceleration" description="注意力后端、CUDA 图、无同步采样、torch.compile 与 CPU 设置，以及哪些保持结果一致。" />
+  <Card title="性能记录" href="/docs/development-performance" description="怎样在不改变结果的前提下测量速度，以及测得的记录。" />
+  <Card title="接入引擎" href="/docs/development-engine" description="清单与模型文件清单、Engine 与 LoadedEngine 契约、注册、测试与对照，以 OmniVoice 为例。" />
+  <Card title="训练器" href="/docs/development-training" description="Trainer 与 StageContext、作为子进程运行的阶段、指纹与过期阶段、导出。" />
+  <Card title="API 与命令行" href="/docs/development-api" description="FastAPI 应用、安全中间件、错误到 HTTP、带事件的 OpenAPI、类型生成、加路由和加命令。" />
+  <Card title="Web UI" href="/docs/development-webui" description="Vue 3 + Material 3：ui/ 包装层与规则测试、查询、socket 事件、可用性检查、i18n，以及加一个页面。" />
+  <Card title="测试" href="/docs/development-testing" description="测试布局、dummy 引擎、小型随机模型、契约套件、对照工具、前端测试和 CI。" />
+  <Card title="发布" href="/docs/development-release" description="版本同步、wheel、冒烟测试、CI 与发布工作流、Docker、模型镜像和文档站。" />
+  <Card title="引擎参考" href="/docs/engines" description="每个引擎一页：复现了上游的哪些行为、偏差、显存与速度、训练和对照结果。" />
+</Cards>
+
+## 几条贯穿全局的约定
+
+简要列出（完整内容见[开发约定](/docs/development-conventions)）：
+
+
+- Python ≥ 3.10；ruff 与 ty 不锁版本，`lint.select` 逐条写出；行宽 180；每个函数都有类型标注（测试和脚本除外）。
+- 跨越 API 边界的模型都继承 `mizuoto/core/record.py` 的 `Record`（pydantic v2，`json_schema_serialization_defaults_required`）。
+- 重依赖在函数内导入；有类注解里用到 `list[...]` 的类不定义名为 `list` 的方法。
+- 原生代码不改动任何进程级状态：随机数来自请求自己的生成器（见[运行时](/docs/development-runtime#全局状态)）。
+- 新增一个 CLI 命令要同时登记到 `tests/cli/test_cli.py` 的 `EXPECTED_TREE`。
+- 只有用户要求时才提交和开 PR。

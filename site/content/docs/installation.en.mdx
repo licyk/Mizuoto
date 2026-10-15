@@ -1,0 +1,172 @@
+---
+title: "Installation"
+description: "Requirements, torch for your hardware, installing Mizuoto from release wheels, from source or with Docker, where the data lives, and updating and uninstalling."
+icon: Download
+---
+
+Mizuoto is one Python distribution: the server, the web UI, the command line and every engine run in one Python environment. Install **torch** first, in the build for your hardware, then **Mizuoto**. The two licence-gated engines (Fish Speech, IndexTTS) are distributions of their own, installed beside Mizuoto when you want them.
+
+## Requirements
+
+| Item | Requirement |
+| --- | --- |
+| Operating system | Linux, Windows, macOS |
+| Python | 3.10–3.13 |
+| torch | 2.8 or newer, the build for your hardware (CUDA, ROCm, XPU, Apple silicon or CPU) |
+| Disk | A few GB for torch, plus the models |
+| GPU | An NVIDIA GPU is recommended; AMD (ROCm, Linux), Intel (XPU) and Apple silicon (MPS) work too (not yet tested on real hardware), and every engine also runs on a CPU, slowly |
+| Network | Installing reaches PyPI and the PyTorch download site; downloading models reaches Hugging Face, hf-mirror or ModelScope (chosen in **Settings › Downloads**) |
+
+No system programs are needed: audio decoding, resampling and the text front ends ship in Python wheels.
+
+## Ways to install
+
+<Tabs items={["Release wheels", "Source", "Docker"]}>
+<Tab value="Release wheels">
+
+A release build is a set of wheels in a `dist/` folder: `mizuoto`, and `mizuoto_fishspeech` and `mizuoto_indextts` for the licence-gated engines. Use a virtual environment of your choice. Install torch first, from the index that matches your machine, so that installing Mizuoto keeps that build:
+
+```bash
+pip install "torch>=2.8" --index-url https://download.pytorch.org/whl/cu128    # NVIDIA, Linux or Windows (cu126, cu128, cu129, cu130, cu132: what the driver supports)
+pip install "torch>=2.8" --index-url https://download.pytorch.org/whl/rocm7.2  # AMD, Linux (rocm6.4, rocm7.1 for older ROCm)
+pip install "torch>=2.8" --index-url https://download.pytorch.org/whl/xpu      # Intel GPUs, Linux or Windows
+pip install "torch>=2.8"                                                       # macOS on Apple silicon (MPS)
+pip install "torch>=2.8" --index-url https://download.pytorch.org/whl/cpu      # CPU only
+```
+
+Then Mizuoto, in one install; add the gated engines' wheels when you want them:
+
+```bash
+pip install dist/mizuoto-*.whl                  # + dist/mizuoto_fishspeech-*.whl dist/mizuoto_indextts-*.whl
+mizuoto doctor
+mizuoto webui                                   # http://127.0.0.1:7869
+```
+
+Mizuoto is not published on PyPI: the wheels come from a release's artifacts, or are built from a checkout with `python scripts/dev.py wheels` (the licence-gated ones too).
+
+</Tab>
+<Tab value="Source">
+
+You need uv, and [bun](https://bun.sh) to build the web UI.
+
+```bash
+git clone <repository> Mizuoto && cd Mizuoto
+uv venv .venv --python 3.11
+uv pip install --python .venv/bin/python "torch>=2.8" --index-url https://download.pytorch.org/whl/cu128   # or the build for your hardware
+uv pip install --python .venv/bin/python -e .   # -e packages/native/fishspeech -e packages/native/indextts for the gated engines
+python scripts/dev.py web-install && python scripts/dev.py web    # build the UI once
+.venv/bin/mizuoto webui
+```
+
+The full development setup is in [Development setup](/docs/development-setup).
+
+</Tab>
+<Tab value="Docker">
+
+One image holds the server, the UI and every engine, with GPT-SoVITS's Japanese and Korean front ends; models go to the `/data` volume.
+
+```bash
+docker build -t mizuoto .                       # torch's CUDA 12.8 build (NVIDIA driver 570 or newer)
+docker run --gpus all -p 7869:7869 -v mizuoto-data:/data \
+  -e MIZUOTO_SERVER__ACCESS_TOKEN=change-me mizuoto
+```
+
+| Build argument | Default | What it does |
+| --- | --- | --- |
+| `TORCH_INDEX` | `https://download.pytorch.org/whl/cu128` | The torch build: another CUDA (`cu126`…`cu132`), ROCm (`rocm6.4`…`rocm7.2`) or `cpu` index |
+| `TORCH` | `torch>=2.8` | The torch requirement, such as `torch==2.8.0` |
+| `GATED` | `0` | `1` adds Fish Speech and IndexTTS; their licences must still be accepted in the UI or on the command line |
+| `PYTHON` | `3.11` | The image's Python |
+
+- In the container the server listens on `0.0.0.0`, so set an access token with `MIZUOTO_SERVER__ACCESS_TOKEN`. The browser shows an **Access token** dialog when the page opens; enter it there.
+- The image has a health check (`/api/v1/app/health`).
+
+More in [Docker](/docs/advanced-docker).
+
+</Tab>
+</Tabs>
+
+## Optional extras
+
+Some languages need packages that are not installed by default. Without them, text in those languages fails with the install command in the error's hint; `mizuoto doctor` lists the missing ones.
+
+| Extra | For | Note |
+| --- | --- | --- |
+| `pip install 'mizuoto[gptsovits-ja]'` | GPT-SoVITS's Japanese | pyopenjtalk 0.4.1 is published as source only: building it needs CMake and a C++ compiler |
+| `pip install 'mizuoto[gptsovits-ko]'` | GPT-SoVITS's Korean | python-mecab-ko and jamo |
+| `pip install 'mizuoto-indextts[ja]'` | IndexTTS-2.5's Japanese | fugashi and unidic-lite |
+
+## Checking the installation
+
+```bash
+mizuoto doctor               # torch against the hardware, each engine, missing extras
+mizuoto doctor gptsovits     # one engine
+```
+
+`mizuoto doctor` lists the GPUs it finds (with `nvidia-smi`, `rocm-smi` or `amd-smi`, or by asking torch; see [Performance](/docs/advanced-performance)), reports the torch build against them (with the exact install command when they do not match), whether each engine is available or what it still needs (torch, or a licence-gated engine's distribution), and the optional extras that are missing. In the web UI, **Settings › Compute** shows the torch check, and **Check this machine** on each engine card under **Models › Engines** shows that engine's.
+
+## Starting
+
+```bash
+mizuoto webui
+```
+
+Useful options:
+
+| Option | What it does |
+| --- | --- |
+| `--port <port>` | The first port to try, from the settings by default (7869); `0` picks any free port |
+| `--strict-port` | Fail when the port is taken instead of trying the next one |
+| `--open` / `--no-open` | Open the web UI in a browser or not |
+| `--host <address>` | The address to listen on, `127.0.0.1` by default: this machine only |
+| `--data-dir <folder>` | The data folder to use this time |
+| `--api-prefix <path>` | Serve the API, the socket and the UI under a path, such as `/voice` |
+| `--ssl-certfile`, `--ssl-keyfile` | Serve HTTPS (browsers on other machines allow recording only over HTTPS) |
+
+<Callout type="warn" title="Letting other machines connect">
+
+With `--host` set to `0.0.0.0` or another non-loopback address, other devices on the network can connect and use everything. Mizuoto only prints a warning and does not insist on a token, so set an access token (**Settings › General › Access token**, or `mizuoto config set server.access_token <token>`). See [Remote access and security](/docs/advanced-remote).
+
+</Callout>
+
+## Where the data lives
+
+Settings, the database, the voice library, results, models and training experiments all live in one **data folder**:
+
+| System | Default location |
+| --- | --- |
+| Windows | `%APPDATA%\mizuoto` |
+| macOS | `~/Library/Application Support/mizuoto` |
+| Linux | `$XDG_DATA_HOME/mizuoto`; `~/.local/share/mizuoto` when it is not set |
+
+Set the environment variable `MIZUOTO_DATA_DIR` (or `mizuoto webui --data-dir`) to use another folder; `MIZUOTO_CONFIG_DIR` puts `settings.toml` in a folder of its own. **Settings › About** shows the data folder in use.
+
+| Contents | What it is |
+| --- | --- |
+| `settings.toml` | The settings file (`mizuoto config path` prints its path) |
+| `mizuoto.db` | The database: jobs, results, cached transcripts and more |
+| `models/` | Downloaded models; `models/_assets/` holds files several models of an engine share |
+| `voices/` | The voice library, one folder per voice |
+| `outputs/` | Synthesized results |
+| `projects/`, `datasets/`, `experiments/` | Projects, training datasets and training experiments |
+| `cache/` | Caches: reference clips, prepared voices and more |
+| `jobs/`, `logs/` | Job logs and server logs |
+| `trash/` | Deleted voices, projects, datasets and experiments |
+
+The models, voices, results and cache folders can be moved under **Settings › Storage** (for example `models/` to a larger disk).
+
+## Updating
+
+1. Install the new version the same way, for example `pip install --upgrade dist/mizuoto-*.whl` (with the gated engines' wheels if you use them: their versions move with Mizuoto's); from source, `git pull`, run the install command again and rebuild the UI. With Docker, rebuild the image; the `/data` volume stays.
+2. Restart the server. Prepared voices are rebuilt once, automatically, the next time they are used.
+
+<Callout title="Remote hosts">
+
+A remote host needs the same Mizuoto version as this machine: update both.
+
+</Callout>
+
+## Uninstalling
+
+1. Uninstall Mizuoto: `pip uninstall mizuoto mizuoto-fishspeech mizuoto-indextts` (torch is yours to keep or remove), or delete the virtual environment.
+2. If you need none of the data, delete the data folder. **Careful**: it holds your voice library, results, projects and training data. With Docker: `docker volume rm mizuoto-data`.

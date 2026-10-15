@@ -1,0 +1,201 @@
+---
+title: "Testing"
+description: "How Mizuoto's tests are organised: the core runs the whole stack in seconds on the dummy engine, every engine and trainer runs on a tiny random model in CI (also streamed on simulated devices), real models have a contract suite, a parity harness compares the native engines with their references sample for sample, behavioural consistency is judged in tiers, the web UI uses vitest, and CI covers three platforms and four Pythons."
+icon: FlaskConical
+---
+
+Mizuoto's tests come in three layers:
+
+- **The core's tests** need no GPU and no model: the dummy engine carries planning, jobs, the runtime service, streaming, cancellation and errors end to end, in the test's own process.
+- **The engines' tests** run every engine and trainer on a tiny model with random weights, on the CPU, including runs partly loaded and streamed on a simulated device, also in CI.
+- **Real models**: the contract suite drives installed models through the whole stack, and the parity harness compares the native engines with their references sample for sample. Developers run these by hand when they change an engine.
+
+`python scripts/dev.py check` runs what CI runs: `lint`, `typecheck-py`, `test-py`, `test-web`, `typegen-check`.
+
+## Layout
+
+```
+tests/
+  conftest.py            the make_services, services and wav_file fixtures
+  test_architecture.py   the layer rules, global-state rules, the attention entry point, light imports, one distribution
+  core/                  one file per service: jobs, engines, models, tts, voices, presets, training, projects,
+                         remote, settings, runtime_service, compute, protocol (frames, tasks, job-worker events),
+                         audio/text/process, db/errors/events, plus CPU tuning and the compute.fast switches
+  api/                   test_api.py (the whole API over TestClient), test_embed.py (MizuotoServer)
+  cli/                   test_cli.py (the command tree EXPECTED_TREE and each command)
+  runtime/               the runtime's parts: context, ops, loading (test_runtime.py), devices (test_device.py),
+                         memory units, partial loading and the manager (test_memory.py), attention dispatch and
+                         backends (test_accel*.py), mizuoto.nn bit-exact with its references (test_nn_exact.py),
+                         DSP fixtures (test_dsp.py), compute.compile (test_compile.py), generator jumps (test_rng_jump.py)
+  text/                  mizuoto.text's tokenizers on a tiny vocabulary
+  engines_native/        each engine and trainer on a tiny random model (test_<id>_tiny.py, test_<id>_train_tiny.py);
+                         streaming.py (the streaming checks on a simulated device), training_memory.py (checks of the
+                         training memory tools)
+  engines/               test_contract.py: the contract suite for real models (deselected by default)
+  fixtures/dsp/          the DSP fixtures made by scripts/parity/dsp_fixtures.py
+```
+
+`pyproject.toml` defines four markers, all deselected by default (`addopts = "-m 'not live and not engine and not weights and not e2e'"`):
+
+| Marker | Meaning |
+| --- | --- |
+| `live` | Needs something outside this repository |
+| `engine` | The engine contract suite against installed models (`dev.py test-engines`) |
+| `weights` | Needs downloaded model weights |
+| `e2e` | Browser end-to-end tests |
+
+So `python -m pytest` (or `python scripts/dev.py test-py`) runs the core's tests and the tiny-model tests. A test that needs torch or an optional package skips without it (`pytest.importorskip`).
+
+## The dummy engine
+
+`mizuoto/engines/dummy/` is a complete engine with no model: an engine (`engine.py`) and a trainer (`train.py`), with the manifest `mizuoto/core/engines/manifests/dummy.toml`. It imports numpy only, so it needs no torch, and it runs in the test's process as every engine does.
+
+- It turns each character into a short tone whose pitch comes from the voice (a preset, a description, the references' SHA-256 or a hash of the weights), so different voices sound different, and draws from `ctx.rng`, so the same seed gives the same audio.
+- It declares **every** capability: preset speakers, cloning, design, style and emotion, streamed output and streamed text input, voice conversion, speech editing, batches, weights, a `transcribe` op (so the ASR path is testable too), training.
+- Engine options make it misbehave on purpose: `delay_ms`, `chunk_ms` and `load_delay_ms` slow it down; `fail = error | oom | crash | exception` and `fail_at_segment` make it fail, run out of memory, report a crash (`worker_failed`) or raise an unhandled exception where asked.
+
+That is how cancellation at the next check, OOM becoming `compute_unavailable`, timeouts, unloading, the reaper and streamed chunks are all checked in seconds on a CI machine without a GPU. The dummy engine is also how users try Mizuoto out, and `smoke_wheels.py` uses it.
+
+## Fixtures
+
+`tests/conftest.py`:
+
+```python
+@pytest.fixture
+def make_services(tmp_path: Path):
+    from mizuoto.core.context import build_services
+    built = []
+
+    def make(start_background: bool = False, **kwargs):
+        env = kwargs.pop("env", {})
+        s = build_services(data_dir=tmp_path / "data", environ=dict(env), start_background=start_background, **kwargs)
+        built.append(s)
+        return s
+
+    yield make
+    for s in built:
+        s.close()
+```
+
+- One temporary data folder per test and an empty environment (`environ={}`: the developer's own `MIZUOTO_*` variables never leak in).
+- `services` is `make_services()` for short; `wav_file` is a 2 s, 22.05 kHz stereo WAV.
+- Tests that need the scheduler and the reaper pass `start_background=True`. The API tests do: `create_app(make_services(start_background=True), bound_host="127.0.0.1", serve_ui=False)`, then `TestClient`.
+- Download tests replace `services.models.http_transport` with an `httpx.MockTransport`.
+- Remote tests (`tests/core/test_remote.py`) start an `AgentServer` on the same machine, and the host drives its dummy engine over TCP.
+
+## Tiny random models
+
+`tests/engines_native/` builds, for each engine, a model of the engine's own architecture with a few small layers and random weights, writes it to a temporary folder as the engine expects to find it (configs, a byte-level vocabulary, safetensors), and drives the real code: `Engine.load` with a `Runtime(DeviceService(), ModelManager(...))`, a `RequestContext`, voice prompts, decoding, batches, seeds that repeat, cancellation. `test_<id>_train_tiny.py` runs every stage of the engine's trainer on a few clips. They need no download, so CI runs them on every push with CPU torch; the gated engines' tests skip unless their packages are installed.
+
+A few rules across engines are held here too:
+
+- **Attention.** Every `mask_info` an attention site passes is checked against its dense mask. `MIZUOTO_TEST_ACCEL=count python -m pytest tests/engines_native` also routes every attention call through a policy that counts its site and computes the site's own reference; it fails at the end when a site the engines have was never reached that way (a direct SDPA call that bypasses `compute.attention`).
+- **Training memory tools.** `check_checkpointing` in `training_memory.py` runs a trainer's stages twice in fresh work folders, once as given and once with every block checkpointed, and compares every metric and every weight file written: they must be identical. The other tools that keep results (such as the optimiser state in RAM) are checked the same way.
+
+### Streaming on a simulated device
+
+Memory management changes where weights live, not what is computed, so a partly loaded or streamed model must give exactly what a whole one gives. `tests/engines_native/streaming.py` lets the CPU play a device of a given size (`DeviceService(simulate=…, strict=True)`):
+
+- `check_streamed` runs a tiny engine at three device sizes (every unit streamed, half, everything resident) and compares with the plain CPU sample for sample.
+- In strict mode, a component off the device rests as meta tensors and a streamed unit's weights exist only while the unit runs. So an engine that uses a component it did not place for the phase (`ctx.use`), or reads a unit's weights outside its `forward`, fails here.
+- `check_oom_retry` makes one layer inside a phase run out of memory the first time it is called: the phase runs again with more weights streamed, and the result must be exactly the undisturbed one.
+
+Memory management itself is in [Memory management](/docs/development-memory).
+
+## Real engines: the contract suite
+
+`tests/engines/test_contract.py` goes through the whole stack (plan → job → runtime → engine) for every installed catalogue model of every available engine:
+
+```bash
+python scripts/dev.py test-engines                 # every installed model
+python scripts/dev.py test-engines qwen3tts f5tts -- -x -k cancel
+MIZUOTO_TEST_DEVICE=cpu python scripts/dev.py test-engines cosyvoice
+```
+
+`test-engines` sets `MIZUOTO_CONTRACT=1` and `MIZUOTO_TEST_ENGINES` (the engines named) and runs `tests/engines` with `-m engine -v`. The suite uses the models of `MIZUOTO_TEST_DATA_DIR` (default: the normal data folder), but runs in a temporary data folder and writes nothing to the real one, on `MIZUOTO_TEST_DEVICE` (default `auto`).
+
+| Test | What it checks |
+| --- | --- |
+| `test_load_and_describe` | `describe` after loading matches the manifest: sample rate, preset speakers |
+| `test_every_voice_mode_speaks_the_text` | Every declared voice mode, in English and Chinese, is audible (RMS &gt; 0.01), at the right rate, about as long as the text needs; with ASR installed, word error rate &lt; 0.35 |
+| `test_seed_repeats_and_segments` | The same seed repeats sample for sample; two sentences that do not fit one segment become two segments (or the engine handles long text itself) |
+| `test_cancel_stops_the_engine` | Cancelled mid-generation, the job is `cancelled` within 30 s, the model is still loaded, and the next request speaks normally |
+| `test_no_residue` | Digests of the process-wide state (working folder, environment, `sys.path`, RNGs, torch flags, log handlers, warning filters) are the same before and after many requests, taken with the `mizuoto.snapshot` op |
+
+The reference to clone comes from `MIZUOTO_TEST_REFERENCE` (plus `MIZUOTO_TEST_REFERENCE_TEXT`), else an installed preset or design model speaks one. Licence-gated engines take part only with `MIZUOTO_TEST_ACCEPT_LICENCES=1` (and their packages installed), and their licences are accepted in the temporary folder only.
+
+On the CPU, every catalogue model of every engine passes the contract suite. The whole suite takes hours (the larger the model, the slower), so when changing one engine, run that engine.
+
+## Parity with the references
+
+`scripts/parity/` compares the native engines with their references sample for sample (its README describes it in full). The reference is Mizuoto 0.1's engine workers (git tag `v1-engine-workers`, each engine running upstream code in its original environment); for VoxCPM, which 0.1 never had, it is upstream's own package, put into the same stack by `stack.py --impl upstream`. The code is in the repository; the data lives in a workspace outside it, `MIZUOTO_PARITY_DIR` (default `~/code_workspace/experiment/kodama-refactor`), which holds:
+
+- `reference/`: a git worktree at the tag `v1-engine-workers`, the 0.1 code the native engines are compared with;
+- `reference-host/` and `native-env/`: the Python environments that drive the reference and the native stack (the native side uses the reference environments' torch 2.8.0, so differences come from code and not from kernels); CosyVoice also has a reference environment and data folder on torch 2.8;
+- `corpus/` (reference clips and their transcripts), `fixtures/` (the audio and behaviour each run writes), `reports/` (the comparison reports).
+
+```bash
+W=~/code_workspace/experiment/kodama-refactor
+CUDA_VISIBLE_DEVICES= $W/reference-host/bin/python scripts/parity/stack.py run scripts/parity/cases/qwen3tts.jsonl --impl reference
+CUDA_VISIBLE_DEVICES= $W/native-env/bin/python scripts/parity/stack.py run scripts/parity/cases/qwen3tts.jsonl --impl native
+$W/native-env/bin/python scripts/parity/compare.py qwen3tts --a reference --b native --report $W/reports/qwen3tts-T3.md
+```
+
+| Script | What it does |
+| --- | --- |
+| `stack.py run <cases.jsonl> --impl reference\|native\|upstream` | Runs each case (a `SpeakRequest`, or a `convert` / `edit` request) through the whole stack of one implementation and keeps its audio and behaviour under `fixtures/<engine>/<case>/<name>`. `--name` sets the run's file stem (e.g. `reference-repeat`, `reference-t28`), `--only` picks cases, `--setting k=v` applies a setting to the whole run, `--repeat` runs each case again in the same stack, `--device` (default `cpu`) |
+| `compare.py <engine…> [--a reference] [--b native]` | Compares two runs sample for sample (`--tolerance`, `--report` writes a Markdown report); prints the current table from the fixtures without running a model |
+| `train.py run <engine> --impl reference\|native --model <id> --method <m> --hp k=v --name <n>` | Trains on the workspace's dataset with one implementation and keeps the experiment, metrics, previews and exports |
+| `train.py compare <engine> <name>` | Compares the two implementations' training runs; the exported voice or model can be handed to the other implementation to load |
+| `perf.py`, `train_perf.py` | Time the same cases and fine-tunes phase by phase and check the audio, metrics and weights against the previous round (see [Performance work](/docs/development-performance)) |
+| `memory.py` | Peak device memory and RAM per case, load and offload times (see [Memory management](/docs/development-memory)) |
+| `voxcpm_modules.py`, `voxcpm_upstream.py` | VoxCPM's component-level comparison, and the adapter that puts upstream's package into the stack as an engine |
+| `check_rng.py --device cuda:0` | A fresh `torch.Generator` seeded with *s* against the default stream after `torch.manual_seed(s)` |
+| `check_tokenizer.py <model>` | `mizuoto.text`'s BPE against transformers' tokenizer on the corpus (run in an environment that has transformers) |
+| `dsp_fixtures.py` | Writes `tests/fixtures/dsp/*.npz` from the real torchaudio, librosa, Whisper and soxr |
+
+**Self-consistency first.** The reference is compared with a repeat of itself (`--name reference-repeat`) before anything is compared with it: a case that does not repeat cannot judge the native one. `cases/<engine>.jsonl` holds one case per line; the README explains its fields.
+
+The result: on the CPU in fp32, every engine is identical to its reference (VoxCPM in bf16 too), except CosyVoice when each side makes its own voice prompt: CAM++'s speaker embedding differs from onnxruntime's by about 1e-6, and HiFT's sine source accumulates and amplifies that along the utterance; given the same voice prompt, CosyVoice is identical sample for sample too. Every trainer gives upstream's losses, learning rates and weights byte for byte on the CPU when both are seeded alike.
+
+## Tiers and tolerances of behavioural consistency
+
+"The same" is judged in tiers. The lower tiers are checked bit for bit; the upper ones judge the whole stack:
+
+| Tier | What | Where | Pass |
+| --- | --- | --- | --- |
+| **T0 Op** | DSP, samplers, tokenizers, normalisers, g2p | CPU | Identical (`torch.equal`, the same ids, the same strings) |
+| **T1 Module** | Each module with real weights on captured inputs | CPU fp32 | Max abs error ≤ 1e-5 × max(1, ‖ref‖∞); cosine ≥ 0.99999 |
+| | | GPU bf16/fp16 | Cosine ≥ 0.999 |
+| **T2 Stage** | Teacher-forced logits; discrete outputs from captured inputs (speech-tokenizer codes, VQ codes, ODE trajectories with injected noise) | CPU fp32 | Argmax agreement 100 %; discrete agreement ≥ 99.9 % with every flip inspected and explained (e.g. ties at FSQ rounding boundaries); trajectories within T1 |
+| **T3 End to end, seeded** | A full request through Mizuoto's stack: native against reference, same seed, same torch | CPU fp32 | **Identical tokens; audio identical or max abs error ≤ 1e-4**; exceptions listed per engine with a reason |
+| **T4 Statistical** | Corpus runs in each engine's production dtype and device, native against reference; seeds not aligned (GPU kernels differ) | GPU (bf16/fp16), CPU | Over ≥ 20 texts × 3 voices × 3 seeds per voice per voice mode and model: mean CER/WER (Whisper large-v3-turbo) ≤ reference + 0.5 pp, and no case worse than the reference's worst + 5 pp; speaker similarity (CAM++ cosine to the reference clip) mean ≥ reference − 0.01; duration ratio within ±5 %; UTMOS mean ≥ reference − 0.05; loudness and F0 median within the reference's spread |
+
+- **Why T3 is judged on the CPU in fp32 only.** Any logit difference flips a multinomial draw (or a beam) and everything after it diverges. On GPUs in reduced precision even upstream does not match itself bit for bit (batched against single greedy decoding, for one), so GPU consistency is judged by T1's per-module error plus T4's statistics.
+- **Behaviour beyond the audio** is part of the comparison too, checked through the contract suite on both implementations: applied parameters and warnings, the voice-mode resolution (`fit`), streaming granularity and chunk counts, cancel behaviour, error codes for invalid inputs (a reference too long, an unsupported language, a missing transcript), output sample rates, segment joins.
+- Acceleration and speed work keep to the same tiers: an acceleration that changes bits (compilation, for one) stays at least within the engine's T1/T3 tolerance, with the measured error recorded; speed work on the default path must not change a bit.
+
+## Web UI tests
+
+`mizuoto/webui/src/**/*.test.ts` run with vitest; `python scripts/dev.py test-web` runs `bun run test` and then `bun run typecheck` (vue-tsc). Besides unit tests of components and stores, a few rule tests guard the whole UI: `imports.test.ts`, `tokens.test.ts`, `layout.test.ts`, `ui/layers.test.ts` and `i18n/i18n.test.ts` (the same keys in both languages); see [Web UI](/docs/development-webui).
+
+`python scripts/dev.py typegen-check` regenerates `schema.d.ts` and compares it with the committed one; it fails when the API changed and the types were not regenerated.
+
+The docs site (`site/`) has its own vitest tests; `src/lib/i18n-content.test.ts` requires a `<slug>.en.mdx` for every Chinese `<slug>.mdx` and the same page order in both sidebars.
+
+## CI
+
+`.github/workflows/ci.yml` runs four jobs on every push and pull request, with torch's CPU build (`https://download.pytorch.org/whl/cpu`):
+
+| Job | Environment | Steps |
+| --- | --- | --- |
+| `host` | Ubuntu, Windows, macOS × Python 3.10, 3.11, 3.12, 3.13 | `pip install torch` from the CPU index, then `-e . -e packages/native/fishspeech -e packages/native/indextts pytest pytest-cov ruff ty httpx tomli`; `dev.py lint` and `dev.py typecheck-py` on Ubuntu with 3.11; `python -m pytest -q` everywhere (the tiny-model tests included) |
+| `torch` | Ubuntu, Python 3.12, torch 2.8.0 and the latest release | The tests against the oldest torch Mizuoto supports and the newest, to catch torch's API drift |
+| `web` | Ubuntu, Python 3.11, bun | `dev.py web-install`, `dev.py test-web`, `dev.py typegen-check` |
+| `site` | Ubuntu, bun | `bun install --frozen-lockfile`, `bun run check`, `bun run test`, `bun run build` in `site/` |
+
+`python scripts/dev.py check` runs the same locally (on your platform and Python only). The contract suite and the parity harness need models (and, for parity, the reference environments) weighing tens of gigabytes, so they stay out of CI; the release workflow has its own wheel smoke test (see [Release](/docs/development-release)).
+
+<Callout type="info" title="CI covers the CPU">
+CI has only a CPU build of torch. The GPU paths (CUDA graphs, the optional attention backends, weight streaming's asynchronous prefetch) are tested there for their logic; how they behave on a GPU has to be checked on a machine with one, with the contract suite and the parity harness.
+</Callout>

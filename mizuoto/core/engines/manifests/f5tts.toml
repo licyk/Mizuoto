@@ -1,0 +1,226 @@
+# F5-TTS.
+id = "f5tts"
+title = "F5-TTS"
+description = "A flow-matching TTS that clones a voice from a short clip and its transcript (Chinese and English), with exact control of duration and speech editing."
+devices = ["cuda", "rocm", "xpu", "mps", "cpu"]
+languages = ["zh", "en"]
+
+[upstream]
+url = "https://github.com/SWivid/F5-TTS"
+commit = "d852486451313ab31924303f6120e1aa19a208ce"
+
+[licence]
+id = "cc-by-nc-4.0"
+name = "MIT (code); CC-BY-NC-4.0 (pretrained weights, trained on Emilia)"
+url = "https://github.com/SWivid/F5-TTS/blob/main/LICENSE"
+commercial = false
+notice = "The pretrained F5-TTS weights are CC-BY-NC-4.0: not for commercial use."
+
+# Upstream splits long text by the reference's speaking rate and cross-fades the pieces; Mizuoto
+# lets it (long_text), streaming each piece as it is ready.
+
+[variants.v1_base]
+title = "F5-TTS v1 Base"
+sample_rate = 24000
+capabilities = ["clone", "speed", "duration", "long_text", "seed", "stream_audio", "speech_edit"]
+stream_granularity = "segment"
+
+[variants.v1_base.reference]
+min_seconds = 1.0
+max_seconds = 12.0
+min_sample_rate = 16000
+
+[variants.base]
+title = "F5-TTS Base"
+sample_rate = 24000
+capabilities = ["clone", "speed", "duration", "long_text", "seed", "stream_audio", "speech_edit"]
+stream_granularity = "segment"
+
+[variants.base.reference]
+min_seconds = 1.0
+max_seconds = 12.0
+min_sample_rate = 16000
+
+[variants.e2_base]
+title = "E2-TTS Base"
+sample_rate = 24000
+capabilities = ["clone", "speed", "duration", "long_text", "seed", "stream_audio", "speech_edit"]
+stream_granularity = "segment"
+
+[variants.e2_base.reference]
+min_seconds = 1.0
+max_seconds = 12.0
+min_sample_rate = 16000
+
+# -- common parameters ----------------------------------------------------------------
+
+[params.num_steps]
+target = "nfe_step"
+type = "int"
+min = 4
+max = 64
+default = 32
+help = "Function evaluations of the ODE solver: fewer is faster, more is cleaner."
+
+[params.guidance_scale]
+target = "cfg_strength"
+min = 0.0
+max = 10.0
+step = 0.1
+default = 2.0
+
+[params.speed]
+target = "speed"
+min = 0.3
+max = 2.0
+step = 0.05
+default = 1.0
+
+[params.duration]
+target = "fix_duration"
+min = 0.5
+max = 300
+step = 0.1
+help = "Seconds of new speech (F5-TTS counts the reference in; Mizuoto adds it)."
+
+[params.seed]
+target = "seed"
+type = "int"
+min = 0
+max = 4294967295
+
+# -- engine options -------------------------------------------------------------------
+
+[options.sway_sampling_coef]
+type = "float"
+default = -1.0
+min = -1.0
+max = 1.0
+step = 0.05
+help = "Sway sampling: negative spends more steps early, where the voice takes shape."
+
+[options.target_rms]
+type = "float"
+default = 0.1
+min = 0.01
+max = 1.0
+step = 0.01
+help = "Quiet references are raised to this level first."
+
+[options.cross_fade_duration]
+type = "float"
+default = 0.15
+min = 0.0
+max = 1.0
+step = 0.01
+help = "Seconds of cross-fade between the pieces of long text."
+
+[load_options.ode_method]
+type = "enum"
+default = "euler"
+choices = ["euler", "midpoint"]
+
+# -- models ---------------------------------------------------------------------------
+
+[[models]]
+id = "f5tts/v1-base"
+variant = "v1_base"
+title = "F5-TTS v1 Base"
+description = "The current F5-TTS release, with the Vocos vocoder."
+vram_mb = 2500
+recommended = true
+files = { hf = "SWivid/F5-TTS", subdir = "F5TTS_v1_Base", include = ["F5TTS_v1_Base/model_1250000.safetensors", "F5TTS_v1_Base/vocab.txt"], manifest = "f5tts-v1-base.files.json" }
+extra = [{ hf = "charactr/vocos-mel-24khz", into = "vocos", include = ["config.yaml", "pytorch_model.bin"], manifest = "f5tts-vocos.files.json" }]
+
+[[models]]
+id = "f5tts/base"
+variant = "base"
+title = "F5-TTS Base"
+description = "The first F5-TTS release."
+vram_mb = 2500
+files = { hf = "SWivid/F5-TTS", subdir = "F5TTS_Base", include = ["F5TTS_Base/model_1200000.safetensors", "F5TTS_Base/vocab.txt"], manifest = "f5tts-base.files.json" }
+extra = [{ hf = "charactr/vocos-mel-24khz", into = "vocos", include = ["config.yaml", "pytorch_model.bin"], manifest = "f5tts-vocos.files.json" }]
+
+[[models]]
+id = "f5tts/e2-base"
+variant = "e2_base"
+title = "E2-TTS Base"
+description = "E2-TTS, the flat-transformer model F5-TTS grew from."
+vram_mb = 2500
+files = { hf = "SWivid/E2-TTS", subdir = "E2TTS_Base", include = ["E2TTS_Base/model_1200000.safetensors"], manifest = "f5tts-e2-base.files.json" }
+extra = [{ hf = "charactr/vocos-mel-24khz", into = "vocos", include = ["config.yaml", "pytorch_model.bin"], manifest = "f5tts-vocos.files.json" }]
+
+[training.full]
+title = "Fine-tune the model"
+description = "Upstream's fine-tuning (finetune_cli): the whole model trained further on the dataset, saved as a new model of the same kind. Best with an hour or more of speech; a GPU is all but required."
+export = "model"
+min_seconds = 30.0
+note = "The result inherits the base weights' CC-BY-NC-4.0 licence."
+stages = [
+    { id = "prepare", title = "Prepare the data", help = "24 kHz clips and their text in F5-TTS's tokens (prepare_csv_wavs).", uses = [] },
+    { id = "train", title = "Train", uses = ["epochs", "learning_rate", "batch_frames", "max_samples", "grad_accumulation", "warmup_updates"] },
+    { id = "export", title = "Export the model", uses = ["preview_text"] },
+]
+
+[training.full.hyperparams.epochs]
+type = "int"
+default = 10
+min = 1
+max = 1000
+group = "basic"
+help = "Passes over the dataset."
+
+[training.full.hyperparams.learning_rate]
+type = "float"
+default = 0.00001
+min = 0.0000001
+max = 0.001
+group = "basic"
+help = "Upstream fine-tunes at 1e-5."
+
+[training.full.hyperparams.batch_frames]
+type = "int"
+default = 3200
+min = 400
+max = 100000
+group = "basic"
+help = "Mel frames per batch (a frame is about 10.7 ms); lower it when the GPU runs out of memory."
+
+[training.full.hyperparams.max_samples]
+type = "int"
+default = 64
+min = 1
+max = 512
+help = "At most this many clips per batch."
+
+[training.full.hyperparams.grad_accumulation]
+type = "int"
+default = 1
+min = 1
+max = 64
+help = "Batches per optimiser update."
+
+[training.full.hyperparams.warmup_updates]
+type = "int"
+default = 0
+min = 0
+max = 100000
+help = "Updates of learning-rate warm-up (0: 2% of the run)."
+
+[training.full.hyperparams.workers]
+type = "int"
+default = 2
+min = 1
+max = 16
+help = "Data-loading processes (upstream's loaders need at least one)."
+
+[training.full.hyperparams.preview_text]
+type = "str"
+default = ""
+help = "What the preview says (empty: a dataset clip's text)."
+
+[training.full.hyperparams.gradient_checkpointing]
+type = "enum"
+default = "auto"
+choices = ["auto", "off", "blocks", "every:2", "every:4"]
+help = "Keep only each block's input and run it again in the backward pass: less GPU memory for about a third more time, the same results. auto follows Settings › Training › Memory."

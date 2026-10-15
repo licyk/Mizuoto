@@ -1,0 +1,179 @@
+---
+title: "Design references and decisions"
+description: "Where Mizuoto's design comes from: the skeleton's lineage, what was taken from InvokeAI, ani2xcur, Material Design 3 and ComfyUI and what was not, and a table of design decisions with their reasons."
+icon: Compass
+---
+
+Mizuoto was not designed from nothing. Its application skeleton (core services, thin API and command line, a Vue UI shipped in the wheel, the tooling) comes from a line of sibling projects, and its model runtime follows ComfyUI. This page records what was taken from each source and why, what was deliberately left out, and finally the design decisions that shaped the code as it is. What the code looks like is in [Architecture](/docs/development-architecture).
+
+## Lineage
+
+| Project | What it is | What Mizuoto keeps of it |
+| --- | --- | --- |
+| SD Model Hub | A Stable Diffusion model manager | The skeleton itself: all logic in `core` with two thin entrances over it (FastAPI and Typer), `build_services()` assembling the services, the `Record` base, domain errors carrying an HTTP status and an exit code, three settings layers (host overrides > environment > file), the event bus and the socket bridge, the security middleware, port binding and `server.json`, `embed.py` for embedding, `scripts/dev.py`, and the layer rule held by a test |
+| Hanaikada | An AI image browser on the same skeleton | Proof that the skeleton carries over to another domain; its image metadata and index have nothing to do with Mizuoto |
+| rvc-next | An RVC voice-conversion application on the same skeleton | The skeleton under machine-learning load: a job queue with named resources and priorities, persisted requests and retry, job workers with JSON-lines events, memory holders and release after running out of memory, a voice library, training experiments with stage fingerprints; the Material 3 front end (`theme/`, `ui/`, motion, layers, shell, stores, i18n, rule tests); the documentation site |
+| Mizuoto 0.1 | One Python environment and one worker process per engine, upstream code vendored as it was | Capabilities declared per variant, two-tier parameters (common parameters plus engine options), licence gates, the voice library and model catalogue, the parameter mappings; and the behaviour the native engines are compared with (git tag `v1-engine-workers`) |
+| Mizuoto 0.2 | One environment, every engine implemented in-tree on a ComfyUI-style runtime | The code as it is |
+
+The skeleton is GPL-3.0, and so is Mizuoto (`GPL-3.0-only`). The two licence-gated engines ship apart because of their licences (see the decisions below).
+
+## From InvokeAI: FastAPI plus a single-page app
+
+InvokeAI's front-end/back-end structure is where the skeleton started. What was taken:
+
+- **One OpenAPI schema as the contract.** Every route has an explicit `operation_id`, with pydantic models in and out. `mizuoto/api/openapi.py` adds every event model and a `ServerEvents` map (event name → schema) to the schema, so socket payloads are typed like REST. `scripts/dev.py typegen` generates `schema.d.ts` with `openapi-typescript` and it is committed; `typegen-check` catches drift between the API and the types in CI.
+- **Commands go over REST; the socket only pushes.** socket.io sits at `/ws`, server to client only. REST is the truth, and events only patch or invalidate the client's query cache; a reconnect refetches, so missed events never leave the UI stale.
+- **Long work is a job plus events**, so requests return quickly, and progress and cancellation come with it.
+- **Blocking work stays off the event loop.** Routes that touch the disk or the database are plain `def` (they run in the thread pool); events from job threads cross to the loop with `call_soon_threadsafe`.
+- **Thin routes over a service layer**, one router module per resource on the server and one query module per resource in the UI.
+- **Relative URLs plus a development proxy**: front-end code uses the same relative URLs in development and production.
+- UI preferences are stored on the server through `/api/v1/client-state/{key}`, so they follow the user across browsers.
+
+Where Mizuoto differs on purpose:
+
+| InvokeAI | Mizuoto | Why |
+| --- | --- | --- |
+| A static service locator, `ApiDependencies.invoker` | `app.state.services` plus the FastAPI dependency `ServicesDep` | A route's dependencies are in its signature and tests can pass isolated services; no graph nodes need to share services |
+| Multi-user: JWTs, sliding refresh, socket rooms, per-user redaction | One optional access token (a Bearer header, the `mizuoto_token` cookie or `?token=`), plus a Host check (against DNS rebinding) and an Origin check on state-changing requests; binding to a non-loopback address logs a warning | A single user or a small trusted group running it locally; the complexity pays only for multi-tenant serving |
+| Parsing `/openapi.json` at run time into node templates | Types generated at build time only | No back-end types are extended by users |
+| React, Redux Toolkit, RTK Query | Vue 3, Pinia, TanStack Vue Query, `openapi-fetch` | The skeleton's existing front end |
+
+## Shipping the front end inside the wheel
+
+- `mizuoto/webui/` is both the Vue project and a Python package. Vite builds the UI into `mizuoto/webui/dist/`; `dist/` is not committed and goes into the wheel as package data, so after `pip install` users need neither Node nor bun.
+- The server finds `dist/` through the package's `__path__` (`web_dist_dir()` in `api/static.py`): one line for a source checkout, an installed wheel and a container. `SPAStaticFiles` is mounted last, so it only receives paths the API, the socket and the docs did not match. Without a build it logs a warning and serves the API only, which is the normal state while working on the back end.
+- Unknown paths fall back to `index.html` only for requests that accept `text/html` (client-side routes survive reloads and deep links), so a mistyped asset or API path still gets a 404. Content-hashed files under `assets/` are cached for a year (`immutable`); everything else, `index.html` included, is `no-cache`, so after an upgrade a browser never pairs an old UI with a new back end.
+- The build uses `base: './'`, and at run time `api/baseUrl.ts` derives the deployment root from the entry script's URL (everything before the last `/assets/`); routes use hash history. One build works at the root and under an `--api-prefix` sub-path with no rewriting.
+- The UI is built before the wheel: `scripts/build_wheels.py` runs `bun install --frozen-lockfile` and `bun run build`, then builds the sdist and the wheel; Docker builds it in a bun stage of its own, and the final image carries no Node toolchain. See [Release](/docs/development-release).
+
+## Port selection
+
+The server decides whether a port is free by **binding** it, not by connecting to it (`bind_first_free_port` in `mizuoto/core/net/ports.py`):
+
+- It creates a listening socket and binds it to the configured host and port; on `EADDRINUSE` or `EACCES` (which covers Windows' excluded port ranges) it tries the next port, up to 20 attempts and never past 65535, and fails with a clear error when none is free. `SO_EXCLUSIVEADDRUSE` on Windows, `SO_REUSEADDR` elsewhere.
+- The bound socket is handed to uvicorn (`server.run(sockets=[sock])`): there is no gap between checking and serving.
+- Strict mode (`server.strict_port`, `--strict-port`) fails instead of moving on, for reverse proxies and containers with fixed port mappings.
+- Other programs learn the actual port: a line `SERVER_READY url=…` on standard output, and `server.json` (host, port, URL, process id) in the data folder, removed on shutdown. `mizuoto runtime` and friends find the running server through it. The front end derives the back end's address from the URL it was loaded from and needs no notice.
+
+## The command line: Typer registration
+
+The command line follows ani2xcur's Typer layout:
+
+- `get_app()` in `mizuoto/cli/app.py` registers every command and group in one function, with names and help given at registration; that file is the command line's table of contents. Command functions (`cli/commands/*.py`) are plain, undecorated functions.
+- The app is built inside a function, not at import time, so each test gets a fresh one; `EXPECTED_TREE` in `tests/cli/test_cli.py` compares the whole command tree, so a forgotten registration fails.
+- `typer_factory()` (`cli/factory.py`) gives every app and group the same settings; `DebugOptionTyper`, `DebugTyperCommand` and `AlphabeticalMixedGroup` make `--debug` work at every level and sort the help. The imports of Typer's private `typer._click` live only in that file, and `typer` has an upper bound (`<0.28`).
+- `main()` handles errors itself: a `MizuotoError` prints its message and `detail["hint"]` and exits with its exit code, Ctrl+C exits 130, anything else prints a traceback and exits 1.
+- Heavy dependencies are imported inside command functions, so `mizuoto version` loads neither FastAPI nor torch. `python -m mizuoto` equals `mizuoto`.
+
+## Material Design 3 in layers
+
+The UI uses Material Design 3 in two layers:
+
+- **The token layer** (`mizuoto/webui/src/theme/`): colour roles `--md-sys-color-*` are generated by `@material/material-color-utilities`' Tonal Spot scheme from one seed colour (by default `#4f6b3a`), light and dark, at three contrast levels; type, shape, motion and state layers are CSS variables under Google's official names. The UI uses tokens only, never literal colours.
+- **The component layer** (`src/ui/`): the components `@material/web` has (buttons, icon buttons, FAB, checkbox, filter chip, divider, text field, slider, progress, switch, tabs) are wrapped in project Vue components; the rest (shell, navigation, dialogs, sheets, menus, cards, snackbar, stepper, charts, waveforms…) are built from tokens. Feature code imports only from `@/ui`.
+
+`@material/web` is in maintenance mode and its component set no longer grows; the wrapper layer keeps that risk inside `src/ui/`, where a component that breaks is replaced without touching feature code. MUI is not used (it implements Material Design 2), nor is M3 Expressive. Icons are Lucide (imported only in `ui/icons.ts`), and the Roboto Flex font ships with the package rather than loading from outside. Details in [Web UI](/docs/development-webui#material-design-3-layers).
+
+## From ComfyUI: the runtime
+
+The model runtime (`mizuoto/runtime/`) follows ComfyUI. ComfyUI is a source of patterns, not a code base adopted: Mizuoto keeps its own services, jobs, API, command line and UI, and code comments name the ComfyUI counterpart of each piece.
+
+| From ComfyUI | In Mizuoto |
+| --- | --- |
+| Device and memory management (`model_management.py`): device probes, free memory (driver free plus torch's cached-but-unused), a memory reserve, hardware precision tables, `load_models_gpu` in most-recently-used order, partial loading and dynamic VRAM, unloading every idle model after running out of memory, a pinned-memory budget | `runtime/device.py` (`DeviceService`), `runtime/manager.py` (`ModelManager`), `runtime/policy.py`, `runtime/stream.py`, all service objects rather than module globals. See [Memory management](/docs/development-memory) |
+| The model wrapper (`ModelPatcher`) | `ModelHandle` in `runtime/handle.py`, without the diffusion parts: whole or partial placement, weights streamed unit by unit, host copies |
+| `ops` injection (`comfy.ops`) | `runtime/ops.py`: `ops.default` skips random initialisation (fast construction, no random draws while loading), `ops.cast` casts weights to the input's dtype and device on every forward |
+| Attention selection (one signature, SDPA by default, optional backends imported under guard with fallbacks) | `runtime/accel/`: every attention site goes through `accel.attention`, the backend chosen by `compute.attention`, with self-tests, constraint checks and fallbacks. See [Attention acceleration](/docs/development-acceleration) |
+| Loading and detection (safetensors or `weights_only` pickles, key renaming) | `runtime/loading.py`, strict by default; detection looks at the catalogue's explicit metadata first (sizes and SHA-256), then at each engine's files-only `detect_variant` |
+| In-tree language-model code (Qwen/Llama families without transformers, seeded generators, per-token interrupts) | `runtime/lm/` (the Qwen2/3 decoder with transformers' numerics), `runtime/sampling.py`, `runtime/graphs.py` |
+| Audio DSP ported (no torchaudio) | `mizuoto/nn/dsp/`, bit-exact with torchaudio, librosa and Whisper |
+
+What was not taken:
+
+- **Module-level mutable globals** (the VRAM state, the loaded-models list, the interrupt flag, command-line arguments read deep in the code). Mizuoto has `Services` and settings objects, and passes the device and cancel token explicitly, because a CPU job and a GPU job can run at once.
+- **Giant files and long `if` chains** (such as model detection matched in order). Each engine has its own detection, configuration and construction in its own package.
+- **The node graph and the custom-node ecosystem.** A typed engine registry with entry points is enough, and the licence-gated engines register exactly that way.
+- The diffusion machinery (samplers, hooks, ControlNet), and running language models as text encoders.
+- **Dependencies on `comfy-aimdo` (a native VRAM allocator) and an exactly pinned `comfy-kitchen`.** Memory management is built on torch's own allocator.
+- **Deliberate numerical divergence from reference implementations** (such as a fused RMSNorm by default). Mizuoto keeps the reference maths on the default path; fused variants that change bits are opt-in.
+
+## Design decisions
+
+The decisions that shaped the code as it is: what was decided, and why.
+
+### Environment and distribution
+
+| Decision | Reason |
+| --- | --- |
+| One Python environment, every engine ported in-tree and run in the server's own process; no upstream code vendored | The engines' dependency conflicts (transformers 4.51 to 5.3, torch 2.3 and 2.8, numpy 1 and 2) all came from upstream code using library internals and from upstream pins, not from what the models need. Ported, they need one torch and one set of dependencies, and the engine environments, worker processes and inter-process protocol go |
+| The cost of running in process (a crash in native code takes the server down; no memory release by process exit) is paid for by rules | Native code changes no global state (tested), requests are checked for residue, unloading really frees memory; an engine can run on a remote agent where process isolation is wanted; training stays in child processes |
+| Fish Speech and IndexTTS are distributions of their own (`mizuoto-fishspeech`, `mizuoto-indextts`), installed into the same environment and registered under the entry-point group `mizuoto.engines` | Their licences (Fish Audio Research License, bilibili Model Use License) cover the code; a port is a derivative, and folding it into the GPL-3.0 `mizuoto` would conflict |
+| Every distribution carries the same version; the gated packages depend on `mizuoto` unpinned | The wheels are built and installed together, and a test keeps the versions equal |
+| torch is a dependency, but its build (CUDA, ROCm, XPU, MPS, CPU) is installed by the user first; `mizuoto doctor` prints the command for the machine | The right build depends on the hardware and driver, which no package manager can choose for the user |
+| No transformers, onnxruntime, torchaudio or librosa at run time | They bring version conflicts, platform limits or global state; tokenizers come from `tokenizers`, `tiktoken` and `sentencepiece`, and ONNX models' weights are converted into torch modules by an in-tree protobuf reader |
+| Optional extras only where a platform limit requires one: `gptsovits-ja` (`pyopenjtalk==0.4.1`, source only), `gptsovits-ko`, `mizuoto-indextts[ja]` | Every required dependency has wheels on every platform CI covers; without an extra, text in that language fails with `capability_not_supported` and the install command |
+| Japanese through `pyopenjtalk==0.4.1`, not pyopenjtalk-plus; Simplified → Traditional through the C++ `opencc==1.4.2`; Chinese segmentation through `jieba` instead of `jieba_fast` | pyopenjtalk-plus changes OpenJTalk's rules (18 % of Japanese sentences differ) and the pure-Python OpenCC gives other results; `jieba` has `jieba_fast`'s dictionary and results, in pure Python |
+| The optional attention packages (flash-attn, xFormers, SageAttention) are backends only, with version checks, self-tests and fallbacks, never dependencies | They support only some platforms; the default path must work everywhere with unchanged results |
+| One Docker image holds the server, the UI and every engine; the licence-gated engines come with `GATED=1` | Users choose only torch's build; the licences are still accepted at run time |
+
+### Engines and exactness
+
+| Decision | Reason |
+| --- | --- |
+| Each port matches its reference sample for sample (CPU, fp32, same seed); the reference is how Mizuoto 0.1 actually called upstream, not upstream's demos | A user's output should not change because the implementation did; where 0.1 differed from upstream on purpose (F5-TTS generating chunks in order rather than on a thread pool), 0.1 is the reference |
+| Upstream's quirks are reproduced first and fixes land as separate changes; even quirks of no product value are reproduced (IndexTTS-1.5 using no KV cache below fp16) | Mixing fixes with porting makes a parity failure ambiguous; identical behaviour is the default, and a deviation needs a reason and a record |
+| Trainers reproduce upstream's recipes, including their training/inference mismatches (Qwen3-TTS's training skips `text_projection`; Fish Speech's training does not scale the codebook embeddings by 1/√11) | Losses, learning rates and exported weights then match upstream byte for byte, and the exports load in both implementations |
+| CosyVoice is compared with its reference running on torch 2.8 | On its own torch 2.3.1 and on 2.8, sampling already diverges |
+| Speech recognition is a native Whisper large-v3-turbo reproducing 0.1's pipeline (overlapping 30 s windows, 5-beam search, the seek loop inside each window, the merge) | Identical transcripts, without CTranslate2's and cuDNN's version pairing |
+| The Whisper encoder lives in the ASR engine and is not shared with CosyVoice's speech tokenizers | s3tokenizer's attention (its scaling, its masks) is another computation |
+| CosyVoice's and IndexTTS's CAM++ are not merged into one shared asset; nor is the Qwen emotion model in IndexTTS 2's and 2.5's folders | Merging would make CosyVoice need a gated engine's licence; the emotion model lives inside each model's repository folder, and sharing it would mean moving installed models' files |
+| The catalogue downloads only files the engines read | E.g. CosyVoice-BlankEN's weights and the semantic codec IndexTTS-2.5 never reads only took space |
+| GPT-SoVITS runs the plain T2S with its steps replayed as CUDA graphs, not upstream's CUDA-graph T2S | Upstream's accelerated path changes results; replaying the eager kernels does not |
+| VoxCPM's text normalisation uses wetext 0.1.2's own FSTs, shipped with the package | Upstream pins wetext 0.1.2, whose FSTs differ from both CosyVoice's and IndexTTS's |
+| VoxCPM's reference is upstream's own package | Mizuoto 0.1 never had VoxCPM |
+| Capabilities are static (Qwen3-TTS 0.6B CustomVoice is its own variant `custom_voice_lite`, without `instruct`) | Capabilities must be known before a model loads, for planning and the UI |
+| OmniVoice designs voices from attributes only | The model takes a closed attribute vocabulary |
+| No ZipEnhancer denoising, timestamps or CUDA `optimize` for VoxCPM; no Fish Speech S2 Pro int8 in the catalogue | The former need another model and a ModelScope pipeline, and are all off in upstream's default generation; there is no public int8 repository |
+| F5-TTS's licence is recorded as `cc-by-nc-4.0`, not gated, with tagged outputs | That is the weights' licence; the non-commercial term is conveyed by tags and a notice |
+
+### Runtime and memory
+
+| Decision | Reason |
+| --- | --- |
+| No estimate refuses a load: what does not fit loads partly and streams, at the minimum if need be; only an allocation that really fails is an error, after which every GPU's idle models are unloaded | As ComfyUI does; estimates come from file sizes, and refusing would block requests that fit |
+| Weights stream through forward hooks on units and layers that swap `param.data`, not through code in the `ops` layers | It covers every code path (`layer.forward_step`, `vae.decode`, custom layers), and costs nothing while a model is whole on its device |
+| Only linear and convolution weights stream, never embeddings | Codebook embeddings are often read through `.weight` directly (cosine searches, `F.embedding`); ComfyUI likewise streams only its ops layers |
+| GPT-SoVITS's T2S stays whole on its device | Its blocks run through `prompt` / `step`, which read the fused projections directly; the model is 150 MB |
+| Tiled decoding as an out-of-memory fallback only for some decoders (ASR, GPT-SoVITS, F5-TTS's Vocos, IndexTTS 2's BigVGAN, VoxCPM's VAE) | Qwen3-TTS's codec already decodes in chunks; CosyVoice's HiFT carries a phase across the whole utterance that tiles would break; the rest are short |
+| When a training run's estimated memory exceeds the free memory, the log warns with the preset that would fit; the run is not refused | The estimate comes from file sizes and is not calibrated on a GPU |
+| The training memory tools offer what keeps results and a few things that change them slightly; no Adafactor, no splitting micro-batches on out-of-memory | Those change the recipes beyond what the presets promise |
+| `compute.max_resident_models` caps resident models across engines (default 3), the least recently used idle model going first | Every engine's models share one process and its memory |
+| The host probes devices without importing torch: nvidia-smi, rocm-smi / amd-smi and the platform first, a child process only when torch's build could see a GPU the tools missed | Listing devices or serving the UI should not pay a torch import of a second or two |
+| CUDA graphs are on by default; `torch.compile` is off by default | CUDA graphs replay the same kernels with the same results; compiling changes floating-point results and costs the first request its compilation |
+| Attention's `causal` is SDPA's `is_causal` (top-left); bottom-right causality is expressed through `MaskInfo`; dropout draws from torch's default generator | Every site passes `is_causal` as upstream did, and CosyVoice's streamed-text steps rely on the top-left form; the only site with dropout (GPT-SoVITS's T2S training) calls SDPA's own |
+| The attention policy is bound per request step for inference, and process-wide for a training stage | Autograd runs backward passes, and checkpointed recomputations, on threads of its own |
+| External attention kernels are called directly, not wrapped as Mizuoto's own `torch.library` custom ops | flash-attn and xFormers register their own operators and backward passes; SageAttention has no backward and is never used under autograd |
+
+### Jobs, interfaces and data
+
+| Decision | Reason |
+| --- | --- |
+| Named resources with capacities (`gpu:<device>`, `engine:<engine>:<device>`, `inference`, `cpu`, `io`, `project:<id>`) rather than one global GPU lock | Serialising per engine and per device covers inference and training alike, and work on different devices runs in parallel |
+| A training run is one `train` job whose steps are its stages, each stage a child process; the stages are declared statically in the manifest | The run holds the device once; the UI and the fingerprints know the stages without running anything |
+| Any output line of a job worker resets its watchdog, and a training stage also beats every 10 s | A stage that logs is evidently alive; a silent one still beats |
+| Only requests that differ in nothing but their text, with one segment and no seed, join a micro-batch | A batch draws its random numbers differently; voices and parameters are per call |
+| A project's lines render as ordinary speak jobs; takes are outputs of kind `line`, stale by request fingerprint | One synthesis path serves every feature, so micro-batching and every engine come for free |
+| A remote agent owns its models and engines; requests carry files by content (SHA-256); training stays local | A path on one machine means nothing on another |
+| The model mirror (`mizuoto-model`) is a source in front of the official ones, laid out as Mizuoto keeps files | A partial mirror works: what it lacks comes from the official repositories file by file, checked against the same SHA-256 |
+| Accepting a licence is also required to download the weights and assets; the full text ships with the package and the command line can show it | The licences cover the weights; a reader must have the text in front of them before accepting |
+| Voices, models, datasets, experiments and projects are folders with JSON; listing is a scan; the database holds only what is queried | The folders are the truth, and a scan cannot drift from the files; hundreds of voices scan in milliseconds |
+| Engines get references as `cache/refs/<sha256>.wav` (16-bit WAV); voices store FLAC | Every engine reads 16-bit WAV; registering by content avoids duplicates |
+| A missing transcript is looked up in the cache while planning, else transcribed in the job; without ASR, `clone_no_transcript` or an error with a hint | Planning should not wait on a model, but the result must be usable |
+| `mizuoto doctor [engine]` checks in one place the torch build against the hardware, what each engine misses, extras and 0.1's old environments | Everything between the machine and the engines is said in one place |
+| `mizuoto runtime` asks the running server (`server.json`) first, and reports its own process only when there is none | A command-line process has no models loaded; the server does |
+| Reading server paths, revealing files and the like work only for a browser on the server's own machine | A tunnel's or proxy's visitors must not browse the server's disk |
+| Streamed audio's binary messages are bare PCM16 and everything else is JSON text; the browser player has no buffer cap | A binary message is always audio; when the model falls behind the player waits instead of dropping speech |
+| The OpenAPI schema is generated without `separate_input_output_schemas=False` | With it, every defaulted response field would become optional in the generated types; the split it avoids only touches `SpeakRequest` |
+| The error codes `download_failed` (exit 12) and `install_failed` (13) | Each needs its own hint and exit code |
+| A name cannot be both a command and a group: `mizuoto env vars`; parameter presets are `--use-preset/-P`, since `--preset` is the preset speaker | Typer's limit; `--preset` was taken by speakers first |

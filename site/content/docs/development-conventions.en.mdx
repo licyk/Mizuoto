@@ -1,0 +1,95 @@
+---
+title: "Conventions"
+description: "The conventions code in Mizuoto follows: style, the layer rules, the rules for native code, the exactness rule, the steps for adding a command, route, setting or engine option, what tests a change needs, documentation in both languages and the commit message format."
+icon: Ruler
+---
+
+This page lists the conventions a change to Mizuoto must follow. Most of them are held by tests or checks: `python scripts/dev.py check` passing is the least a change needs before it is merged. The design behind each convention is in [Architecture](/docs/development-architecture) and [Design references and decisions](/docs/development-design).
+
+## Code style
+
+- **Python ≥ 3.10**, with 3.10–3.13 supported. `ty` checks types for 3.10, so do not use syntax or standard-library modules newer than that (`tomllib` needs its `tomli` fallback).
+- **ruff and ty are unpinned**, and `pyproject.toml` writes `lint.select` out rule by rule (`E4`, `E7`, `E9`, `F`, `I`, `UP`, `B`, `SIM`, `RUF100`, `ANN`), so a ruff upgrade cannot quietly change the rule set. Line length 180, indent 4. ty runs with `error-on-warning`. `python scripts/dev.py format` formats and applies the safe fixes; `lint` and `typecheck-py` only check.
+- **Every function is annotated** (under `mizuoto/` and `packages/native/`; tests and scripts are exempt). `Any` only where the value really is anything (JSON).
+- **Every model that crosses the API boundary is a `Record`** (`mizuoto/core/record.py`, pydantic v2, `json_schema_serialization_defaults_required`): settings, requests, responses, events, `--json` output. Defaulted fields are required in the output schema, so the generated TypeScript types match what the server sends.
+- **Heavy imports go inside functions**: av and numpy hot paths in the core, fastapi and uvicorn in the command line, and every piece of model code in `core/inference`. That keeps `mizuoto version` and `mizuoto --help` fast, and tests check it.
+- **No method named `list` on a class that annotates with `list[...]`** (ty resolves the name to the method). Write `list_models`, `list_voices`, `list_presets`.
+- **Identifiers and times** come from `mizuoto/core/clock.py`: `new_id(prefix)` (a hex millisecond timestamp and 8 random hex digits, sorting roughly by creation time) and `now_iso()` (UTC, milliseconds, ending in `Z`, sorting as text).
+- **Errors are the classes of `mizuoto/core/errors.py`**, and error codes live only in `mizuoto/core/codes.py`. A fix for the user goes in `detail["hint"]`: the command line prints it as a second line and the UI shows it under the error. Routes and commands never make up their own HTTP statuses or exit codes.
+- **Logging** goes through the `mizuoto` logger (`logging.getLogger(__name__)` under `mizuoto.*`); only the entry point (`setup_logging` in `mizuoto/logger.py`) configures handlers.
+- Code that follows an upstream library line for line and must stay comparable with it (`mizuoto/nn/dsp/kaldi.py`, torchaudio's fbank) is kept verbatim and exempted from lint rules in `pyproject.toml`, not rewritten.
+
+## The layer rules
+
+`tests/test_architecture.py` checks every module's imports with `ast`; the tables are in [Architecture](/docs/development-architecture#the-layer-rules-and-their-tests). In short:
+
+- `core`, `api` and `cli` never import torch, torchaudio, transformers, onnxruntime or a licence-gated engine package, not even inside a function. `core` reaches `runtime`, `nn`, `engines` and `training` only inside functions of `core/inference`.
+- Routes and commands are thin: parse the input, call **one** core method, shape the output. Each operation has one core method, so the API's JSON has the shape of the command line's `--json`. Business logic never goes into `api/` or `cli/`.
+- Engines import only `runtime`, `nn`, `text`, `training`, `core.codes`, `core.inference.tasks` and their own package, and **never another engine**. Code two engines share goes into `nn` or `runtime`.
+- `core/codes.py`, `core/jobs/events.py`, `core/jobs/jsonl.py`, `core/remote/frames.py` and `core/inference/tasks.py` use the standard library only: training stages, remote frames and engines all use them.
+- A new third-party dependency goes into `pyproject.toml` and into its layer's allowed list in `tests/test_architecture.py`, with the reason it is needed (see [Release](/docs/development-release#dependencies)).
+
+## Rules for native code
+
+Engines, trainers, the runtime and the server share one process, so code under `runtime`, `nn`, `text`, `engines` and `packages/native` keeps these rules (details in [Runtime](/docs/development-runtime#global-state)):
+
+1. **Change no process-wide state.** Do not seed the global generators, change `os.environ`, the working directory or `sys.path`, call `logging.basicConfig`, `torch.set_default_dtype`, `torch.use_deterministic_algorithms` or `torch.set_float32_matmul_precision`, assign `torch.backends.*` or `torch._inductor.config`, or use `sdpa_kernel` (it switches SDPA's kernels for every thread). `compute.fast`'s switches are set only in `mizuoto/runtime/accel/features.py`, called by the host and the training stage.
+2. **Randomness comes from the request.** Use `ctx.generator_for(device)` and `ctx.rng`; pass the generator to every random op (`torch.randn(..., generator=g)`), and draw in upstream's order, shapes and device. Calls that take no generator, such as `randn_like`, are rewritten in an equivalent explicit form. Where upstream draws from the global generator while it builds a model, replay the draws on a private generator.
+3. **Loading draws nothing.** Modules are built from `runtime.ops` layers (`ops.default` skips random initialisation), and checkpoints load strictly (a missing or unexpected key is an error unless the engine lists it as ignorable).
+4. **Load outside inference mode, and leave parameters as `nn.Module` makes them** (no `requires_grad_(False)`). Two CPU kernel traps change results: on a non-contiguous 3-D input, `F.linear` takes another kernel when the weight `requires_grad`, or when it is an inference tensor (made inside `torch.inference_mode()`), even under `no_grad` or inference mode. Upstream's weights are ordinary parameters that require grad, so native engines keep them so; requests still run in inference mode.
+5. **Attention goes through `accel.attention(q, k, v, site=…)`**, never SDPA or its aten kernels directly, so `compute.attention` can switch the backend (see [Attention acceleration](/docs/development-acceleration)).
+6. **Download nothing.** Every file an engine reads is a model file or a shared asset, which `ModelService` downloads and hands over through `LoadSpec`.
+7. **Key a module-level cache by its whole input** (every parameter, dtype and device), or build per call. A global cache keyed by part of its input makes a second configuration in the same process reuse the first one's result.
+8. **Place components per phase and estimate memory per request.** Engines put each phase's components on the device with `ctx.use` / `ctx.run`; a module whose weights are read outside its `forward` is marked `fixed`; a module that needs float64 is placed through `DeviceService.float64_device`. See [Memory management](/docs/development-memory).
+9. **Be cancellable.** Call `ctx.check_cancel()` in every loop (autoregressive token, ODE step, segment, beam step). `Cancelled` derives from `BaseException`; never swallow it with a broad `except BaseException`.
+
+## Exactness
+
+Each Mizuoto engine is a port of an upstream project and must give **the same** results: on the CPU in fp32 with the same seed, the audio is identical sample for sample (for trainers: losses, learning rates and saved weights identical byte for byte). This rule decides much of how code is written:
+
+- **Reproduce first, fix after.** Upstream's quirks (draw order, padding, alignment edge cases) are reproduced as they are and shown identical with the parity harness; a fix, where one is needed, is a separate change with the deviation and its reason recorded.
+- **Record every deviation.** Each place a port differs from upstream (to run on every platform, to leave global state alone, because upstream depended on thread timing…) goes into the engine's notes and the design record `AGENTS.md`, with the comparison's numbers.
+- **Speed work keeps results.** Performance work (CUDA graphs, removed waits, compilation, weight streaming) must give the same tokens and the same audio; each round is compared with the previous one by `scripts/parity/perf.py` and `train_perf.py` (see [Performance work](/docs/development-performance)). An optimisation that does change bits (Qwen3-TTS's `fused_projections`, `compute.kv_cache = static`) can only be an opt-in setting, and is listed in the output's parameters.
+- On GPUs in reduced precision, bit identity is not required; modules are judged by their error and whole runs statistically. The tiers and tolerances are in [Testing](/docs/development-testing#tiers-and-tolerances-of-behavioural-consistency).
+
+## Adding things
+
+| To add | Steps |
+| --- | --- |
+| A command | A plain function in `mizuoto/cli/commands/` with `--json`, registered in `get_app()` of `cli/app.py` (name and help at registration), and added to `EXPECTED_TREE` in `tests/cli/test_cli.py`. See [Adding a command](/docs/development-api#adding-a-command) |
+| A route | The core method (`Record` in and out) → a route with an `operation_id` in `api/routers/` → `python scripts/dev.py typegen` and commit `schema.d.ts` → `tests/api/test_api.py`. See [Adding a route](/docs/development-api#adding-a-route) |
+| An event | An `EventBase` subclass (`__event_name__`) in `core/events/models.py`; it enters the OpenAPI schema by itself. Regenerate the types and handle it in the UI's `api/socket.ts` |
+| A setting | A field with a default and a docstring in its group in `core/settings/models.py`; when the UI shows it, a control in Settings, the text in both languages and `typegen`; document it in both language versions of [Configuration](/docs/cli-config). A change to `engines.<id>.*` unloads that engine's models, which load with the new settings next time |
+| An engine option | `[options.<name>]` (or a load option, `[load_options.<name>]`) in the manifest, and the same entry in the engine's `OPTION_SCHEMA`; a test requires the two to match. See [Adding an engine](/docs/development-engine) |
+| A job kind | `jobs.register(kind, factory)` in the service's constructor, the factory returning a `JobSpec` with its resources (`engine:<engine>:<device>`, `gpu:<device>`, `cpu`, `io`…); the lists it changes when it ends are registered in `AFFECTS` in the UI's `socket.ts` |
+| An engine or a trainer | See [Adding an engine](/docs/development-engine) and [Trainers](/docs/development-training) |
+| A screen | See [Web UI](/docs/development-webui#adding-a-screen-projects): components only from `@/ui`, styles only from tokens, text in both languages at once |
+
+## Tests a change needs
+
+- **Every change comes with tests**, and `python scripts/dev.py check` (lint, typecheck-py, test-py, test-web, typegen-check) passes. CI runs the same tests on Linux, Windows and macOS with Python 3.10–3.13, so mind how paths, encodings and line endings behave on Windows.
+- The core's behaviour is tested with the dummy engine (no torch, no model); the network is replaced by `httpx.MockTransport`; tests get an isolated data folder and an empty environment from `make_services`.
+- **A change to an engine or trainer**: update its tiny-model tests in `tests/engines_native/` (including the streaming check on a simulated device), run the [contract suite](/docs/development-testing#real-engines-the-contract-suite) with real models, and compare with upstream through the [parity harness](/docs/development-testing#parity-with-the-references).
+- When the API changes, regenerate the types and commit them, or `typegen-check` fails. UI changes pass the rule tests (imports, tokens, layout, layers, i18n keys).
+
+## Documentation
+
+- **Both languages.** Every page of this site has `<slug>.mdx` (Simplified Chinese, the default) and `<slug>.en.mdx` (English), section for section; the sidebars are `meta.json` and `meta.en.json`, in the same order. A test checks that every Chinese page has its English twin. The README comes in two (`README.md`, `README.zh-CN.md`), and the UI's text lives in `en.ts` and `zh-CN.ts`, whose keys must match.
+- **A change in behaviour changes the documentation**: what users see goes into the guide, command-line or advanced pages, what developers need into the development pages.
+- **The design record.** `AGENTS.md` at the repository root records what the code does, the rules it keeps and why, and durable findings (such as which upstream behaviours a port reproduces to give the same output). Update it with any change of design or new finding.
+- Chinese pages keep the existing pages' terms (音色, 合成, 克隆, 模型, 引擎, 共享资源, 许可, 任务…). Write what is and why, not how it came about.
+
+## Commit messages
+
+Commit messages take the form `type(scope): summary`, the summary in lower case, saying what the change does:
+
+```
+feat(voxcpm): VoxCPM as a built-in engine, with full and LoRA fine-tuning
+fix(runtime): size working memory by the request, so models load whole when they fit
+perf(cosyvoice): CosyVoice 2/3 sample on the device and decode as CUDA graphs
+docs(site): the mirror_fetch and mirror_readme scripts
+```
+
+- Types: `feat` (a feature), `fix`, `perf` (faster with the same results), `refactor` (no change in behaviour), `test`, `docs`, `build` (builds, CI, Docker), `chore`. A breaking change adds `!` after the type, as in `refactor!:`.
+- The scope is the part affected: `runtime`, `webui`, `training`, `models`, `scripts`, `site`, or an engine id (`qwen3tts`, `gptsovits`…); several may be listed (`runtime,training`), or none for a change across the board.
+- The body says why, the measured or compared results, and any behaviour deliberately kept.

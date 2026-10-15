@@ -1,0 +1,354 @@
+---
+title: "Architecture"
+description: "Mizuoto's layout and module boundaries, the layer rules its tests enforce, how the services are built, the path of one synthesis request, the door to model code, the engine registry, models and voices, remote hosts, the data folder and compatibility, and the settings, events, jobs and errors every layer shares."
+icon: Layers
+---
+
+This page gives the whole picture: the packages and what each may import, the layer rules `tests/test_architecture.py` enforces, how `build_services()` assembles the services, the path of one synthesis request from the browser to an engine and back, the core's one door to model code, how engines, models, voices and remote hosts are organised, how the data folder carries over between versions, and the shared infrastructure: settings, events, jobs, errors. What happens inside the runtime is in [Runtime](/docs/development-runtime); routes and commands are in [API and CLI](/docs/development-api).
+
+## Layout
+
+<Mermaid chart={`flowchart TB
+    webui["mizuoto/webui<br/>Vue 3 + Material 3, built into dist/"]
+    api["mizuoto.api<br/>FastAPI routers · socket.io /ws · static files"]
+    cli["mizuoto.cli<br/>Typer commands"]
+    subgraph core["mizuoto.core (no torch at module level)"]
+        services["settings · events · db · jobs · compute · engines · models<br/>audio · tts · voices · asr · presets · outputs<br/>datasets · training · projects · remote"]
+        inference["core/inference<br/>InferenceService · RuntimeService · EngineHandle · tasks"]
+    end
+    subgraph native["model code (torch)"]
+        runtime["mizuoto.runtime<br/>engine contract · context · devices · manager · ops · attention · lm"]
+        nn["mizuoto.nn<br/>dsp · flows · transformers · vocoders · codecs · ssl · speaker"]
+        text["mizuoto.text<br/>tokenizers · normalisers"]
+        engines["mizuoto.engines.*<br/>packages/native/* (gated)"]
+        training["mizuoto.training<br/>Trainer · StageContext · stage.py"]
+    end
+
+    webui -- "REST /api/v1/* · socket.io /ws" --> api
+    api --> core
+    cli --> core
+    services --> inference
+    inference -- "imports inside functions" --> runtime
+    inference -. "inside functions" .-> engines
+    inference -. "inside functions" .-> training
+    engines --> runtime
+    engines --> nn
+    engines --> text
+    nn --> runtime
+    training --> engines`} />
+
+```
+mizuoto/
+  core/        services; context.py builds them, errors.py holds every error type, codes.py the error codes
+               (standard library only), record.py the Record base, process.py child processes and process trees
+    settings/ events/ db/ net/   settings, the event bus, SQLite, port binding and server.json
+    compute/   device probe (no torch), memory holders, the torch build and its install command, CPU allocator
+               and threads, the optional attention packages
+    jobs/      the job queue and named resources; events.py, jsonl.py: job-worker events (standard library only)
+    inference/ the one door to model code: InferenceService, RuntimeService, EngineHandle/EngineRequest,
+               LocalEngine/LocalHandle, tasks.py (the task types, standard library only)
+    engines/   engine manifests (manifests/*.toml and files/*.files.json), registry, params, languages, licences
+    models/    catalogue, shared assets, downloads, verify, import, engine and variant from a folder's files
+    audio/ text/ tts/ asr/ voices/ presets/ outputs/   synthesis and what surrounds it
+    datasets/ training/ projects/ remote/              datasets and training, long-form projects, remote hosts
+  api/         FastAPI: one router per resource, plus security, the socket, static files, streaming, the OpenAI
+               route. Thin
+  cli/         Typer: app.py registers everything, commands/ are plain functions. Thin
+  runtime/     the engine contract and registry (engine.py), RequestContext, devices, model manager and handles,
+               memory units and weight streaming, ops, loading, sampling, graphs (CUDA graphs), compile,
+               accel/ (attention backends), lm/ (the Qwen decoder, its cache), convert/onnx.py, snapshot
+  nn/          shared building blocks: dsp/, flow/, transformer/, vocoders/, codecs/, ssl/, speaker/
+  text/        tokenize/ (BPE, Whisper's vocabulary), normalize/ (wetext's normaliser over kaldifst)
+  engines/     one package per engine: dummy, qwen3tts, f5tts, omnivoice, cosyvoice, gptsovits, voxcpm, asr
+  training/    Trainer, StageContext, stage.py (the child process of a training stage), memory.py (training memory)
+  embed.py     MizuotoServer: the API and UI inside another application
+  webui/       the Vue project; dist/ is not committed and ships in the wheel as package data
+packages/native/
+  fishspeech/  mizuoto-fishspeech (mizuoto_fishspeech), registered under the mizuoto.engines entry point
+  indextts/    mizuoto-indextts (mizuoto_indextts), likewise
+scripts/       dev.py, build_wheels.py, smoke_wheels.py, model_manifests.py, mirror_models.py, mirror_fetch.py, mirror_readme.py, generate_openapi.py
+  parity/      the harness that compares the native engines with their references (see [Testing](/docs/development-testing))
+site/          this documentation site
+```
+
+### The layer rules and their tests
+
+`tests/test_architecture.py` walks every module's absolute imports with `ast` and checks them against these tables; the standard library is always allowed.
+
+| Layer | First-party modules it may import | Third-party modules it may import |
+| --- | --- | --- |
+| `mizuoto/core` | `mizuoto.core`, `mizuoto.version`, `mizuoto.logger`; `mizuoto.runtime`, `mizuoto.nn`, `mizuoto.engines`, `mizuoto.training` **inside functions only** | pydantic, httpx, numpy, av, tomli, tomli_w, send2trash, typing_extensions |
+| `mizuoto/api` | `mizuoto.api`, `mizuoto.core`, `mizuoto.version`, `mizuoto.logger`, `mizuoto.webui` | fastapi, starlette, socketio, uvicorn, pydantic, anyio |
+| `mizuoto/cli` | `mizuoto.cli`, `mizuoto.core`, `mizuoto.api`, `mizuoto.version`, `mizuoto.logger` | typer, click, rich, pydantic, uvicorn, httpx |
+| `mizuoto/runtime` | `mizuoto.runtime`, `mizuoto.core.codes`, `mizuoto.core.inference.tasks` | numpy, torch, safetensors, and the optional attention packages flash_attn, flash_attn_interface, xformers, sageattention, sageattn3 (imported on demand inside `runtime/accel` only) |
+| `mizuoto/nn` | `mizuoto.nn`, `mizuoto.runtime` | numpy, torch, soxr |
+| `mizuoto/text` | `mizuoto.text` | tokenizers, sentencepiece, tiktoken, kaldifst, numpy |
+| `mizuoto/engines` | `mizuoto.runtime`, `mizuoto.nn`, `mizuoto.text`, `mizuoto.engines`, `mizuoto.training`, `mizuoto.core.codes`, `mizuoto.core.inference.tasks` | numpy, torch, safetensors, tokenizers, sentencepiece, tiktoken, soxr, yaml, inflect, regex, and the text front ends' packages (pypinyin, rjieba, jieba, opencc, wordsegment, budoux, fasttext, ToJyutping, fugashi, pyopenjtalk, jamo, mecab) |
+| `mizuoto/training` | as engines, plus `mizuoto.core.jobs.events` and `mizuoto.core.jobs.jsonl` | numpy, torch |
+
+More checks:
+
+- `test_only_core_inference_reaches_model_code`: no module of `mizuoto/core` outside `core/inference` imports the runtime, `nn`, the engines or the trainers.
+- `test_shared_modules_are_standard_library_only`: `core/codes.py`, `core/jobs/events.py`, `core/jobs/jsonl.py`, `core/remote/frames.py` and `core/inference/tasks.py` import only the standard library (and each other). The runtime, the engines and the training stages share them.
+- `test_native_engine_packages_import_like_engines`: `packages/native/*/mizuoto_*` follow the engines' rule (and may import their own package).
+- `test_engines_import_no_other_engine`: `mizuoto/engines/<a>` never imports `mizuoto/engines/<b>`; what two engines share belongs in `nn` or `runtime`.
+- `test_native_code_leaves_global_state_alone`: no call that changes process-wide state in `runtime`, `nn`, `text`, the engines and the gated packages (see [Runtime](/docs/development-runtime#global-state)).
+- `test_attention_goes_through_the_accel_entry_point`: outside `runtime/accel`, the runtime, `nn`, the engines, the trainers and the gated packages never call SDPA or its aten kernels directly; every attention computation goes through `accel.attention`, so `compute.attention` can switch it (see [Attention acceleration](/docs/development-acceleration)).
+- `test_host_never_imports_model_code`: nothing in `core`, `api` or `cli` imports torch, torchaudio, transformers, onnxruntime, `mizuoto_fishspeech` or `mizuoto_indextts`, even inside a function.
+- Three subprocess tests: `import mizuoto.core.context` loads neither torch, fastapi nor typer; `import mizuoto.cli.app` loads neither torch nor fastapi; importing the engine contract, the request context, the dummy engine, `core.inference.local` and `core.inference.runtime` loads no torch. That keeps `mizuoto version` and `mizuoto --help` fast and lets the core's tests run on the dummy engine.
+- `test_one_distribution`: `pyproject.toml` depends on torch and on no other `mizuoto-*` distribution, and `packages/` holds no worker package and no engine packages besides `packages/native`.
+
+Each rule has a reason:
+
+- **The core does not need torch to start.** Listing models, editing settings or serving the UI never loads a model; the runtime is built the first time a model loads.
+- **`core/inference` is the one door**, so the core's knowledge of model code sits in one package, and every import of it is visibly lazy.
+- **The shared modules are standard library only**, because a training stage, the remote agent's frames and the engines all use them without the core's pydantic models.
+- **Engines import no other engine**: shared code goes into `nn` or `runtime`, where it is tested once.
+
+### One operation, one core method
+
+Each operation has exactly one core method, taking and returning `Record` models (`mizuoto/core/record.py`). Routes and commands parse the input, call it and shape the output. Listing presets, for example:
+
+```python
+# mizuoto/api/routers/presets.py
+@router.get("", operation_id="list_presets")
+def list_presets(services: ServicesDep, model: str | None = None) -> list[Preset]:
+    return services.presets.list_presets(model)
+
+# mizuoto/cli/commands/presets.py
+with open_services() as services:
+    presets = services.presets.list_presets(model)
+    if json_output:
+        print_json(presets)
+```
+
+So the API's JSON has the same shape as the CLI's `--json`. `Record` sets `json_schema_serialization_defaults_required`: defaulted fields are required in the output schema, and the generated TypeScript types match what the server sends.
+
+## Assembly: `build_services()`
+
+`build_services()` in `mizuoto/core/context.py` builds every service in dependency order and returns the `Services` dataclass:
+
+| Field | Class | Responsibility |
+| --- | --- | --- |
+| `settings` | `SettingsService` | `settings.toml`, `MIZUOTO_` environment overrides, resolved folders |
+| `events` | `LocalEventBus` | In-process publish/subscribe |
+| `db` | `Database` | `mizuoto.db` (SQLite, numbered migrations) |
+| `compute` | `ComputeService` | Device probe (nvidia-smi and friends, no torch), memory holders, release (after running out of memory: every GPU) |
+| `jobs` | `JobService` | Queue, named resources, persisted requests, retry, job workers |
+| `engines` | `EngineRegistry` | Engine manifests (`core/engines/manifests/*.toml`), licence acceptance, each engine's availability |
+| `inference` | `InferenceService` | The native runtime (built lazily), which engines are implemented here, their extras and trainers |
+| `runtime` | `RuntimeService` | One engine per (engine, device), here or on a remote host; `loaded()` gives a model's `EngineHandle`; unloading, the idle reaper, the doctor |
+| `models` | `ModelService` | Catalogue, shared assets, downloads, verify, import |
+| `audio` | `AudioService` | Uploads, references (registered by content) |
+| `outputs` | `OutputService` | Every synthesized file and its provenance |
+| `presets` | `PresetService` | Parameter presets |
+| `asr` | `AsrService` | Transcripts through the `asr` engine, cached by audio SHA-256 and model |
+| `tts` | `TtsService` | Planning, `speak` / `convert` / `edit` jobs, streaming |
+| `voices` | `VoiceService` | The voice library (folders), fit, design, export/import |
+| `datasets` / `training` | `DatasetService` / `TrainingService` | Datasets, experiments and the train job |
+| `projects` | `ProjectService` | Long-form projects: cast, chapters, lines and takes |
+| `remote` | `RemoteService` | Remote hosts running `mizuoto agent` |
+
+Cross references (`runtime.remote`, `runtime.model_options = models.load_options`, `models.before_remove = runtime.unload_model`, `engines.inference`, `voices.tts`…) are attached after construction, which keeps the constructors free of cycles. Last, a settings listener is registered: any change to `engines.<id>.*` unloads that engine's models (`runtime.unload_engine`; the next request loads them with the new settings), a change to `remote.hosts.*` ends the sessions with the old host, and `settings_changed` and `engines_changed` are published.
+
+| | The server (`mizuoto webui`) | The command line and Python |
+| --- | --- | --- |
+| Entry | `build_services(start_background=True)`, kept on `app.state.services`; routes get it through `ServicesDep` | The `open_services()` context manager (the CLI's through `cli/output.py`), built once per command and closed after |
+| Background | `jobs.start()` (the scheduler thread), `runtime.start()` (the idle reaper and throttled `runtime_changed` events) | None |
+| Jobs | `jobs.submit()` queues; the scheduler runs by resources | `jobs.run_now()` runs in the foreground on the calling thread, Ctrl+C cancels; models are unloaded in `Services.close()` |
+
+Tests build fully isolated services with `environ=` (instead of `os.environ`), `data_dir=` and `settings_overrides=` (`make_services` in `tests/conftest.py`). The dummy engine runs in the test's own process, as every engine does.
+
+## The path of a request
+
+Clicking **Speak** in the web UI:
+
+<Mermaid chart={`sequenceDiagram
+    participant B as Browser
+    participant R as routers/tts.py
+    participant T as TtsService
+    participant J as JobService
+    participant RS as RuntimeService
+    participant H as EngineHandle (LocalHandle)
+    participant E as EventBus / SocketBridge
+
+    B->>R: POST /api/v1/tts/speak
+    R->>T: speak(SpeakRequest)
+    T->>T: plan(): check model, licence, language, voice, params against the manifest
+    T->>J: submit("speak"), resources engine:engine:device and gpu:device
+    J-->>B: Job (queued)
+    J->>RS: job thread: loaded(ModelRef, device, dtype, options)
+    RS-->>J: EngineHandle (the model loads first if needed)
+    J->>H: prepare_voice (once per voice cache key)
+    J->>H: synthesize(task, EngineRequest)
+    loop every AudioChunk the generator yields
+        H-->>J: float32 samples, segment
+    end
+    J->>J: assemble, normalise, resample, encode, record the Output
+    J->>E: job_updated, outputs_added
+    E-->>B: socket.io push`} />
+
+Step by step:
+
+1. **Plan before the queue.** `TtsService.plan()` checks the model's state, whether the engine is enabled and available, the licence, text, language, voice mode, references, parameters and device against the manifest, all before any job exists (GPU memory is not estimated: a model always tries to load); an error comes back at once with its code.
+2. **The job.** `speak` holds `engine:<engine>:<device>` (capacity 1: a loaded engine serves one request at a time) and `gpu:<device>` when the device is not the CPU. The request is stored as JSON, so **retry** re-plans it after a restart.
+3. **The model.** `RuntimeService.loaded(ModelRef(id, engine, variant, path), device, dtype, options, request)` returns the model's `EngineHandle`: a `LocalHandle` for this process, a `RemoteEngineHandle` for a device named `<host>/<device>`. It loads the model first unless it is loaded, after unloading others beyond `compute.max_resident_models`.
+4. **The voice.** With a reference, `prepare_voice` writes the engine's voice state (prompt codes, embeddings) into the voice cache once per key, and later requests pass the files as `VoiceSpec.cache`.
+5. **Synthesis.** `synthesize(task, request)` is a generator of `AudioChunk`s (float32 mono numpy samples, a sample rate, a segment index). The job drains it chunk by chunk (and hands each chunk to a `StreamSink` when the client streams); closing the generator stops the engine. One `SynthesisTask` per segment, or one batched task.
+6. **The output.** The segments are joined with the segment pause, normalised, resampled to the output rate, encoded (PyAV) and recorded as an `Output` with the applied parameters, timings (load, first chunk, total, RTF) and licence tags.
+
+**REST is the truth; the socket only pushes.** `SocketBridge` (`mizuoto/api/sockets.py`) subscribes to the `EventBus`, hands each event from the job thread to the event loop with `call_soon_threadsafe`, and emits it under its event name. Events carry snapshots, never live objects.
+
+The same path has a few more entrances, all ending in `TtsService`'s one planning and one job: streamed output (a `StreamSink`: the WebSocket `/api/v1/tts/stream`, `POST /tts/speak?stream=true`, `mizuoto speak --stream`), streamed text input (a `TextFeed`, for variants with `stream_text_input`), voice conversion and speech editing (the `convert` and `edit` jobs), and the OpenAI-compatible `POST /v1/audio/speech` (`TtsService.from_openai` maps the model, voice, `instructions`, `speed` and format onto a `SpeakRequest`). The protocols and examples are in [HTTP API](/docs/advanced-api).
+
+## The door to model code: `core/inference`
+
+Everything the core knows about model code is in `mizuoto/core/inference/`:
+
+| Module | Role |
+| --- | --- |
+| `tasks.py` | The task types engines take and give (`SynthesisTask`, `VoiceSpec`, `LoadSpec`, `AudioChunk`, `Description`, `OptionSpec`…), standard-library dataclasses re-exported by `runtime.engine`; the core builds them at module level without loading the runtime |
+| `service.py` | `InferenceService`: what is installed. An engine is available when torch imports and its implementation is registered (the built-in `BUILTIN`, or the `mizuoto.engines` entry points); otherwise `missing(engine)` names what is not (`torch`, `mizuoto-fishspeech`, `mizuoto-indextts`). Extras and trainers' needs are probed with `importlib.util.find_spec`, without importing torch. The native runtime is built when the first model loads |
+| `runtime.py` | `RuntimeService`: one engine per (engine, device); `loaded(ModelRef, device, dtype, options, request)` gives a model's `EngineHandle`; at most `compute.max_resident_models` models resident, the idle reaper, release after running out of memory, clearing a device before training, the doctor |
+| `engine.py`, `local.py` | `EngineHandle` and `EngineRequest` (cancel event, timeout, streamed-text queue, progress callback; it comes back with `applied`, `warnings`, `timings`); `LocalEngine` / `LocalHandle` call the engine in this process. For a device named `<host>/<device>` a `RemoteEngine` session from `core/remote` takes its place, called the same way |
+| `models.py` | Report models: `RuntimeStatus`, `LoadedModelInfo`, `DoctorReport`… |
+
+A handle's methods are `prepare_voice`, `synthesize` / `convert` / `edit` (generators: the engine runs only inside `next()`, each step with the request context bound and `torch.inference_mode()` entered) and `call(op, payload)` (ASR's `transcribe`, Fish Speech's `codec_*`, `mizuoto.snapshot`). Loading runs outside inference mode. The details are in [Runtime](/docs/development-runtime).
+
+## The engine registry and manifests
+
+An engine has two parts: a **manifest** (`mizuoto/core/engines/manifests/<id>.toml`, package data shipped in the wheel) and an **implementation** (a subclass of `mizuoto.runtime.engine.Engine`).
+
+- The manifest holds the variants and capabilities, the common parameters' mapping, engine options and load options, the model catalogue (each model's pinned repository revision; file sizes and SHA-256 in `manifests/files/*.files.json`), shared assets (`[[assets]]`), the licence and the training methods (`[training.<method>]`). From manifests alone the host lists engines, validates requests and renders parameter forms, without importing torch.
+- `EngineRegistry` (`core/engines/registry.py`) loads and validates the manifests, keeps licence acceptance, and reports each engine `available` / `missing` through `InferenceService`. `params.py` checks common parameters (`None` means the engine's own default; Mizuoto never imposes one), `languages.py` canonicalises language codes, `licences.py` holds the licence texts.
+- The implementations' registry is in `runtime/engine.py`: built-in engines are listed in `BUILTIN` (`id → module:Class`), other distributions register through the entry-point group `mizuoto.engines`. Entry points are read once per process, so installing an engine package means restarting Mizuoto.
+- An engine's `OPTION_SCHEMA` must equal its manifest's `[options]`, and `Engine.DEVICES` its manifest's `devices` (`tests/core/test_engines.py` checks both); the engine's `detect_variant()` (files only, no torch) gives the same variant as `core/models/detect.py`, which the host uses when importing a model.
+
+How to write an engine is in [Adding an engine](/docs/development-engine).
+
+## Models, shared assets and licences
+
+- **Models.** Catalogue models download into `models/<engine>/<model>/`; `model.json` is written last and lists the files. The state is `missing`, `partial` (a folder without `model.json`, or a shared asset it needs is missing), `installed`, `corrupt` (a size differs or verification failed) or `downloading`. A `model_download` job (resource `io`) fetches with `downloads.concurrency` threads into `<file>.part`, resumes with Range, checks size and SHA-256, and tries the sources in order (`downloads.source` first, then Hugging Face, hf-mirror, ModelScope; the mirror first with `downloads.repository = "mizuoto-model"`); a file one source lacks comes from the next. `import_model` identifies the engine and variant from the files, verifies SHA-256 when the sizes match a catalogue model, and otherwise registers a user model `<engine>/<name>`.
+- **Shared assets** (a manifest's `[[assets]]`) are files several models of one engine share, kept in `models/_assets/<engine>/<name>/` with `asset.json`; they download with the first model that needs them, or alone. Archive parts are verified and unpacked in place. Engines get them as `LoadSpec.options["assets"]` (id → folder).
+- **Licences.** A `licence.gated` engine (Fish Speech, IndexTTS) needs `engines.<id>.accepted_licence == "<licence id>@<version>"` before its models and assets download and before it speaks; the full text ships with the package (`manifests/licences/`). `requires_consent` makes cloning need a consent statement, `trains_others = false` keeps its outputs out of other engines' training data, and `notice` is shown under results. Every output carries licence tags.
+
+## Voices
+
+A voice is `voices/<slug>/voice.json` plus `references/<sha256>.flac` (mono, at the clip's own rate). The folders are the truth and the list is a scan; delete goes to the trash. The kinds are `reference`, `designed` (a design result, its clip the primary reference), `preset` (one model's preset speaker) and `trained`.
+
+- `fit_voice(voice, model, variant)` answers whether and how a model can use a voice: the mode (`preset`, `design`, `clone`, `clone_no_transcript`), what it still needs (`transcribe`, `trim`), warnings, or why it cannot. Synthesis and the UI's voice picker both use it.
+- **Voice caches.** After loading the model, the job calls `prepare_voice` once per key into `voices/<slug>/cache/<engine>/<model>/<key>/` and records `cache.json`; one-off references go to `cache/voices/…`. The key hashes (model, model revision, the references' SHA-256 and transcripts, voice mode, Mizuoto's version), so upgrading Mizuoto rebuilds the caches once.
+- **A voice's own weights** (`Voice.weights[engine]`): an engine whose manifest has `[weights]` roles (GPT-SoVITS's `gpt` and `sovits`) can carry a fine-tune of the voice, kept in `weights/<engine>/` and exported and imported with the voice; its version comes from the files, and it is used when it equals the variant's `weights_version`.
+- A missing transcript is transcribed first when `tts.auto_transcribe` is on and ASR is ready (cached by audio SHA-256 and model in the `transcripts` table, and saved into the voice); otherwise the model's `clone_no_transcript` is used, or the request fails with `capability_not_supported` and the install command.
+
+## Remote hosts
+
+An engine whose device is `<host>/<device>` runs on that host's `mizuoto agent`. The agent is a whole Mizuoto: its own data folder, models and engines, in its own process.
+
+- The protocol version is `AGENT_PROTOCOL = 2`. At `hello` the token is compared with `hmac.compare_digest` and the protocol checked; a host and an agent of different protocols refuse each other with an upgrade hint.
+- One TCP connection (optionally TLS) is a session for one (engine, device): `open`, `load`, `prepare_voice`, `synthesize`, `convert`, `edit`, `call`, `unload`, `status` one after another; `cancel` and `text` at any time. Frames are length-prefixed JSON or binary (`core/remote/frames.py`, standard library only).
+- Files a request names (references, voice caches, weights) cross once by SHA-256 (`have` / `put`, 8 MB parts); the agent keeps them in `cache/remote/files` and prunes those unused for 30 days. The folder a `prepare_voice` writes comes back file by file. The agent beats every 5 s.
+- Model states and engine availability are the agent's (reports cached 15 s); training refuses a remote engine.
+
+Usage is in [Remote hosts](/docs/advanced-remote); the client side in [Runtime](/docs/development-runtime).
+
+## Settings
+
+`SettingsService` owns `settings.toml` (in the data folder, or in `MIZUOTO_CONFIG_DIR` / `config_dir`). The model is in `mizuoto/core/settings/models.py`, with the sections `server`, `paths`, `compute`, `downloads`, `tts`, `engines.<id>`, `training`, `outputs` and `remote`.
+
+- Environment variables with the `MIZUOTO_` prefix and `__` between levels override the file, e.g. `MIZUOTO_SERVER__PORT=8000`. `MIZUOTO_DATA_DIR` and `MIZUOTO_CONFIG_DIR` are the exceptions: they choose folders.
+- A host application can pin values with `settings_overrides`.
+- The file is checked for outside changes every second; every change, wherever it came from, reaches the `on_keys_change` listeners as dotted keys (`changed_keys`).
+- Keys the model does not know are ignored when the file is read.
+
+What each setting means is in [Configuration](/docs/cli-config).
+
+## The data folder and compatibility
+
+The data folder defaults to `mizuoto` in the platform's user data folder (`~/.local/share/mizuoto` on Linux, under `%APPDATA%` on Windows, under `~/Library/Application Support` on macOS); `MIZUOTO_DATA_DIR` puts it elsewhere. It holds `models/` (with `_assets/`), `voices/`, `outputs/`, `datasets/`, `experiments/`, `projects/`, `cache/` (with `scratch/<engine>/`, the requests' scratch folders), `uploads/`, `logs/`, `jobs/` (job logs), `server.json` (the running server's address and process id) and `mizuoto.db`. Most folders can be moved with `paths.*`.
+
+<Callout type="info" title="Folders are the truth">
+Installed models, voices, datasets, experiments and projects are folders with JSON sidecars (`model.json`, `voice.json`, `dataset.json`, `experiment.json`, `project.json`), not rows: nothing queries them, and a folder scan cannot drift from the files. The database (`mizuoto/core/db/database.py`: one shared connection, WAL mode, `PRAGMA user_version` counting the migrations run, migrations append-only) keeps what is queried: jobs (with their request JSON and owning process id), outputs (with applied parameters, timings and licence tags), audio files, transcripts, presets and client state.
+</Callout>
+
+What is on disk carries over an upgrade like this:
+
+- Model folders and the catalogue's file manifests, voices (folders, references, weights), outputs, datasets, experiments, projects and presets stay valid as they are. Only the files a manifest lists are verified, so old files a manifest dropped do no harm.
+- `settings.toml` keeps its keys; one that a version renames or removes is ignored. The database only gains migrations.
+- Voice caches are keyed by Mizuoto's version and rebuilt on first use after an upgrade.
+- A host and its remote agents must speak the same protocol version and refuse each other otherwise.
+- A job records its process; opening the data folder marks only jobs whose process is gone `interrupted`, so a second command does not interrupt a render in progress.
+
+## Events
+
+Each event in `mizuoto/core/events/models.py` is a `Record` with an `__event_name__`: `job_updated`, `job_log`, `jobs_cleared`, `outputs_added` / `outputs_removed`, `voices_changed`, `models_changed`, `presets_changed`, `engines_changed`, `runtime_changed` (the loaded models and the engines' states, as `RuntimeStatus`), `compute_changed`, `settings_changed`, `datasets_changed`, `projects_changed`, `experiments_changed`, `train_metrics`. `EventBase.get_events()` collects every subclass; `mizuoto/api/openapi.py` writes them into the OpenAPI schema, from which the UI types its socket.
+
+`LocalEventBus.publish()` calls each handler synchronously on the publishing thread; a subscriber that must run elsewhere (an asyncio loop) hands the event over itself. `RuntimeService` publishes `runtime_changed` at most every 0.5 s.
+
+## Jobs and named resources
+
+Every long operation is a job. Services register a factory with `jobs.register(kind, factory)` when they are built; the factory turns a request (plain JSON) into a `JobSpec`:
+
+```python
+@dataclass
+class JobSpec:
+    title: str
+    run: Callable[[JobContext], dict[str, Any] | None]
+    resources: frozenset[str] = frozenset({"cpu"})
+    steps: list[JobStep] = field(default_factory=list)
+    priority: int = 0          # higher runs first; previews use 10
+    group: str | None = None   # micro-batching: one job can run its group together
+    payload: Any = None
+    exclusive: frozenset[str] = frozenset()  # resources taken whole: training takes gpu:<device>, whatever compute.gpu_jobs allows
+```
+
+The registered kinds are `speak`, `voice_prepare`, `convert`, `edit`, `engine_op`, `transcribe`, `model_download`, `asset_download`, `dataset_prepare`, `train`, `project_render` and `project_export`.
+
+Resources have names and capacities. The scheduler runs a job only when every resource it needs has room; otherwise the job is `waiting`, with `waiting_for` naming the full one:
+
+| Resource | Capacity | Used by |
+| --- | --- | --- |
+| `cpu` | Half the cores | The default; dataset preparation; a training run on the CPU |
+| `io` | 4 | Model and asset downloads |
+| `gpu:<device>` | `compute.gpu_jobs` | Inference and training on that device; a job waiting for it can be **run anyway** (`run_anyway`) |
+| `inference` | `compute.inference_jobs` | Every synthesis job (`speak`, `convert`, `edit`), on any engine and device; a micro-batch is one job |
+| `engine:<engine>:<device>` | 1 | A loaded engine serves one request at a time; a training run holds it too |
+| `project:<id>` | 1 | A project's render (which submits ordinary speak jobs) |
+
+`JobContext` is what a running job reports through and checks for cancellation: `progress`, `step`, `message`, `log`, `transfer` (download speed over a 5 s window), `check_cancel`, `cancel_event` (passed to the engine as `EngineRequest.cancel`), `run_worker(WorkerTarget, …)` (a job worker, such as a training stage, whose JSON-lines events it reads; any output line resets the watchdog), and `adopt` / `complete` / `fail` / `release` for micro-batching. A job records its process id; opening the data folder marks only jobs whose process is gone `interrupted`.
+
+### Micro-batching
+
+With `tts.micro_batch` on, `TtsService._batch_group()` gives a speak job a `JobSpec.group` when the variant has the `batch` capability with `max_batch > 1`, the request has one segment, no seed (a batch draws its random numbers differently) and does not stream. The group is a hash of everything but the text. Just before calling the engine, the running job calls `JobContext.adopt(max_batch - 1)`, which takes the oldest queued jobs of its group, and sends one `SynthesisTask` whose `texts` hold every text; the engine yields text *i*'s chunks with `segment = i`, the job stores one output per job and ends the adopted ones with `complete()` / `fail()`. If the batched call fails, they are `release()`d to the queue and each runs on its own.
+
+## Errors and exit codes
+
+`mizuoto/core/errors.py` holds every error type. Each class carries `code`, `http_status` and `exit_code`, and both front ends translate mechanically: the API turns any `MizuotoError` into `{"code", "message", "detail"}` (`mizuoto/api/errors.py`); the CLI turns it into its exit code and logs `detail["hint"]` as a second line (`cli/factory.report_error`). The code strings are in `mizuoto/core/codes.py` (standard library only), so engines and training stages raise `EngineError(message, detail, code=codes.…)` without pydantic, and the core rebuilds the class with `error_from_code()`.
+
+| Exception | `code` | HTTP | Exit |
+| --- | --- | --- | --- |
+| `MizuotoError` (base) | `internal_error` | 500 | 1 |
+| `NotFoundError` | `not_found` | 404 | 2 |
+| `ConflictError` / `BusyError` | `conflict` / `busy` | 409 | 3 |
+| `InvalidPathError` | `invalid_path` | 400 | 4 |
+| `ValidationError` | `invalid_input` | 400 | 4 |
+| `CapabilityError` | `capability_not_supported` | 422 | 4 |
+| `ParameterError` | `parameter_not_supported` / `parameter_out_of_range` | 422 | 4 |
+| `ReferenceInvalidError` | `reference_invalid` | 422 | 4 |
+| `LanguageError` | `language_not_supported` | 422 | 4 |
+| `LicenceError` | `licence_not_accepted` | 403 | 5 |
+| `NotLocalError` (API only, `mizuoto/api/deps.py`) | `not_local`: reading server paths, revealing files and the like are open only to a browser on the server's own machine | 403 | 4 |
+| `ModelMissingError` | `model_missing` | 409 | 7 |
+| `EnvMissingError` | `engine_not_installed`: a package the engine needs (torch, a gated engine's distribution) is missing | 409 | 7 |
+| `AssetMissingError` | `asset_missing` | 409 | 7 |
+| `DeviceError` | `device_unavailable` | 409 | 8 |
+| `ComputeError` | `compute_unavailable` | 503 | 9 |
+| `WorkerError` | `worker_failed`: a training stage's process died, or a remote agent stopped answering | 502 | 10 |
+| `EngineError` | `engine_error` | 500 | 10 |
+| `OperationTimeoutError` | `timeout` | 504 | 11 |
+| `DownloadError` | `download_failed` | 502 | 12 |
+| `InstallError` | `install_failed` | 500 | 13 |
+| `RemoteError` | `remote_unavailable` | 502 | 14 |
+| `CancelledError` | `cancelled` | 499 | 130 |
+
+`detail["reason"]` of `compute_unavailable` tells `out_of_memory` from `no_device`. Job workers' process exit codes follow their own convention (`codes.EXIT_*`): `EXIT_RETRY = 75` asks to be run again, `EXIT_CANCELLED = 130` means cancelled.

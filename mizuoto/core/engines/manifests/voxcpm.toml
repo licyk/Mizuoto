@@ -1,0 +1,362 @@
+# VoxCPM.
+id = "voxcpm"
+title = "VoxCPM"
+description = "OpenBMB's tokenizer-free TTS: continuous speech latents generated patch by patch. VoxCPM2 clones a voice with or without a transcript, designs one from a description, takes style instructions and speaks 30 languages at 48 kHz; VoxCPM 0.5B and 1.5 clone Chinese and English."
+devices = ["cuda", "rocm", "xpu", "mps", "cpu"]
+languages = ["ar", "my", "zh", "da", "nl", "en", "fi", "fr", "de", "el", "he", "hi", "id", "it", "ja", "km", "ko", "lo", "ms", "no", "pl", "pt", "ru", "es", "sw", "sv", "tl", "th", "tr", "vi"]
+
+[upstream]
+url = "https://github.com/OpenBMB/VoxCPM"
+commit = "cce58a5b59303c9bd63d12f23afe6a49a4a80c59"
+
+[licence]
+id = "apache-2.0"
+name = "Apache License 2.0 (code and weights)"
+url = "https://github.com/OpenBMB/VoxCPM/blob/main/LICENSE"
+
+# -- variants -------------------------------------------------------------------------
+# Upstream does not split long text, so Mizuoto segments it. No language tag reaches the model: VoxCPM2 reads the
+# text as it is (Chinese dialects through an instruction).
+
+[variants.v2]
+title = "VoxCPM2"
+sample_rate = 48000
+capabilities = ["clone", "clone_no_transcript", "voice_design_freeform", "instruct", "auto_voice", "seed", "stream_audio"]
+stream_granularity = "token"
+
+[variants.v2.reference]
+min_seconds = 1.0
+max_seconds = 30.0
+min_sample_rate = 16000
+
+[variants.v1_5]
+title = "VoxCPM 1.5"
+sample_rate = 44100
+languages = ["zh", "en"]
+capabilities = ["clone", "auto_voice", "seed", "stream_audio"]
+stream_granularity = "token"
+
+[variants.v1_5.reference]
+min_seconds = 1.0
+max_seconds = 30.0
+min_sample_rate = 16000
+
+[variants.v1]
+title = "VoxCPM 0.5B"
+sample_rate = 16000
+languages = ["zh", "en"]
+capabilities = ["clone", "auto_voice", "seed", "stream_audio"]
+stream_granularity = "token"
+
+[variants.v1.reference]
+min_seconds = 1.0
+max_seconds = 30.0
+min_sample_rate = 16000
+
+# -- common parameters ----------------------------------------------------------------
+
+[params.num_steps]
+target = "inference_timesteps"
+type = "int"
+min = 1
+max = 100
+default = 10
+help = "Euler steps of the local diffusion per patch: more is cleaner and slower."
+
+[params.guidance_scale]
+target = "cfg_value"
+min = 0.0
+max = 10.0
+step = 0.1
+default = 2.0
+help = "Classifier-free guidance: higher follows the text and the voice more closely."
+
+[params.text_normalization]
+target = "normalize"
+type = "bool"
+default = false
+help = "Write out numbers, dates and symbols (wetext) before speaking."
+
+[params.max_new_tokens]
+target = "max_len"
+type = "int"
+min = 16
+max = 4096
+default = 4096
+help = "At most this many latent patches (VoxCPM2: 40 ms each; the text's length caps it further)."
+
+[params.seed]
+target = "seed"
+type = "int"
+min = 0
+max = 4294967295
+
+[params.segment_silence_ms]
+target = "pause"
+type = "int"
+min = 0
+max = 5000
+default = 120
+
+# -- engine options -------------------------------------------------------------------
+
+[options.min_len]
+type = "int"
+default = 2
+min = 0
+max = 100
+help = "Patches generated before the model may stop."
+
+[options.retry_badcase]
+type = "bool"
+default = true
+help = "Generate again (with the next seed) when the speech runs far longer than the text; not when streaming."
+
+[options.retry_badcase_max_times]
+type = "int"
+default = 3
+min = 1
+max = 10
+help = "Attempts at most, the first included."
+
+[options.retry_badcase_ratio_threshold]
+type = "float"
+default = 6.0
+min = 1.0
+max = 20.0
+step = 0.5
+help = "Patches per text token from which a result counts as a bad case."
+
+[options.reference_prefix]
+type = "bool"
+default = true
+variants = ["v2"]
+help = "With a transcript, also give the clip as an isolated reference (upstream's demo: best similarity); off: continuation only."
+
+# -- models ---------------------------------------------------------------------------
+
+[[models]]
+id = "voxcpm/2"
+variant = "v2"
+title = "VoxCPM2"
+description = "2B parameters, 30 languages, voice design and controllable cloning, 48 kHz."
+vram_mb = 6500
+recommended = true
+files = { hf = "openbmb/VoxCPM2", modelscope = "OpenBMB/VoxCPM2", include = ["config.json", "model.safetensors", "audiovae.pth", "tokenizer.json", "tokenizer_config.json"], manifest = "voxcpm-2.files.json" }
+
+[[models]]
+id = "voxcpm/1.5"
+variant = "v1_5"
+title = "VoxCPM 1.5"
+description = "0.6B, Chinese and English cloning at 44.1 kHz."
+vram_mb = 3000
+files = { hf = "openbmb/VoxCPM1.5", modelscope = "OpenBMB/VoxCPM1.5", include = ["config.json", "model.safetensors", "audiovae.pth", "tokenizer.json", "tokenizer_config.json"], manifest = "voxcpm-1.5.files.json" }
+
+[[models]]
+id = "voxcpm/0.5b"
+variant = "v1"
+title = "VoxCPM 0.5B"
+description = "The first VoxCPM: Chinese and English cloning at 16 kHz."
+vram_mb = 2500
+files = { hf = "openbmb/VoxCPM-0.5B", modelscope = "OpenBMB/VoxCPM-0.5B", include = ["config.json", "pytorch_model.bin", "audiovae.pth", "tokenizer.json", "tokenizer_config.json"], manifest = "voxcpm-0.5b.files.json" }
+
+# -- training -------------------------------------------------------------------------
+# Upstream's scripts/train_voxcpm_finetune.py with conf/<model>/voxcpm_finetune_{all,lora}.yaml. A hyperparameter left
+# at 0 takes the recipe's value for the base model (VoxCPM 0.5B and 1.5: 2000 steps, batches of 16; VoxCPM2: 1000
+# steps, batches of 2 accumulated 8 times, gradients clipped at 1).
+
+[training.full]
+title = "Fine-tune the model"
+description = "Upstream's full fine-tuning (train_voxcpm_finetune.py): every weight of the model trained further on the dataset, saved as a new model. Upstream suggests minutes to hours of one speaker; a GPU is all but required (VoxCPM2 needs about 40 GB of memory)."
+export = "model"
+min_seconds = 30.0
+stages = [
+    { id = "prepare", title = "Read the clips", help = "Each clip at the VAE's rate and its text's tokens; clips too long for a batch are dropped.", uses = ["batch_size", "max_batch_tokens"] },
+    { id = "train", title = "Train", uses = ["steps", "learning_rate", "batch_size", "grad_accumulation", "warmup_steps", "weight_decay", "max_grad_norm"] },
+    { id = "export", title = "Export the model", uses = ["preview_text"] },
+]
+
+[training.full.hyperparams.steps]
+type = "int"
+default = 0
+min = 0
+max = 1000000
+group = "basic"
+help = "Optimiser steps (0: the recipe's 2000, or 1000 for VoxCPM2)."
+
+[training.full.hyperparams.learning_rate]
+type = "float"
+default = 0.00001
+min = 0.0
+max = 0.01
+group = "basic"
+help = "Upstream fine-tunes at 1e-5."
+
+[training.full.hyperparams.batch_size]
+type = "int"
+default = 0
+min = 0
+max = 256
+group = "basic"
+help = "Clips per batch (0: the recipe's 16, or 2 for VoxCPM2); lower it when memory runs out."
+
+[training.full.hyperparams.grad_accumulation]
+type = "int"
+default = 0
+min = 0
+max = 128
+help = "Batches per optimiser step (0: the recipe's 1, or 8 for VoxCPM2)."
+
+[training.full.hyperparams.warmup_steps]
+type = "int"
+default = 100
+min = 0
+max = 100000
+help = "Steps of learning-rate warm-up before the cosine decay."
+
+[training.full.hyperparams.weight_decay]
+type = "float"
+default = 0.01
+min = 0.0
+max = 1.0
+
+[training.full.hyperparams.max_grad_norm]
+type = "float"
+default = -1.0
+min = -1.0
+max = 100.0
+help = "Gradient clipping (-1: the recipe's, 1.0 for VoxCPM2 and none for the others; 0: none)."
+
+[training.full.hyperparams.max_batch_tokens]
+type = "int"
+default = 8192
+min = 0
+max = 1000000
+help = "A clip longer than this divided by the batch size (text tokens and audio patches) is dropped; 0 keeps all."
+
+[training.full.hyperparams.preview_text]
+type = "str"
+default = ""
+help = "What the preview says (empty: a dataset clip's text)."
+
+[training.full.hyperparams.gradient_checkpointing]
+type = "enum"
+default = "auto"
+choices = ["auto", "off", "blocks", "every:2", "every:4"]
+help = "Keep only each block's input and run it again in the backward pass: less GPU memory for about a third more time, the same results. auto follows Settings › Training › Memory."
+
+[training.lora]
+title = "Fine-tune with LoRA"
+description = "Upstream's LoRA fine-tuning: low-rank adapters on the language models and the local DiT, trained on the dataset and saved with the base model as a new model (applied at load, as upstream does). Much lighter than a full fine-tune."
+export = "model"
+min_seconds = 30.0
+stages = [
+    { id = "prepare", title = "Read the clips", help = "Each clip at the VAE's rate and its text's tokens; clips too long for a batch are dropped.", uses = ["batch_size", "max_batch_tokens"] },
+    { id = "train", title = "Train", uses = ["steps", "learning_rate", "batch_size", "grad_accumulation", "warmup_steps", "weight_decay", "max_grad_norm", "lora_rank", "lora_alpha", "lora_dropout", "lora_lm", "lora_dit", "lora_proj"] },
+    { id = "export", title = "Export the model", uses = ["preview_text"] },
+]
+
+[training.lora.hyperparams.steps]
+type = "int"
+default = 0
+min = 0
+max = 1000000
+group = "basic"
+help = "Optimiser steps (0: the recipe's 2000, or 1000 for VoxCPM2)."
+
+[training.lora.hyperparams.learning_rate]
+type = "float"
+default = 0.0001
+min = 0.0
+max = 0.1
+group = "basic"
+help = "Upstream's LoRA recipes train at 1e-4."
+
+[training.lora.hyperparams.batch_size]
+type = "int"
+default = 0
+min = 0
+max = 256
+group = "basic"
+help = "Clips per batch (0: the recipe's 16, or 2 for VoxCPM2); lower it when memory runs out."
+
+[training.lora.hyperparams.grad_accumulation]
+type = "int"
+default = 0
+min = 0
+max = 128
+help = "Batches per optimiser step (0: the recipe's 1, or 8 for VoxCPM2)."
+
+[training.lora.hyperparams.warmup_steps]
+type = "int"
+default = 100
+min = 0
+max = 100000
+help = "Steps of learning-rate warm-up before the cosine decay."
+
+[training.lora.hyperparams.weight_decay]
+type = "float"
+default = 0.01
+min = 0.0
+max = 1.0
+
+[training.lora.hyperparams.max_grad_norm]
+type = "float"
+default = -1.0
+min = -1.0
+max = 100.0
+help = "Gradient clipping (-1: the recipe's, 1.0 for VoxCPM2 and none for the others; 0: none)."
+
+[training.lora.hyperparams.max_batch_tokens]
+type = "int"
+default = 8192
+min = 0
+max = 1000000
+help = "A clip longer than this divided by the batch size (text tokens and audio patches) is dropped; 0 keeps all."
+
+[training.lora.hyperparams.lora_rank]
+type = "int"
+default = 0
+min = 0
+max = 512
+group = "basic"
+help = "The adapters' rank (0: the recipe's 8, or 32 for VoxCPM2)."
+
+[training.lora.hyperparams.lora_alpha]
+type = "float"
+default = 0.0
+min = 0.0
+max = 1024.0
+help = "The adapters' scale alpha (0: the recipe's 16, or 32 for VoxCPM2); the update is scaled by alpha / rank."
+
+[training.lora.hyperparams.lora_dropout]
+type = "float"
+default = 0.0
+min = 0.0
+max = 0.9
+
+[training.lora.hyperparams.lora_lm]
+type = "bool"
+default = true
+help = "Adapters on the language models' attention."
+
+[training.lora.hyperparams.lora_dit]
+type = "bool"
+default = true
+help = "Adapters on the local DiT's attention."
+
+[training.lora.hyperparams.lora_proj]
+type = "bool"
+default = false
+help = "Adapters on the projections between the modules too."
+
+[training.lora.hyperparams.preview_text]
+type = "str"
+default = ""
+help = "What the preview says (empty: a dataset clip's text)."
+
+[training.lora.hyperparams.gradient_checkpointing]
+type = "enum"
+default = "auto"
+choices = ["auto", "off", "blocks", "every:2", "every:4"]
+help = "Keep only each block's input and run it again in the backward pass: less GPU memory for about a third more time, the same results. auto follows Settings › Training › Memory."

@@ -1,0 +1,179 @@
+---
+title: "设计参考与决策"
+description: "Mizuoto 的设计从哪里来：骨架的谱系，从 InvokeAI、ani2xcur、Material Design 3 和 ComfyUI 取了什么、没取什么，以及一张写明理由的设计决策表。"
+icon: Compass
+---
+
+Mizuoto 不是从零设计的。它的应用骨架（核心服务、薄的 API 与命令行、随 wheel 发布的 Vue 界面、工具链）来自一系列同源项目，模型运行时借鉴 ComfyUI。本页记录这些来源里哪些被采用、为什么采用、哪些有意没有采用，最后列出塑造了现在这套代码的设计决策及其理由。代码是什么样的，见[整体架构](/docs/development-architecture)。
+
+## 谱系
+
+| 项目 | 是什么 | 留给 Mizuoto 的 |
+| --- | --- | --- |
+| SD Model Hub | Stable Diffusion 模型管理器 | 骨架本身：所有逻辑在 `core`、其上两个薄的入口（FastAPI 与 Typer），`build_services()` 组装服务，`Record` 基类，带 HTTP 状态码与退出码的领域错误，三层设置（宿主覆盖 > 环境变量 > 文件），事件总线与 socket 桥，安全中间件，端口绑定与 `server.json`，嵌入用的 `embed.py`，`scripts/dev.py`，以及用测试守住的分层规则 |
+| Hanaikada | 同一骨架上的 AI 图片浏览器 | 证明了骨架可以换领域复用；它的图片元数据与索引部分与 Mizuoto 无关 |
+| rvc-next | 同一骨架上的 RVC 变声应用 | 机器学习负载下的骨架：带命名资源和优先级的任务队列、持久化的请求与重试、任务 worker 与 JSON 行事件、显存持有者与内存不足后的释放、音色库、训练实验与阶段指纹；Material 3 前端（`theme/`、`ui/`、动效、浮层、外壳、store、i18n、规则测试）；文档站 |
+| Mizuoto 0.1 | 每个引擎一个 Python 环境和一个 worker 进程，上游代码原样 vendoring | 能力按变体声明、通用参数加引擎选项的两层参数、许可门控、音色与模型目录、参数映射；以及作为对照基准的行为（git 标签 `v1-engine-workers`） |
+| Mizuoto 0.2 | 一个环境，所有引擎在仓库内原生实现，运行在仿 ComfyUI 的运行时上 | 现在的代码 |
+
+骨架是 GPL-3.0 的，Mizuoto 也是（`GPL-3.0-only`）。需要接受许可的两个引擎因为许可证不同而单独发布（见下文的决策表）。
+
+## 来自 InvokeAI：FastAPI 加单页应用
+
+InvokeAI 的前后端结构是这个骨架的出发点。采用的部分：
+
+- **一份 OpenAPI 模式作为契约。** 每个路由有显式的 `operation_id`，输入输出都是 pydantic 模型。`mizuoto/api/openapi.py` 把每个事件模型和一个 `ServerEvents` 映射（事件名 → 模式）加进模式，所以 socket 推送的负载和 REST 一样有类型。`scripts/dev.py typegen` 用 `openapi-typescript` 生成 `schema.d.ts` 并提交，`typegen-check` 在 CI 里发现接口与类型的偏差。
+- **命令走 REST，socket 只推送。** socket.io 挂在 `/ws`，只从服务器发往客户端。REST 是事实来源，事件只用来修补或作废客户端的查询缓存；重连后重新拉取，丢掉的事件不会让界面过期。
+- **耗时工作是任务加事件**，请求本身很快返回；进度和取消随之而来。
+- **阻塞工作不进事件循环。** 访问磁盘和数据库的路由是普通 `def`（在线程池里运行）；任务线程上的事件用 `call_soon_threadsafe` 交给事件循环。
+- **薄路由加服务层**，每种资源一个路由模块，界面一侧每种资源一个查询模块，两边一一对应。
+- **相对地址加开发代理**：前端代码在开发和生产中使用同样的相对 URL。
+- 界面偏好经 `/api/v1/client-state/{key}` 存到服务器，跟随用户换浏览器。
+
+有意不同的部分：
+
+| InvokeAI | Mizuoto | 原因 |
+| --- | --- | --- |
+| 静态的服务定位器 `ApiDependencies.invoker` | `app.state.services` 加 FastAPI 依赖 `ServicesDep` | 路由的依赖写在签名里，测试可以传入隔离的服务；不需要图节点共享服务 |
+| 多用户：JWT、滑动刷新、socket 房间、按用户脱敏 | 一个可选的访问令牌（Bearer 头、`mizuoto_token` cookie 或 `?token=`），加上 Host 检查（防 DNS 重绑定）和改变状态的请求的 Origin 检查；绑定到非回环地址时启动会警告 | 本地使用的单用户或可信小团队；复杂度只在多租户时才值得 |
+| 运行时解析 `/openapi.json` 生成节点模板 | 只在构建时生成类型 | 后端类型不由用户扩展 |
+| React、Redux Toolkit、RTK Query | Vue 3、Pinia、TanStack Vue Query、`openapi-fetch` | 沿用骨架已有的前端 |
+
+## 前端随 wheel 发布
+
+- `mizuoto/webui/` 既是 Vue 项目，也是一个 Python 包。Vite 把界面构建到 `mizuoto/webui/dist/`；`dist/` 不入库，作为包数据进入 wheel，所以用户 `pip install` 之后不需要 Node 或 bun。
+- 服务器通过包的 `__path__` 找到 `dist/`（`api/static.py` 的 `web_dist_dir()`），源码检出、已安装的 wheel 和容器里都是同一行代码。`SPAStaticFiles` 最后挂载，只接收 API、socket 和文档都不匹配的路径。没有构建产物时记一条警告，只提供 API，这是后端开发的正常状态。
+- 未知路径只在请求接受 `text/html` 时回退到 `index.html`（客户端路由在刷新和深链接时有效），拼错的资源或 API 路径仍得到 404。`assets/` 下带内容哈希的文件缓存一年（`immutable`），其余（包括 `index.html`）`no-cache`，升级后浏览器不会拿旧界面配新后端。
+- 构建时 `base: './'`，运行时 `api/baseUrl.ts` 从入口脚本的 URL 推出部署根（最后一个 `/assets/` 之前的部分），路由用 hash 历史；同一份构建在根路径和 `--api-prefix` 子路径下都能用，无需改写。
+- 界面在 wheel 之前构建：`scripts/build_wheels.py` 先 `bun install --frozen-lockfile` 和 `bun run build`，再构建 sdist 和 wheel；Docker 用单独的 bun 阶段构建，最终镜像里没有 Node 工具链。见[发布](/docs/development-release)。
+
+## 端口选择
+
+服务器用**绑定**而不是连接来判断端口是否可用（`mizuoto/core/net/ports.py` 的 `bind_first_free_port`）：
+
+- 在配置的主机和端口上创建并绑定监听套接字；`EADDRINUSE` 或 `EACCES`（覆盖 Windows 的保留端口段）时试下一个端口，最多 20 次，从不超过 65535；全部失败时给出明确的错误。Windows 上用 `SO_EXCLUSIVEADDRUSE`，其他平台用 `SO_REUSEADDR`。
+- 绑定好的套接字直接交给 uvicorn（`server.run(sockets=[sock])`），检查和监听之间没有空档。
+- 严格模式（`server.strict_port`、`--strict-port`）在端口被占用时失败而不顺延，适合端口映射固定的反向代理和容器。
+- 实际端口告诉其他程序：标准输出打印一行 `SERVER_READY url=…`，数据目录写入 `server.json`（主机、端口、URL、进程号），关闭时删除。`mizuoto runtime` 等命令据此找到正在运行的服务器。前端从自己被加载的 URL 推出后端地址，不需要额外通知。
+
+## 命令行：Typer 的注册方式
+
+命令行沿用 ani2xcur 的 Typer 布局：
+
+- `mizuoto/cli/app.py` 的 `get_app()` 在一个函数里注册所有命令和命令组，名字和帮助文字写在注册处；这个文件就是整个命令行的目录。命令函数（`cli/commands/*.py`）是不带装饰器的普通函数。
+- 应用在函数里构建而不是在导入时，测试每次拿到全新的应用；`tests/cli/test_cli.py` 的 `EXPECTED_TREE` 比较整棵命令树，漏注册会失败。
+- `typer_factory()`（`cli/factory.py`）给每个应用和命令组同样的设置；`DebugOptionTyper`、`DebugTyperCommand` 和 `AlphabeticalMixedGroup` 让 `--debug` 在每一层都可用，帮助按字母排序。对 Typer 私有模块 `typer._click` 的导入只在这个文件里，`typer` 的版本上限也锁住了（`<0.28`）。
+- `main()` 自己处理错误：`MizuotoError` 打印消息和 `detail["hint"]` 并以它的退出码退出，Ctrl+C 退出码 130，其他异常打印回溯并退出码 1。
+- 重依赖在命令函数里导入，`mizuoto version` 不加载 FastAPI 或 torch。`python -m mizuoto` 与 `mizuoto` 等价。
+
+## Material Design 3 的分层
+
+界面采用 Material Design 3，分两层：
+
+- **令牌层**（`mizuoto/webui/src/theme/`）：颜色角色 `--md-sys-color-*` 由 `@material/material-color-utilities` 的 Tonal Spot 方案从一个种子色（默认 `#4f6b3a`）生成，有亮色、暗色和三档对比度；字号、圆角、动效、状态层都是 Google 官方名字的 CSS 变量。界面里只用令牌，不写字面颜色。
+- **组件层**（`src/ui/`）：`@material/web` 已有的组件（按钮、图标按钮、FAB、复选框、筛选 chip、分隔线、文本框、滑块、进度条、开关、标签页）包一层项目自己的 Vue 组件，其余（外壳、导航、对话框、侧栏、菜单、卡片、提示条、步骤条、图表、波形……）用令牌自己实现。业务代码只从 `@/ui` 导入。
+
+`@material/web` 处于维护模式、组件集不再增长，包装层把这个风险限制在 `src/ui/` 内：某个组件出问题时在这里替换，业务代码不变。MUI 没有采用（它实现的是 Material Design 2），M3 Expressive 也没有采用。图标用 Lucide（只在 `ui/icons.ts` 导入），字体 Roboto Flex 随包自带，不从外部加载。细节见 [Web UI](/docs/development-webui#material-design-3-的分层)。
+
+## 来自 ComfyUI：运行时
+
+模型运行时（`mizuoto/runtime/`）借鉴 ComfyUI。ComfyUI 是模式来源，不是被采用的代码库：Mizuoto 保留自己的服务、任务、API、命令行和界面，代码注释写明每处对应的 ComfyUI 概念。
+
+| 取自 ComfyUI | 在 Mizuoto 里 |
+| --- | --- |
+| 设备与内存管理（`model_management.py`）：设备探测、可用显存（驱动空闲加上 torch 已缓存未使用的）、显存预留、硬件精度表、`load_models_gpu` 与最近使用顺序、部分加载与动态显存、内存不足后卸载全部空闲模型、锁页内存预算 | `runtime/device.py`（`DeviceService`）、`runtime/manager.py`（`ModelManager`）、`runtime/policy.py`、`runtime/stream.py`，都是服务对象而不是模块全局变量。见[显存管理](/docs/development-memory) |
+| 模型包装（`ModelPatcher`） | `runtime/handle.py` 的 `ModelHandle`，去掉了扩散相关的部分：整体或部分放置、按单元流式加载权重、主机副本 |
+| `ops` 注入（`comfy.ops`） | `runtime/ops.py`：`ops.default` 不做随机初始化（构建快、加载不抽随机数），`ops.cast` 在每次前向时把权重转成输入的精度和设备 |
+| 注意力选择（一个签名、SDPA 为默认、可选后端带保护地导入并回退） | `runtime/accel/`：每个注意力调用点经 `accel.attention`，后端由 `compute.attention` 选择，自检、约束检查和回退。见[注意力加速](/docs/development-acceleration) |
+| 加载与识别（safetensors 或 `weights_only` 的 pickle、键名替换） | `runtime/loading.py`，默认严格加载；识别先看模型目录的明确元数据（大小与 SHA-256），再由各引擎的 `detect_variant` 只看文件判断 |
+| 仓库内的语言模型代码（不依赖 transformers 的 Qwen/Llama 家族、带种子的生成器、逐 token 中断） | `runtime/lm/`（Qwen2/3 解码器，复现 transformers 的数值）、`runtime/sampling.py`、`runtime/graphs.py` |
+| 音频信号处理的移植（不依赖 torchaudio） | `mizuoto/nn/dsp/`，与 torchaudio、librosa、Whisper 逐比特一致 |
+
+没有采用的：
+
+- **模块级可变全局变量**（显存状态、已加载模型列表、中断标志、深处读取的命令行参数）。Mizuoto 用 `Services` 和设置对象，设备和取消令牌显式传递，因为 CPU 任务和 GPU 任务可以同时运行。
+- **巨大的文件和长 `if` 链**（例如按顺序匹配的模型识别表）。每个引擎在自己的包里有自己的识别、配置和构建。
+- **节点图和自定义节点生态。** 一个有类型的引擎注册表加入口点就够了，需要接受许可的引擎正是这样注册的。
+- 扩散相关的机制（采样器、钩子、ControlNet），以及把语言模型当作文本编码器运行的做法。
+- **对 `comfy-aimdo`（原生显存分配器）和锁定版本的 `comfy-kitchen` 的依赖。** 显存管理用 torch 自己的分配器实现。
+- **有意偏离参考实现的数值**（例如默认启用融合的 RMSNorm）。Mizuoto 默认路径上保持参考数学，融合等会改变比特的做法只作为可选项。
+
+## 设计决策
+
+下表列出塑造了现在这套代码的决策：决定了什么，为什么。
+
+### 环境与发行
+
+| 决策 | 理由 |
+| --- | --- |
+| 一个 Python 环境，所有引擎在仓库内原生移植，在服务器自己的进程里运行；不 vendoring 上游代码 | 引擎之间的依赖冲突（transformers 4.51 到 5.3、torch 2.3 与 2.8、numpy 1 与 2）都来自上游对库内部接口的使用和版本锁，而不是模型本身的需要。移植后一个 torch、一套依赖即可，引擎环境、worker 进程和进程间协议都不再需要 |
+| 进程内运行的代价（原生代码崩溃会拖垮服务器、无法靠进程退出释放内存）由规则补偿 | 原生代码不改全局状态（有测试），每个请求后有残留检查，卸载真正释放内存；需要进程隔离时可以把引擎放到远程 agent 上；训练仍在子进程里 |
+| Fish Speech 和 IndexTTS 作为独立发行包（`mizuoto-fishspeech`、`mizuoto-indextts`），装进同一环境，经入口点组 `mizuoto.engines` 注册 | 它们的许可（Fish Audio Research License、bilibili Model Use License）覆盖代码，移植版是衍生作品，并入 GPL-3.0 的 `mizuoto` 会冲突 |
+| 所有发行包版本同步；需要接受许可的包依赖不锁版本的 `mizuoto` | wheel 一起构建、一起安装，测试保证版本相同 |
+| torch 是依赖，但构建（CUDA、ROCm、XPU、MPS、CPU）由用户先装；`mizuoto doctor` 给出适合本机的安装命令 | 正确的构建取决于硬件和驱动，包管理器无法替用户选择 |
+| 运行时不导入 transformers、onnxruntime、torchaudio、librosa | 它们带来版本冲突、平台限制或全局状态；分词用 `tokenizers`、`tiktoken`、`sentencepiece`，ONNX 模型的权重由仓库内的协议缓冲区读取器转换成 torch 模块 |
+| 只在平台受限的地方保留可选附加依赖：`gptsovits-ja`（`pyopenjtalk==0.4.1`，只有源码包）、`gptsovits-ko`、`mizuoto-indextts[ja]` | 必需的依赖在 CI 覆盖的每个平台上都有 wheel；缺少附加依赖时，相应语言的文本以 `capability_not_supported` 失败并给出安装命令 |
+| 日语用 `pyopenjtalk==0.4.1` 而非 pyopenjtalk-plus；简繁转换用 C++ 的 `opencc==1.4.2`；中文分词用 `jieba` 代替 `jieba_fast` | pyopenjtalk-plus 改了 OpenJTalk 的规则（18% 的日语句子结果不同），纯 Python 的 OpenCC 结果不同；`jieba` 与 `jieba_fast` 词典相同、结果一致，且是纯 Python |
+| 可选的注意力包（flash-attn、xFormers、SageAttention）只作为后端，带版本检查、自检和回退，从不是依赖 | 它们只支持部分平台；默认路径必须处处可用且结果不变 |
+| 一个 Docker 镜像包含服务器、界面和所有引擎；需要接受许可的引擎用 `GATED=1` 构建 | 用户只需选择 torch 的构建；许可仍需在运行时接受 |
+
+### 引擎与结果一致性
+
+| 决策 | 理由 |
+| --- | --- |
+| 每个移植与参照逐采样一致（CPU、fp32、相同种子）；参照是 Mizuoto 0.1 实际调用上游的方式，而不是上游 demo 的调用 | 用户的输出不应因换了实现而改变；0.1 有意与上游不同的地方（如 F5-TTS 按顺序而不是在线程池里生成多段）以 0.1 为准 |
+| 先复现上游的怪癖，再把修正作为单独的改动；无产品价值的怪癖也复现（如 IndexTTS-1.5 在非 fp16 时不用 KV 缓存） | 修正和移植混在一起会让对照失败变得含糊；行为一致是默认，偏差要有理由并记录 |
+| 训练器复现上游配方，包括训练与推理不一致的地方（Qwen3-TTS 的训练不经 `text_projection`、Fish Speech 的训练不对码本嵌入做 1/√11 缩放） | 这样损失、学习率和导出的权重与上游逐字节一致，导出的模型在两种实现里都能加载 |
+| CosyVoice 以 torch 2.8 上运行的参照为基准 | 它自己的 torch 2.3.1 与 2.8 之间采样就会分叉 |
+| 语音识别用原生的 Whisper large-v3-turbo，复现 0.1 的管线（30 秒重叠窗口、5 束搜索、窗口内的 seek 循环、合并） | 转写完全相同，不依赖 CTranslate2 和 cuDNN 的版本搭配 |
+| Whisper 编码器在 ASR 引擎里，不与 CosyVoice 的语音分词器共享 | s3tokenizer 的注意力（缩放方式、掩码）是另一种计算 |
+| CosyVoice 和 IndexTTS 的 CAM++ 不合并为一个共享资源；IndexTTS 2 与 2.5 各自文件夹里的 Qwen 情感模型也不合并 | 合并会让 CosyVoice 需要接受门控引擎的许可；情感模型在各模型仓库的文件夹里，共享意味着移动已安装模型的文件 |
+| 模型目录只下载引擎会读的文件 | 例如 CosyVoice-BlankEN 的权重和 IndexTTS-2.5 从不读取的语义编解码器，徒占空间 |
+| GPT-SoVITS 用普通的 T2S，把它的每一步作为 CUDA 图重放，而不用上游的 CUDA 图版 T2S | 上游的加速版会改变结果；重放即时执行的内核结果不变 |
+| VoxCPM 的文本规范化用 wetext 0.1.2 自带的 FST，随包发布 | 上游锁定 wetext 0.1.2，它的 FST 与 CosyVoice、IndexTTS 用的都不同 |
+| VoxCPM 的参照是上游自己的包 | Mizuoto 0.1 没有 VoxCPM |
+| 能力静态声明（如 Qwen3-TTS 0.6B CustomVoice 是没有 `instruct` 的独立变体 `custom_voice_lite`） | 能力在加载模型之前就要知道，用于规划和界面 |
+| OmniVoice 只支持按属性设计音色 | 模型只接受封闭的属性词表 |
+| 不提供 VoxCPM 的 ZipEnhancer 降噪、时间戳和 CUDA `optimize`；目录里没有 Fish Speech S2 Pro int8 | 前者需要另一个模型和 ModelScope 管线，且在上游默认的生成里都关闭；后者没有公开的 int8 仓库 |
+| F5-TTS 的许可登记为 `cc-by-nc-4.0`，不设门控，输出带标签 | 那是权重的许可；非商用限制通过标签和提示告知 |
+
+### 运行时与内存
+
+| 决策 | 理由 |
+| --- | --- |
+| 估算从不拒绝加载：放不下时部分加载、流式加载，最低限度也会尝试；只有真正分配失败才算错误，之后卸载所有 GPU 上的空闲模型 | 与 ComfyUI 相同；估算来自文件大小，拒绝会挡住本来能运行的请求 |
+| 流式加载用单元和层上的 forward 钩子临时替换 `param.data`，不改 `ops` 层的代码 | 覆盖所有调用路径（`layer.forward_step`、`vae.decode`、自定义层），模型整体在设备上时没有任何开销 |
+| 只有线性层和卷积层的权重流式加载，嵌入从不 | 码本嵌入常通过 `.weight` 直接读取（余弦搜索、`F.embedding`）；ComfyUI 同样只流式加载它的 ops 层 |
+| GPT-SoVITS 的 T2S 整体常驻设备 | 它的块经 `prompt` / `step` 直接读取融合的投影权重；模型只有 150 MB |
+| 只为部分解码器提供分块回退（ASR、GPT-SoVITS、F5-TTS 的 Vocos、IndexTTS 2 的 BigVGAN、VoxCPM 的 VAE） | Qwen3-TTS 的编解码器本来就分块解码；CosyVoice 的 HiFT 带有贯穿全句的相位，分块会破坏它；其余都很短 |
+| 训练前估算显存超出时只在日志里警告并给出能放下的预设，不拒绝 | 估算来自文件大小，未在 GPU 上校准 |
+| 训练显存工具只提供保持结果的手段和少数轻微改变结果的手段；不提供 Adafactor 或内存不足时拆分 micro-batch | 后者改变训练配方，超出预设的承诺 |
+| `compute.max_resident_models` 全局限制常驻模型数（默认 3），最久未用的空闲模型先卸载 | 所有引擎的模型共用一个进程和它的内存 |
+| 主机探测设备时不导入 torch：先问 nvidia-smi、rocm-smi / amd-smi 和平台信息，只在 torch 的构建可能看到工具漏掉的 GPU 时才用子进程 | 列出设备、提供界面不应付出导入 torch 的一两秒 |
+| CUDA 图默认开启；`torch.compile` 默认关闭 | CUDA 图重放同样的内核，结果相同；编译会改变浮点结果且首次请求要付出编译时间 |
+| 注意力的 `causal` 采用 SDPA 的 `is_causal`（左上对齐），右下对齐经 `MaskInfo` 表达；dropout 用 torch 的默认生成器 | 每个调用点按上游原样传 `is_causal`，CosyVoice 的流式文本步骤依赖左上对齐；唯一带 dropout 的调用点（GPT-SoVITS T2S 训练）调用的是 SDPA 自己 |
+| 推理时注意力策略按请求的每一步绑定；训练阶段在整个进程里绑定 | autograd 在自己的线程上运行反向传播和检查点的重算 |
+| 外部注意力内核直接调用，不包装成 Mizuoto 自己的 `torch.library` 自定义算子 | flash-attn 和 xFormers 自己注册算子和反向；SageAttention 没有反向，从不在 autograd 下使用 |
+
+### 任务、接口与数据
+
+| 决策 | 理由 |
+| --- | --- |
+| 命名资源与容量（`gpu:<设备>`、`engine:<引擎>:<设备>`、`inference`、`cpu`、`io`、`project:<id>`），而不是一个全局 GPU 锁 | 按引擎和设备串行化同时覆盖推理和训练，不同设备上的工作可以并行 |
+| 一次训练运行是一个 `train` 任务，各阶段是它的步骤，每个阶段一个子进程；阶段在清单里静态声明 | 整个运行持有一次设备；界面和指纹不必运行任何东西就知道有哪些阶段 |
+| 任务 worker 的任何一行输出都重置看门狗，训练阶段另外每 10 秒发心跳 | 会打日志的阶段显然还活着，不打日志的也有心跳 |
+| 只有只差文本、只有一段、没有种子的请求才合并为微批次 | 批处理时随机数的取法不同；音色和参数是每次调用的 |
+| 项目的每一行都作为普通的 speak 任务渲染，版本是 `line` 类型的输出，按请求指纹判断是否过期 | 一条合成路径服务所有功能，微批处理和每个引擎自然可用 |
+| 远程 agent 拥有自己的模型和引擎；请求按内容（SHA-256）传文件；训练只在本机 | 一台机器上的路径在另一台机器上没有意义 |
+| 模型镜像（`mizuoto-model`）是排在官方来源前面的一个来源，按 Mizuoto 存放文件的方式排列 | 不完整的镜像也能用，缺的文件逐个从官方补齐并校验同样的 SHA-256 |
+| 许可的接受也是下载权重和共享资源的前提；许可全文随包发布，命令行也能读 | 许可覆盖权重；接受之前读者必须看到全文 |
+| 音色、模型、数据集、实验、项目是带 JSON 的文件夹，列表就是扫描；数据库只存需要查询的东西 | 文件夹是事实来源，扫描不会与文件不一致；数百个音色的扫描只需毫秒 |
+| 参考音频以 `cache/refs/<sha256>.wav`（16 位 WAV）交给引擎，音色里存 FLAC | 每个引擎都读 16 位 WAV；按内容登记避免重复 |
+| 缺少转写时，规划阶段先查缓存，否则在任务里转写；没有 ASR 时退回 `clone_no_transcript` 或报错并提示 | 规划不应等待模型，但结果要可用 |
+| `mizuoto doctor [引擎]` 一处检查 torch 构建与硬件、各引擎缺什么、附加依赖、0.1 的旧环境 | 机器与引擎之间的所有障碍在一个地方说清 |
+| `mizuoto runtime` 先问正在运行的服务器（`server.json`），没有才报告本进程 | 命令行进程里没有加载模型，服务器里才有 |
+| 读服务器路径、在文件夹中显示等只对服务器本机的浏览器开放 | 隧道或反向代理的访客不能浏览服务器的磁盘 |
+| 流式音频的二进制消息就是裸 PCM16，其余都是 JSON 文本；浏览器播放器不设缓冲上限 | 二进制消息总是音频；模型跟不上时暂停等待，而不是丢掉语音 |
+| 生成 OpenAPI 时不传 `separate_input_output_schemas=False` | 传了会让每个有默认值的响应字段在生成的类型里变成可选；拆分只影响 `SpeakRequest` |
+| 新增错误码 `download_failed`（退出码 12）和 `install_failed`（13） | 它们各自需要自己的提示和退出码 |
+| 一个名字不能既是命令又是命令组：`mizuoto env vars`；参数预设用 `--use-preset/-P`，`--preset` 是预设说话人 | Typer 的限制；`--preset` 先被说话人占用 |

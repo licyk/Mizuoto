@@ -1,0 +1,278 @@
+# OmniVoice.
+id = "omnivoice"
+title = "OmniVoice"
+description = "Xiaomi's diffusion language model TTS: cloning from a clip, voices designed from attributes (gender, age, pitch, accent, Chinese dialects), or its own voice, in over 600 languages, with non-verbal tags such as [laughter]."
+devices = ["cuda", "rocm", "xpu", "mps", "cpu"]
+languages = ["*"]
+
+[upstream]
+url = "https://github.com/k2-fsa/OmniVoice"
+commit = "08be0b4ccbac3e13e374e86fbfead4b4cac343e2"
+
+[licence]
+id = "apache-2.0"
+name = "Apache License 2.0"
+url = "https://github.com/k2-fsa/OmniVoice/blob/master/LICENSE"
+
+[variants.v0]
+title = "OmniVoice"
+sample_rate = 24000
+capabilities = ["clone", "voice_design", "auto_voice", "inline_tags", "pronunciation", "speed", "duration", "batch", "long_text", "seed"]
+inline_tags = [
+    "[laughter]", "[sigh]", "[confirmation-en]", "[question-en]", "[question-ah]", "[question-oh]", "[question-ei]",
+    "[question-yi]", "[surprise-ah]", "[surprise-oh]", "[surprise-wa]", "[surprise-yo]", "[dissatisfaction-hnn]",
+]
+max_batch = 8
+
+[variants.v0.design_attributes]
+gender = ["male", "female"]
+age = ["child", "teenager", "young adult", "middle-aged", "elderly"]
+pitch = ["very low pitch", "low pitch", "moderate pitch", "high pitch", "very high pitch"]
+style = ["whisper"]
+accent = ["american accent", "british accent", "australian accent", "chinese accent", "canadian accent", "indian accent", "korean accent", "portuguese accent", "russian accent", "japanese accent"]
+dialect = ["河南话", "陕西话", "四川话", "贵州话", "云南话", "桂林话", "济南话", "石家庄话", "甘肃话", "宁夏话", "青岛话", "东北话"]
+
+[variants.v0.reference]
+min_seconds = 1.0
+max_seconds = 20.0
+min_sample_rate = 16000
+
+# -- common parameters ----------------------------------------------------------------
+
+[params.num_steps]
+target = "num_step"
+type = "int"
+min = 4
+max = 64
+default = 32
+help = "Iterative decoding steps: fewer is faster, more is cleaner."
+
+[params.guidance_scale]
+target = "guidance_scale"
+min = 0.0
+max = 10.0
+step = 0.1
+default = 2.0
+
+[params.temperature]
+target = "class_temperature"
+min = 0.0
+max = 2.0
+step = 0.05
+default = 0.0
+approximate = true
+help = "Token sampling temperature; 0 picks the most likely token."
+
+[params.speed]
+target = "speed"
+min = 0.5
+max = 2.0
+step = 0.05
+default = 1.0
+
+[params.duration]
+target = "duration"
+min = 0.5
+max = 600
+step = 0.1
+help = "Make each segment exactly this many seconds long (overrides speed)."
+
+[params.seed]
+target = "seed"
+type = "int"
+min = 0
+max = 4294967295
+
+# -- engine options -------------------------------------------------------------------
+
+[options.t_shift]
+type = "float"
+default = 0.1
+min = 0.0
+max = 1.0
+step = 0.01
+help = "Time-step shift; smaller weights the low signal-to-noise steps."
+
+[options.layer_penalty_factor]
+type = "float"
+default = 5.0
+min = 0.0
+max = 20.0
+step = 0.5
+help = "How strongly earlier codebook layers unmask first."
+
+[options.position_temperature]
+type = "float"
+default = 5.0
+min = 0.0
+max = 20.0
+step = 0.5
+
+[options.denoise]
+type = "bool"
+default = true
+help = "Ask for clean speech even from a noisy reference."
+
+[options.preprocess_prompt]
+type = "bool"
+default = true
+help = "Trim silence from the reference clip and level it."
+
+[options.postprocess_output]
+type = "bool"
+default = true
+help = "Trim silence from the result, fade it in and out, and pad its edges."
+
+[options.audio_chunk_duration]
+type = "float"
+default = 15.0
+min = 0.0
+max = 60.0
+step = 1.0
+group = "hidden"
+
+[options.audio_chunk_threshold]
+type = "float"
+default = 30.0
+min = 0.0
+max = 600.0
+step = 1.0
+group = "hidden"
+
+# -- models ---------------------------------------------------------------------------
+
+[[models]]
+id = "omnivoice/omnivoice"
+variant = "v0"
+title = "OmniVoice"
+description = "One model for cloning, attribute design and its own voice; the Higgs Audio v2 tokenizer is included."
+vram_mb = 5000
+recommended = true
+files = { hf = "k2-fsa/OmniVoice", modelscope = "k2-fsa/OmniVoice", manifest = "omnivoice.files.json" }
+
+[training.full]
+title = "Fine-tune the model"
+description = "Upstream's fine-tuning recipe (examples/run_finetune.sh): audio tokens, then the whole model trained further, saved as a new model. Hours of speech for a new language or style; a GPU with 24 GB or more."
+export = "model"
+min_seconds = 30.0
+stages = [
+    { id = "tokens", title = "Audio tokens", help = "The clips through the model's audio tokenizer (extract_audio_tokens).", uses = [] },
+    { id = "train", title = "Train", uses = ["steps", "learning_rate", "batch_tokens", "grad_accumulation"] },
+    { id = "export", title = "Export the model", uses = ["preview_text"] },
+]
+
+[training.full.hyperparams.steps]
+type = "int"
+default = 1000
+min = 1
+max = 1000000
+group = "basic"
+help = "Optimiser updates (upstream's examples: 5000)."
+
+[training.full.hyperparams.learning_rate]
+type = "float"
+default = 0.00001
+min = 0.0000001
+max = 0.01
+group = "basic"
+help = "Upstream: 1e-5 for a full fine-tune."
+
+[training.full.hyperparams.batch_tokens]
+type = "int"
+default = 8192
+min = 256
+max = 131072
+group = "basic"
+help = "Audio tokens per batch (25 per second); lower it when the GPU runs out of memory."
+
+[training.full.hyperparams.grad_accumulation]
+type = "int"
+default = 1
+min = 1
+max = 64
+help = "Batches per optimiser update."
+
+[training.full.hyperparams.workers]
+type = "int"
+default = 2
+min = 1
+max = 16
+help = "Data-loading processes (upstream's loaders need at least one)."
+
+[training.full.hyperparams.preview_text]
+type = "str"
+default = ""
+help = "What the preview says (empty: a dataset clip's text)."
+
+[training.full.hyperparams.gradient_checkpointing]
+type = "enum"
+default = "auto"
+choices = ["auto", "off", "blocks", "every:2", "every:4"]
+help = "Keep only each block's input and run it again in the backward pass: less GPU memory for about a third more time, the same results. auto follows Settings › Training › Memory."
+
+[training.lora]
+title = "Fine-tune with LoRA"
+description = "Upstream's LoRA recipe (examples/run_finetune_lora.sh): low-rank adapters on the language model, merged into a new model at export. Lighter than a full fine-tune."
+export = "model"
+min_seconds = 30.0
+stages = [
+    { id = "tokens", title = "Audio tokens", help = "The clips through the model's audio tokenizer (extract_audio_tokens).", uses = [] },
+    { id = "train", title = "Train", uses = ["steps", "learning_rate", "batch_tokens", "grad_accumulation", "lora_rank"] },
+    { id = "export", title = "Merge and export", uses = ["preview_text"] },
+]
+
+[training.lora.hyperparams.lora_rank]
+type = "int"
+default = 16
+min = 1
+max = 256
+help = "The adapters' rank (alpha is twice it, as upstream)."
+
+[training.lora.hyperparams.steps]
+type = "int"
+default = 1000
+min = 1
+max = 1000000
+group = "basic"
+help = "Optimiser updates (upstream's examples: 5000)."
+
+[training.lora.hyperparams.learning_rate]
+type = "float"
+default = 0.0001
+min = 0.0000001
+max = 0.01
+group = "basic"
+help = "Upstream: 1e-4 for LoRA."
+
+[training.lora.hyperparams.batch_tokens]
+type = "int"
+default = 8192
+min = 256
+max = 131072
+group = "basic"
+help = "Audio tokens per batch (25 per second); lower it when the GPU runs out of memory."
+
+[training.lora.hyperparams.grad_accumulation]
+type = "int"
+default = 1
+min = 1
+max = 64
+help = "Batches per optimiser update."
+
+[training.lora.hyperparams.workers]
+type = "int"
+default = 2
+min = 1
+max = 16
+help = "Data-loading processes (upstream's loaders need at least one)."
+
+[training.lora.hyperparams.preview_text]
+type = "str"
+default = ""
+help = "What the preview says (empty: a dataset clip's text)."
+
+[training.lora.hyperparams.gradient_checkpointing]
+type = "enum"
+default = "auto"
+choices = ["auto", "off", "blocks", "every:2", "every:4"]
+help = "Keep only each block's input and run it again in the backward pass: less GPU memory for about a third more time, the same results. auto follows Settings › Training › Memory."
