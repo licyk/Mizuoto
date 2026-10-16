@@ -176,7 +176,7 @@ def test_english_g2p() -> None:
     assert cleaned_text_to_sequence(g2p.g2p(g2p.text_normalize("The wind was too strong to wind the sail."))) == [
         27, 12, 91, 22, 64, 26, 91, 7, 93, 80, 88, 75, 80, 74, 16, 65, 80, 88, 91, 22, 64, 26, 27, 12, 75, 42, 62, 3,
     ]  # fmt: skip
-    assert cleaned_text_to_sequence(g2p.g2p(g2p.text_normalize("The mizuoto whispered through the shinrin forest."))) == [
+    assert cleaned_text_to_sequence(g2p.g2p(g2p.text_normalize("The kodama whispered through the shinrin forest."))) == [
         27, 12, 61, 67, 26, 7, 63, 12, 91, 55, 75, 73, 38, 26, 81, 74, 88, 27, 12, 76, 55, 64, 7, 74, 22, 35, 64, 49, 16, 74, 12, 75, 80, 3,
     ]  # fmt: skip
 
