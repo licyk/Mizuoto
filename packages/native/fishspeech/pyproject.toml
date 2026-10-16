@@ -11,7 +11,7 @@ license = "LicenseRef-Fish-Audio-Research"
 # A separate distribution because the Fish Audio Research License covers this port. It runs inside Mizuoto's own environment and registers itself as an engine.
 # The Mizuoto versions it works with: its code uses Mizuoto's runtime, and its manifest ships in mizuoto. The lower bound is
 # the oldest release with everything it uses (CI tests it); the upper one the next minor, while Mizuoto is 0.x.
-dependencies = ["mizuoto>=0.2.0,<0.3", "tokenizers>=0.20", "safetensors"]
+dependencies = ["mizuoto>=0.2.0,<0.3", "torch>=2.8", "numpy>=1.26,<3", "tokenizers>=0.20", "safetensors"]
 
 [project.entry-points."mizuoto.engines"]
 fishspeech = "mizuoto_fishspeech:FishSpeechEngine"

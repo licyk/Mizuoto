@@ -19,7 +19,7 @@ Mizuoto is one environment: the dependencies of the core, the API, the command l
 | Runtime | torch (≥ 2.8), safetensors, soxr, tokenizers | torch's build is the user's (below); soxr is the resampler librosa calls; tokenizers builds the BPE transformers builds |
 | Text | pypinyin, rjieba, jieba, opencc, kaldifst, inflect, tiktoken, regex, wordsegment, budoux, ToJyutping, fasttext-predict, pyyaml | Many versions are **pinned** (`pypinyin==0.55.0`, `opencc==1.4.2`, `inflect==7.3.1`…): the engines' output depends on them, and another version changes phones and audio |
 
-The licence-gated packages bring a few of their own: `mizuoto-fishspeech` needs tokenizers and safetensors, `mizuoto-indextts` sentencepiece.
+The licence-gated packages bring a few of their own: `mizuoto-fishspeech` needs tokenizers and safetensors, `mizuoto-indextts` sentencepiece. Each also names the packages it imports directly that Mizuoto already brings (torch and numpy; `mizuoto-indextts` also pyyaml and tiktoken), with Mizuoto's bounds, so its dependencies do not rest on Mizuoto's.
 
 ### Optional extras
 

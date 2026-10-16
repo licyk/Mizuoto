@@ -19,7 +19,7 @@ Mizuoto 是一个环境：核心、API、命令行、Web UI 和每个引擎的�
 | 运行时 | torch（≥ 2.8）、safetensors、soxr、tokenizers | torch 的构建由用户选（见下）；soxr 是 librosa 调用的同一个重采样器；tokenizers 构建与 transformers 相同的 BPE |
 | 文本 | pypinyin、rjieba、jieba、opencc、kaldifst、inflect、tiktoken、regex、wordsegment、budoux、ToJyutping、fasttext-predict、pyyaml | 很多版本是**锁定**的（如 `pypinyin==0.55.0`、`opencc==1.4.2`、`inflect==7.3.1`）：引擎的输出依赖这些版本，换版本会改变音素和音频 |
 
-需要接受许可的包各自带少量依赖：`mizuoto-fishspeech` 需要 tokenizers 和 safetensors，`mizuoto-indextts` 需要 sentencepiece。
+需要接受许可的包各自带少量依赖：`mizuoto-fishspeech` 需要 tokenizers 和 safetensors，`mizuoto-indextts` 需要 sentencepiece。它们也写明自己直接导入、Mizuoto 已经带来的包（torch 和 numpy；`mizuoto-indextts` 还有 pyyaml 和 tiktoken），版本范围与 Mizuoto 相同，这样自己的依赖不靠 Mizuoto 的依赖成立。
 
 ### 可选附加依赖
 

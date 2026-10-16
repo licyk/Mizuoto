@@ -14,9 +14,12 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+from collections.abc import Callable
+from types import ModuleType
+from typing import Any
 
 
-def ops(torch, device: str):
+def ops(torch: ModuleType, device: str) -> dict[str, Callable[[Any], Any]]:
     shape = (3, 1000)
     probs = torch.softmax(torch.arange(64, dtype=torch.float32, device=device) / 7.0, dim=0).expand(4, 64).contiguous()
     return {

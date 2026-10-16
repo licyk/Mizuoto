@@ -33,6 +33,7 @@ import sys
 import tempfile
 import time
 import traceback
+from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
@@ -96,7 +97,7 @@ def real_data_dir() -> Path:
     return default_data_dir(os.environ)
 
 
-def copy_voices(s, names: list[str]) -> None:
+def copy_voices(s: Any, names: list[str]) -> None:
     """Library voices a case names (``"voices": [...]``: e.g. one with fine-tuned weights), copied without their caches from
     the workspace's ``voices/`` or else the real data folder's."""
     import shutil
@@ -132,7 +133,7 @@ def _merge(base: dict[str, Any], extra: dict[str, Any]) -> dict[str, Any]:
     return base
 
 
-def build(device: str, data_dir: Path, impl: str = "native", settings: dict[str, Any] | None = None):
+def build(device: str, data_dir: Path, impl: str = "native", settings: dict[str, Any] | None = None) -> Any:
     """Services in ``data_dir`` over the real models; ``impl="reference"`` (the v1 host) also over the real engine environments."""
     build_services = package("core.context").build_services
 
@@ -155,7 +156,7 @@ def build(device: str, data_dir: Path, impl: str = "native", settings: dict[str,
     return s
 
 
-def run_case(s, case: dict[str, Any], table: dict[str, Any]) -> tuple[Any, dict[str, Any]]:
+def run_case(s: Any, case: dict[str, Any], table: dict[str, Any]) -> tuple[Any, dict[str, Any]]:
     models = package("core.tts.models")
     ConvertRequest, EditRequest, SpeakRequest = models.ConvertRequest, models.EditRequest, models.SpeakRequest
     StreamSink = package("core.tts.service").StreamSink
@@ -203,7 +204,7 @@ def run_case(s, case: dict[str, Any], table: dict[str, Any]) -> tuple[Any, dict[
     return Path(out.path), record
 
 
-def _keys(tree: dict[str, Any], prefix: str = ""):
+def _keys(tree: dict[str, Any], prefix: str = "") -> Iterator[str]:
     for k, v in tree.items():
         if isinstance(v, dict):
             yield from _keys(v, f"{prefix}{k}.")
