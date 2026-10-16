@@ -205,9 +205,9 @@ See [Model downloads and mirrors](/docs/advanced-downloads).
 | `tts.normalize` | `peak` | Levelling: `none`, `peak` or `loudness` | **Speech** › **Levelling** |
 | `tts.auto_transcribe` | `true` | Transcribe a reference clip without a transcript (needs the speech recognition model `tts.asr_model` downloaded) | **Speech** › **Transcribe reference clips without a transcript** |
 | `tts.asr_model` | `asr/whisper-large-v3-turbo` | The speech recognition model | **Speech** › **Speech recognition model** |
-| `tts.reference_policy` | `reject` | A reference clip outside the model's length window: `reject` refuses it, `trim` cuts it at its quietest point before the limit (its transcript no longer matches and is dropped) | **Speech** › **A reference clip too long for a model** |
+| `tts.reference_policy` | `trim` | A reference clip outside the model's length window: `trim` cuts it at its quietest point before the limit (its transcript no longer matches and is dropped), `reject` refuses it | **Speech** › **A reference clip too long for a model** |
 | `tts.max_text_chars` | `20000` | The most characters in one request (at least 100) | — |
-| `tts.strict_params` | `true` | Refuse a parameter the model does not take; off: drop it with a warning | **Speech** › **Refuse parameters a model does not take** |
+| `tts.strict_params` | `false` | Refuse a parameter the model does not take; off: drop it with a warning | **Speech** › **Refuse parameters a model does not take** |
 | `tts.model_aliases` | `{}` | Other names for models, for the OpenAI-compatible endpoint: `{"tts-1": "qwen3tts/1.7b-base"}` | — |
 | `tts.micro_batch` | `true` | Requests waiting for the same model that differ only in their text run as one batch, on engines that take one | **Speech** › **Run waiting requests together** |
 

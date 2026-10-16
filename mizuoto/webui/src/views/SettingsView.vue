@@ -92,7 +92,7 @@ const accel = computed(() => {
 const formatOptions = ['wav', 'flac', 'mp3', 'ogg', 'm4a'].map((v) => ({ value: v, label: v.toUpperCase() }));
 const rateOptions = computed(() => [{ value: '', label: t('speak.sampleRateNative') }, ...[16000, 22050, 24000, 44100, 48000].map((r) => ({ value: String(r), label: `${r / 1000} kHz` }))]);
 const normalizeOptions = computed(() => ['peak', 'loudness', 'none'].map((v) => ({ value: v, label: t(`speak.normalizes.${v}`) })));
-const policyOptions = computed(() => ['reject', 'trim'].map((v) => ({ value: v, label: t(`settings.referencePolicies.${v}`) })));
+const policyOptions = computed(() => ['trim', 'reject'].map((v) => ({ value: v, label: t(`settings.referencePolicies.${v}`) })));
 const modelOptions = computed(() => [{ value: '', label: t('common.none') }, ...(models.data.value ?? []).map((m) => ({ value: m.id, label: m.title }))]);
 const asrOptions = computed(() => (models.data.value ?? []).filter((m) => m.engine === 'asr').map((m) => ({ value: m.id, label: m.title })));
 // Training

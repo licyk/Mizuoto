@@ -109,7 +109,10 @@ def test_speak_plan_and_errors(runner):
     app = get_app()
     r = runner.invoke(app, ["speak", "Hi. There.", "-m", "dummy/default", "--plan", "--json"])
     assert r.exit_code == 0 and json.loads(r.stdout)["voice_mode"] == "auto"
-    assert runner.invoke(app, ["speak", "x", "-m", "dummy/default", "-p", "top_k=3"]).exit_code == 4
+    # A parameter the model does not take is dropped with a warning unless --strict asks to refuse it.
+    r = runner.invoke(app, ["speak", "x", "-m", "dummy/default", "-p", "top_k=3", "--plan", "--json"])
+    assert r.exit_code == 0 and "top_k" not in json.loads(r.stdout)["params"]
+    assert runner.invoke(app, ["speak", "x", "-m", "dummy/default", "-p", "top_k=3", "--strict"]).exit_code == 4
     assert runner.invoke(app, ["speak", "x", "-m", "dummy/nope"]).exit_code == 2
     assert runner.invoke(app, ["speak", "x", "-m", "dummy/default", "-O", "fail=error"]).exit_code == 10
 

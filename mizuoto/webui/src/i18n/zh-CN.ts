@@ -594,7 +594,7 @@ export default {
     autoTranscribe: '自动识别没有文本的参考音频',
     asrModel: '语音识别模型',
     referencePolicy: '参考音频对模型来说过长时',
-    referencePolicies: { reject: '拒绝', trim: '裁剪以适配' },
+    referencePolicies: { trim: '裁剪以适配', reject: '拒绝' },
     strictParams: '拒绝模型不接受的参数',
     strictHint: '关闭：忽略这些参数并给出提示。',
     defaultModel: '默认模型',

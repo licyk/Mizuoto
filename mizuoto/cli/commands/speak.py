@@ -52,7 +52,9 @@ def speak(
     sample_rate: Annotated[int | None, typer.Option("--sample-rate", help="Resample the result")] = None,
     batch: Annotated[bool, typer.Option("--batch", help="One output per line of the text")] = False,
     mizuoto_split: Annotated[bool, typer.Option("--split", help="Let Mizuoto split long text, not the engine")] = False,
-    lenient: Annotated[bool, typer.Option("--lenient", help="Drop parameters the model does not take, with a warning")] = False,
+    strict: Annotated[
+        bool | None, typer.Option("--strict/--lenient", help="Refuse parameters the model does not take, or drop them with a warning (default: tts.strict_params)")
+    ] = None,
     use_preset: Annotated[str | None, typer.Option("--use-preset", "-P", help="A parameter preset (mizuoto preset list); --param and --option win over it")] = None,
     stream: Annotated[bool, typer.Option("--stream", help="Write a WAV to stdout as the audio is made (e.g. | ffplay -)")] = False,
     plan_only: Annotated[bool, typer.Option("--plan", help="Show what would happen and stop")] = False,
@@ -107,7 +109,7 @@ def speak(
             engine_options=parse_pairs(option, "--option"),
             output=OutputSpec(format=fmt, sample_rate=sample_rate),
             segmentation="mizuoto" if mizuoto_split else "engine",
-            strict=False if lenient else None,
+            strict=strict,
         )
         if use_preset:
             req = services.presets.apply(use_preset, req)

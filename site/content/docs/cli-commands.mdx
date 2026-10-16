@@ -49,7 +49,7 @@ mizuoto speak [OPTIONS] {text}
 | `--sample-rate <int>` | 把结果重采样到这个采样率 |
 | `--batch` | 每行文本生成一个结果 |
 | `--split` | 由 Mizuoto 而不是引擎切分长文本 |
-| `--lenient` | 丢弃模型不接受的参数并给出警告（默认报错） |
+| `--strict / --lenient` | 拒绝模型不接受的参数（退出码 4），或丢弃并给出警告（默认按 `tts.strict_params`，即丢弃） |
 | `-P, --use-preset <str>` | 参数预设（`mizuoto preset list`）；`--param` 和 `--option` 优先于它 |
 | `--stream` | 边生成边把 WAV 写到标准输出（如 `\| ffplay -`） |
 | `--plan` | 只显示将要执行的计划，不运行 |

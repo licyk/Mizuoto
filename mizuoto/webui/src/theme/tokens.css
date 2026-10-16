@@ -75,11 +75,10 @@
 
   /* Stacking inside the page. A dropdown that lists in place (voice, device) opens over the
      sections but under the page's sticky action footer, which it scrolls clear of rather than
-     covers; a tooltip clears both. What opens over the page (sheets, dialogs, menus, the snackbar)
-     is stacked by ui/layers.ts in the order it opened. */
+     covers. What opens over the page (sheets, dialogs, menus, the snackbar) is stacked by
+     ui/layers.ts in the order it opened; a tooltip is drawn over all of them (tooltipZ). */
   --app-z-dropdown: 2;
   --app-z-page-footer: 3;
-  --app-z-tooltip: 4;
 
   /* Spacing: 4px base unit */
   --app-space-1: 4px; --app-space-2: 8px; --app-space-3: 12px; --app-space-4: 16px;

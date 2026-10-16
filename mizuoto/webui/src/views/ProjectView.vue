@@ -650,7 +650,8 @@ function remove() {
 .who { flex: 0 0 160px; min-width: 0; }
 .text { flex: 1; min-width: 0; }
 .line-actions { display: flex; align-items: center; }
-.dot { flex: 0 0 auto; width: 10px; height: 10px; border-radius: 50%; background: var(--md-sys-color-outline-variant); }
+/* The pane clips at its edge (AxisPanes), so the dot keeps room for the 2px ring it wears while rendering. */
+.dot { flex: 0 0 auto; width: 10px; height: 10px; margin-inline-start: 2px; border-radius: 50%; background: var(--md-sys-color-outline-variant); }
 .dot.rendered { background: var(--md-sys-color-primary); }
 .dot.stale { background: transparent; box-shadow: inset 0 0 0 2px var(--md-sys-color-tertiary); }
 .dot.failed { background: var(--md-sys-color-error); }
@@ -658,9 +659,9 @@ function remove() {
 .chapter { display: flex; flex-direction: column; gap: var(--app-space-3); min-width: 0; }
 /* Under the line's text, the same width: past the state dot and the speaker. */
 .instruct-box { min-width: 0; }
-.instruct { display: flex; align-items: center; gap: var(--app-space-2); min-width: 0; margin-inline-start: calc(10px + var(--app-space-2) + 160px + var(--app-space-2)); }
+.instruct { display: flex; align-items: center; gap: var(--app-space-2); min-width: 0; margin-inline-start: calc(12px + var(--app-space-2) + 160px + var(--app-space-2)); }
 .instruct-icon { flex: none; color: var(--md-sys-color-on-surface-variant); }
-.line-error { margin: 0; margin-inline-start: calc(10px + var(--app-space-2)); color: var(--md-sys-color-error); }
+.line-error { margin: 0; margin-inline-start: calc(12px + var(--app-space-2)); color: var(--md-sys-color-error); }
 .none { display: flex; flex-direction: column; align-items: flex-start; gap: var(--app-space-3); }
 .cast { display: flex; flex-direction: column; gap: var(--app-space-3); min-width: 0; }
 .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(200px, 100%), 1fr)); gap: var(--app-space-3); }

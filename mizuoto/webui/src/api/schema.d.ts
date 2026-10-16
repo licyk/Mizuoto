@@ -5141,10 +5141,10 @@ export interface components {
             asr_model: string;
             /**
              * Reference Policy
-             * @default reject
+             * @default trim
              * @enum {string}
              */
-            reference_policy: "reject" | "trim";
+            reference_policy: "trim" | "reject";
             /**
              * Max Text Chars
              * @default 20000
@@ -5152,7 +5152,7 @@ export interface components {
             max_text_chars: number;
             /**
              * Strict Params
-             * @default true
+             * @default false
              */
             strict_params: boolean;
             /** Model Aliases */

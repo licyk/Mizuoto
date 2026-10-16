@@ -167,11 +167,11 @@ class TtsSettings(Record):
     auto_transcribe: bool = True
     """Transcribe a reference clip without a transcript (needs the asr engine)."""
     asr_model: str = "asr/whisper-large-v3-turbo"
-    reference_policy: Literal["reject", "trim"] = "reject"
-    """What to do with a reference clip outside a model's length window."""
+    reference_policy: Literal["trim", "reject"] = "trim"
+    """What to do with a reference clip outside a model's length window: cut it to fit (the default) or refuse it."""
     max_text_chars: int = Field(default=20000, ge=100)
-    strict_params: bool = True
-    """Refuse a parameter the model does not take (else drop it with a warning)."""
+    strict_params: bool = False
+    """Refuse a parameter the model does not take. Off (the default): drop it with a warning, so a parameter one model lacks does not stop a request."""
     model_aliases: dict[str, str] = Field(default_factory=dict)
     """Other names for models, for the OpenAI-compatible endpoint: ``{"tts-1": "qwen3tts/1.7b-base"}``."""
     micro_batch: bool = True

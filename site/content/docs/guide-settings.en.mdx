@@ -52,8 +52,8 @@ More in [Remote hosts](/docs/advanced-remote).
 | **Levelling** | **Peak** | **Peak**, **Loudness** or **None** |
 | **Transcribe reference clips without a transcript** | on | Fill a missing transcript with speech recognition (when installed) |
 | **Speech recognition model** | Whisper large-v3-turbo | Shown when a speech recognition model is installed |
-| **A reference clip too long for a model** | **Refuse it** | **Refuse it**, or **Cut it to fit** (at the quietest point before the limit; its transcript is dropped) |
-| **Refuse parameters a model does not take** | on | **Off: drop them with a warning.** A value out of range is always refused |
+| **A reference clip too long for a model** | **Cut it to fit** | **Cut it to fit** (at the quietest point before the limit; its transcript is dropped), or **Refuse it** |
+| **Refuse parameters a model does not take** | off | **Off: drop them with a warning.** On: refuse the request. A value out of range is always refused |
 | **Run waiting requests together** | on | See below |
 
 **Run waiting requests together**: requests for the same model and voice that differ only in their text run as one batch, on engines that take one (Qwen3-TTS, GPT-SoVITS, OmniVoice). Only one-segment requests without a seed qualify: just before calling the engine, the running job takes the queued jobs with exactly the same settings along, makes them in one go and stores each one's result; if the batch fails, those jobs go back to the queue to run on their own. Requests with a seed are never joined, since a batch draws random numbers differently. Rendering a [project](/docs/guide-projects#rendering) relies on this to go faster.

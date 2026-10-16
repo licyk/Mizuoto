@@ -73,6 +73,9 @@ export const snackbarZ = computed(() => {
   return z;
 });
 
+/** A tooltip: over every open layer and the snackbar, so a tip shown in a dialog or a menu is never under it. */
+export const tooltipZ = computed(() => Math.max(LAYER_Z.menu, snackbarZ.value, ...zIndexes.value.values()) + 1);
+
 function isInside(layer: Layer, event: Event): boolean {
   const path = event.composedPath();
   const own = elementsOf(layer);

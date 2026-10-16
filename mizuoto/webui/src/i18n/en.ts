@@ -594,7 +594,7 @@ export default {
     autoTranscribe: 'Transcribe reference clips without a transcript',
     asrModel: 'Speech recognition model',
     referencePolicy: 'A reference clip too long for a model',
-    referencePolicies: { reject: 'Refuse it', trim: 'Cut it to fit' },
+    referencePolicies: { trim: 'Cut it to fit', reject: 'Refuse it' },
     strictParams: 'Refuse parameters a model does not take',
     strictHint: 'Off: drop them with a warning.',
     defaultModel: 'Default model',

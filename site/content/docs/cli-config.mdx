@@ -205,9 +205,9 @@ mizuoto webui
 | `tts.normalize` | `peak` | 音量均衡：`none`、`peak` 或 `loudness` | **语音** › **音量均衡** |
 | `tts.auto_transcribe` | `true` | 参考音频没有文本时用语音识别转写（需要下载语音识别模型 `tts.asr_model`） | **语音** › **自动识别没有文本的参考音频** |
 | `tts.asr_model` | `asr/whisper-large-v3-turbo` | 语音识别模型 | **语音** › **语音识别模型** |
-| `tts.reference_policy` | `reject` | 参考音频超出模型的长度范围时：`reject` 拒绝，`trim` 在限制前最安静的位置截断（截断后原文本不再匹配，被丢弃） | **语音** › **参考音频对模型来说过长时** |
+| `tts.reference_policy` | `trim` | 参考音频超出模型的长度范围时：`trim` 在限制前最安静的位置截断（截断后原文本不再匹配，被丢弃），`reject` 拒绝 | **语音** › **参考音频对模型来说过长时** |
 | `tts.max_text_chars` | `20000` | 一次请求的最多字符数（至少 100） | — |
-| `tts.strict_params` | `true` | 拒绝模型不接受的参数；关闭时丢弃并给出警告 | **语音** › **拒绝模型不接受的参数** |
+| `tts.strict_params` | `false` | 拒绝模型不接受的参数；关闭时丢弃并给出警告 | **语音** › **拒绝模型不接受的参数** |
 | `tts.model_aliases` | `{}` | 模型的别名，供 OpenAI 兼容接口使用，如 `{"tts-1": "qwen3tts/1.7b-base"}` | — |
 | `tts.micro_batch` | `true` | 等待同一模型、只有文本不同的请求在支持批处理的引擎上合并为一批运行 | **语音** › **合并等待中的请求** |
 

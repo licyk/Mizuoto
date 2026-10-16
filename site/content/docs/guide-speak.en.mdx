@@ -60,7 +60,7 @@ Most models need the reference clip's text to clone it. When you leave it empty:
 - With **Settings › Speech › Transcribe reference clips without a transcript** on and speech recognition installed, Mizuoto looks in its transcript cache, else transcribes the clip first in the speak job (the plan says **transcribed first**). A library voice keeps the transcript it gets.
 - Without speech recognition, a model that clones without a transcript does so (**Clone (no transcript)**); otherwise you get an error saying how to install speech recognition.
 
-A clip longer than the model allows follows **Settings › Speech › A reference clip too long for a model**: **Refuse it**, or **Cut it to fit** (at the quietest point before the limit; its transcript is then dropped).
+A clip longer than the model allows follows **Settings › Speech › A reference clip too long for a model**: by default **Cut it to fit** (at the quietest point before the limit; its transcript is then dropped), or **Refuse it**.
 
 ## Text
 

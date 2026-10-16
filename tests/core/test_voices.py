@@ -164,6 +164,7 @@ def test_library_voice_transcribed_by_the_job_keeps_it(services, asr, tmp_path):
 def test_trim_policy(services, tmp_path):
     clip = make_clip(tmp_path, "long.wav", 70.0)  # the dummy takes at most 60 s
     req = SpeakRequest(model=MODEL, text="Hi.", voice_spec=VoiceInput(references=[ReferenceInput(path=str(clip), transcript="long")]))
+    services.settings.set_value("tts.reference_policy", "reject")
     with pytest.raises(ReferenceInvalidError) as e:
         services.tts.plan(req)
     assert e.value.detail["reason"] == "too_long"

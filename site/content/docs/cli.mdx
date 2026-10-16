@@ -58,7 +58,7 @@ mizuoto job show j_abc123 --json
 - `speak` 结束后逐行打印结果文件的路径、时长和采样率；结果总是保存在结果文件夹（并出现在 **历史** 中），`-o` 再复制一份到指定位置，扩展名决定格式。
 - `speak --json` 打印 `{"job": …, "outputs": […]}`：完成的任务和它生成的结果记录。
 - `speak --plan` 只检查请求并打印将要执行的计划（模型、设备、音色模式、分段、参数），不运行任何东西。
-- 警告（例如被 `--lenient` 丢弃的参数）以 `warning:` 开头打印在 stderr 上，不会混入 stdout。
+- 警告（例如被丢弃的模型不接受的参数）以 `warning:` 开头打印在 stderr 上，不会混入 stdout。
 
 ## 退出码
 
@@ -161,7 +161,7 @@ mizuoto preset save 慢速 -m f5tts/v1-base -p speed=0.85 -p num_steps=48
 mizuoto speak "……" -m f5tts/v1-base -v 我的声音 -P 慢速
 ```
 
-`-p` 设置通用参数（`temperature`、`top_p`、`top_k`、`repetition_penalty`、`max_new_tokens`、`num_steps`、`guidance_scale`、`speed`、`duration`、`seed`、`text_normalization`、`segment_silence_ms`），`-O` 设置引擎自己的选项；值按 JSON 解析。模型不接受某个参数时默认报错（退出码 4），加 `--lenient` 则丢弃并给出警告。
+`-p` 设置通用参数（`temperature`、`top_p`、`top_k`、`repetition_penalty`、`max_new_tokens`、`num_steps`、`guidance_scale`、`speed`、`duration`、`seed`、`text_normalization`、`segment_silence_ms`），`-O` 设置引擎自己的选项；值按 JSON 解析。模型不接受某个参数时默认丢弃并给出警告，加 `--strict` 则报错（退出码 4）；默认值来自 `tts.strict_params`。
 
 ### 转写、转换与编辑
 

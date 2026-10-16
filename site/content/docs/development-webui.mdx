@@ -67,7 +67,7 @@ mizuoto/webui/src/
 - 只有 `ui/` 下的组件（以及 `theme/tokens.css` 和测试的 `test/setup.ts`）导入 `@material/web`。视图和功能组件从 `@/ui` 导入 `AppButton`、`TextField`、`AppDialog`、`SegmentedButton`、`Stepper`、`LineChart` 等。
 - 图标也经过 `ui/icons.ts` 再导出，`ui/` 是唯一导入 `@lucide/vue` 的地方。新图标先加到这里，再以 `icons.X` 使用。`AppIcon` 设置了 `fill: none`：Material 按钮会填充插槽里的图标，Lucide 的描边因此会变成色块。
 - 样式只用令牌：颜色角色 `--md-sys-color-*`（由 `applyTheme.ts` 从种子色生成），间距 `--app-space-*`，层内 z 序 `--app-z-*`，字号类 `type-title-large` 等。
-- `ui/layers.ts` 是所有浮层（对话框、侧栏、菜单、选择器）的唯一记录，按打开顺序决定绘制层级、Escape 和外部点击只关闭最上层、模态层下面的内容设为 `inert`、焦点打开时进入并在关闭时归还。新的浮层组件要通过它注册，而不是自己设 z-index。
+- `ui/layers.ts` 是所有浮层（对话框、侧栏、菜单、选择器）的唯一记录，按打开顺序决定绘制层级、Escape 和外部点击只关闭最上层、模态层下面的内容设为 `inert`、焦点打开时进入并在关闭时归还。新的浮层组件要通过它注册，而不是自己设 z-index。提示（`Tooltip`）不入栈：它渲染在文档末尾、按内容的位置固定定位并限制在窗口内，层级取 `tooltipZ`（高于所有已打开的浮层和提示条），因此底栏或导航栏旁的面板不会裁切或遮住它。
 
 `/dev` 路由（`DevComponentsView.vue`）列出全部 `ui/` 组件，用来目视检查。
 

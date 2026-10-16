@@ -49,7 +49,7 @@ mizuoto speak [OPTIONS] {text}
 | `--sample-rate <int>` | Resample the result |
 | `--batch` | One output per line of the text |
 | `--split` | Let Mizuoto split long text, not the engine |
-| `--lenient` | Drop parameters the model does not take, with a warning (default: refuse) |
+| `--strict / --lenient` | Refuse parameters the model does not take (exit code 4), or drop them with a warning (default: `tts.strict_params`, which drops them) |
 | `-P, --use-preset <str>` | A parameter preset (`mizuoto preset list`); `--param` and `--option` win over it |
 | `--stream` | Write a WAV to standard output as the audio is made (e.g. `\| ffplay -`) |
 | `--plan` | Show what would happen and stop |

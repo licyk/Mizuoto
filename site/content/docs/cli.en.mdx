@@ -58,7 +58,7 @@ A few details:
 - `speak` prints each result's path, duration and sample rate. Results are always kept in the outputs folder (and appear in **History**); `-o` also copies one to the path you give, whose extension picks the format.
 - `speak --json` prints `{"job": …, "outputs": […]}`: the finished job and the output records it made.
 - `speak --plan` checks the request and prints the plan (model, device, voice mode, segments, parameters) without running anything.
-- Warnings (such as parameters `--lenient` dropped) go to stderr, starting with `warning:`, never into stdout.
+- Warnings (such as dropped parameters the model does not take) go to stderr, starting with `warning:`, never into stdout.
 
 ## Exit codes
 
@@ -162,7 +162,7 @@ mizuoto preset save slow -m f5tts/v1-base -p speed=0.85 -p num_steps=48
 mizuoto speak "…" -m f5tts/v1-base -v my-voice -P slow
 ```
 
-`-p` sets common parameters (`temperature`, `top_p`, `top_k`, `repetition_penalty`, `max_new_tokens`, `num_steps`, `guidance_scale`, `speed`, `duration`, `seed`, `text_normalization`, `segment_silence_ms`), `-O` the engine's own options; values are parsed as JSON. A parameter the model does not take is refused (exit code 4) unless `--lenient` drops it with a warning.
+`-p` sets common parameters (`temperature`, `top_p`, `top_k`, `repetition_penalty`, `max_new_tokens`, `num_steps`, `guidance_scale`, `speed`, `duration`, `seed`, `text_normalization`, `segment_silence_ms`), `-O` the engine's own options; values are parsed as JSON. A parameter the model does not take is dropped with a warning by default, or refused (exit code 4) with `--strict`; the default comes from `tts.strict_params`.
 
 ### Transcribe, convert and edit
 

@@ -75,6 +75,7 @@ def test_reference_clone_and_limits(services, wav_file):
     assert plan.voice_mode == "clone_no_transcript"
     assert plan.references[0].sample_rate == 22050 and abs(plan.references[0].duration - 2.0) < 0.05
     services.engines.manifest("dummy").variants["default"].reference.max_seconds = 1.0
+    services.settings.set_value("tts.reference_policy", "reject")
     with pytest.raises(ReferenceInvalidError) as e:
         services.tts.plan(req(voice_spec=VoiceInput(references=[ReferenceInput(path=str(wav_file))])))
     assert e.value.detail["reason"] == "too_long"
@@ -82,7 +83,7 @@ def test_reference_clone_and_limits(services, wav_file):
 
 def test_validation_happens_before_any_job(services):
     cases = [
-        (req(params=CommonParams(top_k=3)), ParameterError),
+        (req(params=CommonParams(top_k=3), strict=True), ParameterError),
         (req(params=CommonParams(speed=50)), ParameterError),
         (req(engine_options={"nope": 1}), ParameterError),
         (req(engine_options={"fail": "maybe"}), ParameterError),
@@ -102,6 +103,11 @@ def test_validation_happens_before_any_job(services):
 def test_lenient_mode_drops_with_a_warning(services):
     plan = services.tts.plan(req(params=CommonParams(top_k=3), strict=False))
     assert "top_k" not in plan.params and any("top_k" in w for w in plan.warnings)
+    # Lenient is the default; tts.strict_params refuses instead.
+    assert any("top_k" in w for w in services.tts.plan(req(params=CommonParams(top_k=3))).warnings)
+    services.settings.set_value("tts.strict_params", "true")
+    with pytest.raises(ParameterError):
+        services.tts.plan(req(params=CommonParams(top_k=3)))
 
 
 def test_capabilities_are_checked(services):
