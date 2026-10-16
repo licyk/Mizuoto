@@ -1,5 +1,6 @@
 import { createRootRoute, HeadContent, Outlet, Scripts } from "@tanstack/react-router";
 
+import favicon from "@/assets/favicon.svg?url&no-inline";
 import { SiteProvider } from "@/components/site-provider";
 import { DEFAULT_LOCALE } from "@/lib/i18n";
 import appCss from "@/styles/app.css?url";
@@ -23,7 +24,7 @@ export const Route = createRootRoute({
       {
         rel: "icon",
         type: "image/svg+xml",
-        href: `${import.meta.env.BASE_URL}favicon.svg`,
+        href: favicon,
       },
     ],
   }),
