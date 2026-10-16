@@ -110,6 +110,8 @@ const title = computed(() => t('app.title'));
 // icon shows the current choice (the same three as Settings › Appearance).
 const NEXT_THEME = { light: 'dark', dark: 'system', system: 'light' } as const;
 const cycleTheme = () => (prefs.prefs.theme = NEXT_THEME[prefs.prefs.theme]);
+// The documentation site, which shows itself in the browser's language.
+const DOCS_URL = 'https://mizuoto.netlify.app/docs';
 const themeIcon = computed(() => ({ light: icons.Sun, dark: icons.Moon, system: icons.SunMoon })[prefs.prefs.theme]);
 const activeCount = computed(() => jobs.active.length);
 </script>
@@ -122,6 +124,7 @@ const activeCount = computed(() => jobs.active.length);
     <template #actions>
       <IconButton :icon="activeCount ? icons.Loader2 : icons.ListChecks" :spin="activeCount > 0" :label="activeCount ? t('jobs.chip', { n: activeCount }) : t('jobs.idle')" :badge="activeCount || null" @click="sheetOpen = true" />
       <IconButton :icon="icons.Cpu" :label="loaded ? t('runtime.chip', { n: loaded }) : t('runtime.title')" :badge="loaded || null" @click="runtimeOpen = true" />
+      <IconButton :icon="icons.CircleHelp" :label="t('app.help')" :href="DOCS_URL" />
       <IconButton :icon="themeIcon" :label="`${t('settings.theme')}: ${t(`settings.themes.${prefs.prefs.theme}`)}`" @click="cycleTheme" />
     </template>
     <RouterView v-slot="{ Component, route: r }">

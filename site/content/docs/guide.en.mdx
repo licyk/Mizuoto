@@ -25,10 +25,11 @@ The UI opens on the screen you were last on. Each screen keeps its state (and sc
 
 ## The top bar
 
-Three buttons at the top right:
+Four buttons at the top right:
 
 - **Jobs**: while jobs run it shows a spinner and their number (**N running**). It opens the jobs sheet with the 30 most recent jobs; each job card shows the state and progress (for downloads also the amount done, the speed and the time left) and offers **Cancel**, **Retry** and **Log**. **All jobs** opens the full list, filtered by **All**, **Active** or **Finished**, where **Clear finished** tidies the history. A queued job says what it waits for, such as **Waiting for the GPU**, **Waiting for the engine**, **Waiting for other synthesis jobs** (see **Synthesis jobs at once** in [Settings](/docs/guide-settings#compute)) or **Waiting for other downloads**; when another job holds the GPU, **Run anyway** runs it beside that one if the memory suffices.
 - **Models in memory**: shows how many models are loaded (**N loaded**). It lists each loaded model with its device, the memory its weights take and whether it is **Busy** or **Idle**; **Unload** one, or **Free GPU memory** to unload every idle model at once. An engine whose last request failed is listed with the error.
+- **Help**: opens this documentation in a new browser tab.
 - **Theme**: cycles through light, dark and following the system. More under **Settings › Appearance**.
 
 When a job started on another screen finishes or fails, a message pops up at the bottom of the window; a failure's message has an **Open log** button.
