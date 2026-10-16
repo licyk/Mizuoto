@@ -2787,10 +2787,10 @@ export interface components {
             concurrency: number;
             /**
              * Repository
-             * @default official
+             * @default mizuoto-model
              * @enum {string}
              */
-            repository: "official" | "mizuoto-model";
+            repository: "mizuoto-model" | "official";
             /**
              * Mirror Repo
              * @default licyk/mizuoto-model

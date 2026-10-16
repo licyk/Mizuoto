@@ -105,7 +105,7 @@ const trainMemoryOptions = computed(() => (['standard', 'low', 'lowest'] as cons
 const precisionOptions = computed(() => (['auto', 'fp32', 'fp16', 'bf16'] as const).map((v) => ({ value: v, label: v === 'auto' ? t('common.auto') : v })));
 // Downloads
 const sourceOptions = computed(() => (['huggingface', 'hf-mirror', 'modelscope', 'custom'] as const).map((v) => ({ value: v, label: t(`settings.sources.${v}`) })));
-const repositoryOptions = computed(() => (['official', 'mizuoto-model'] as const).map((v) => ({ value: v, label: t(`settings.repositories.${v}`) })));
+const repositoryOptions = computed(() => (['mizuoto-model', 'official'] as const).map((v) => ({ value: v, label: t(`settings.repositories.${v}`) })));
 const endpoint = ref('');
 watch(s, (v) => v && (endpoint.value = v.downloads.endpoint), { immediate: true });
 // Storage

@@ -1,6 +1,6 @@
 ---
 title: "Installation"
-description: "Requirements, torch for your hardware, installing Mizuoto from release wheels, from source or with Docker, where the data lives, and updating and uninstalling."
+description: "Requirements, torch for your hardware, installing Mizuoto from PyPI, from source or with Docker, where the data lives, and updating and uninstalling."
 icon: Download
 ---
 
@@ -21,10 +21,10 @@ No system programs are needed: audio decoding, resampling and the text front end
 
 ## Ways to install
 
-<Tabs items={["Release wheels", "Source", "Docker"]}>
-<Tab value="Release wheels">
+<Tabs items={["PyPI", "Source", "Docker"]}>
+<Tab value="PyPI">
 
-A release build is a set of wheels in a `dist/` folder: `mizuoto`, and `mizuoto_fishspeech` and `mizuoto_indextts` for the licence-gated engines. Use a virtual environment of your choice. Install torch first, from the index that matches your machine, so that installing Mizuoto keeps that build:
+Mizuoto is on PyPI as `mizuoto`; the licence-gated engines are `mizuoto-fishspeech` and `mizuoto-indextts`. Use a virtual environment of your choice. Install torch first, from the index that matches your machine, so that installing Mizuoto keeps that build:
 
 ```bash
 pip install "torch>=2.8" --index-url https://download.pytorch.org/whl/cu128    # NVIDIA, Linux or Windows (cu126, cu128, cu129, cu130, cu132: what the driver supports)
@@ -34,15 +34,15 @@ pip install "torch>=2.8"                                                       #
 pip install "torch>=2.8" --index-url https://download.pytorch.org/whl/cpu      # CPU only
 ```
 
-Then Mizuoto, in one install; add the gated engines' wheels when you want them:
+Then Mizuoto, in one install; add the gated engines when you want them:
 
 ```bash
-pip install dist/mizuoto-*.whl                  # + dist/mizuoto_fishspeech-*.whl dist/mizuoto_indextts-*.whl
+pip install mizuoto                             # + mizuoto-fishspeech mizuoto-indextts
 mizuoto doctor
 mizuoto webui                                   # http://127.0.0.1:7869
 ```
 
-Mizuoto is not published on PyPI: the wheels come from a release's artifacts, or are built from a checkout with `python scripts/dev.py wheels` (the licence-gated ones too).
+uv works the same way: `uv pip install mizuoto` in a virtual environment.
 
 </Tab>
 <Tab value="Source">
@@ -157,7 +157,7 @@ The models, voices, results and cache folders can be moved under **Settings › 
 
 ## Updating
 
-1. Install the new version the same way, for example `pip install --upgrade dist/mizuoto-*.whl` (with the gated engines' wheels if you use them: their versions move with Mizuoto's); from source, `git pull`, run the install command again and rebuild the UI. With Docker, rebuild the image; the `/data` volume stays.
+1. Install the new version the same way, for example `pip install --upgrade mizuoto` (with `mizuoto-fishspeech mizuoto-indextts` if you use them, so pip picks the versions that work with the new Mizuoto); from source, `git pull`, run the install command again and rebuild the UI. With Docker, rebuild the image; the `/data` volume stays.
 2. Restart the server. Prepared voices are rebuilt once, automatically, the next time they are used.
 
 <Callout title="Remote hosts">

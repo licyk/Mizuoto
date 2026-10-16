@@ -39,7 +39,7 @@ Models with a ModelScope repository: every Qwen3-TTS, CosyVoice and VoxCPM model
 
 Each file picks its source on its own:
 
-1. With `downloads.repository` set to `mizuoto-model`, the [mizuoto-model mirror](#the-mizuoto-model-mirror) first;
+1. With `downloads.repository` set to `mizuoto-model` (the default), the [mizuoto-model mirror](#the-mizuoto-model-mirror) first;
 2. then the source in `downloads.source`;
 3. then the rest of `huggingface`, `hf-mirror`, `modelscope` in that order (with `custom` chosen, `custom` comes before these three).
 
@@ -119,13 +119,13 @@ _assets/<engine>/<asset>/<path>     e.g. _assets/gptsovits/encoders/…
 <Tabs items={["Web UI", "Command line"]}>
 <Tab value="Web UI">
 
-**Settings** › **Downloads** › **Repository**: **mizuoto-model mirror first**. The mirror is fetched from the place chosen in **Download source**.
+**Settings** › **Downloads** › **Repository**: **mizuoto-model mirror first** (the default). The mirror is fetched from the place chosen in **Download source**. **Each model's own repository** skips the mirror.
 
 </Tab>
 <Tab value="Command line">
 
 ```bash
-mizuoto config set downloads.repository mizuoto-model
+mizuoto config set downloads.repository mizuoto-model   # the default; official skips the mirror
 mizuoto config set downloads.source modelscope          # the mirror on ModelScope
 mizuoto config set downloads.mirror_repo licyk/mizuoto-model               # the default, on Hugging Face
 mizuoto config set downloads.mirror_repo_modelscope licyks/mizuoto-model   # the default, on ModelScope
@@ -136,7 +136,7 @@ mizuoto config set downloads.mirror_repo_modelscope licyks/mizuoto-model   # the
 
 | Setting | Default | Meaning |
 | --- | --- | --- |
-| `downloads.repository` | `official` | `official`: each model's own repositories; `mizuoto-model`: the mirror first |
+| `downloads.repository` | `mizuoto-model` | `mizuoto-model`: the mirror first; `official`: each model's own repositories |
 | `downloads.mirror_repo` | `licyk/mizuoto-model` | The mirror repository on Hugging Face, also used through hf-mirror and a custom endpoint |
 | `downloads.mirror_repo_modelscope` | `licyks/mizuoto-model` | The mirror repository on ModelScope, used when `downloads.source` is `modelscope` |
 

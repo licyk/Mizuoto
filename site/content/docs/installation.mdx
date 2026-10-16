@@ -1,6 +1,6 @@
 ---
 title: "安装"
-description: "系统要求，适合本机硬件的 torch，用发布构建、源码或 Docker 安装 Mizuoto，数据存放的位置，以及更新与卸载。"
+description: "系统要求，适合本机硬件的 torch，从 PyPI、源码或用 Docker 安装 Mizuoto，数据存放的位置，以及更新与卸载。"
 icon: Download
 ---
 
@@ -21,10 +21,10 @@ Mizuoto 是一个 Python 发行包：服务器、网页界面、命令行和所�
 
 ## 安装方式
 
-<Tabs items={["发布构建", "源码", "Docker"]}>
-<Tab value="发布构建">
+<Tabs items={["PyPI", "源码", "Docker"]}>
+<Tab value="PyPI">
 
-发布构建是 `dist/` 文件夹中的一组 wheel：`mizuoto`，以及需要接受许可的引擎的 `mizuoto_fishspeech` 和 `mizuoto_indextts`。请在你自己选择的虚拟环境中安装。先从适合本机的索引安装 torch，这样安装 Mizuoto 时会保留这个构建：
+Mizuoto 在 PyPI 上的包名是 `mizuoto`；需要接受许可的引擎是 `mizuoto-fishspeech` 和 `mizuoto-indextts`。请在你自己选择的虚拟环境中安装。先从适合本机的索引安装 torch，这样安装 Mizuoto 时会保留这个构建：
 
 ```bash
 pip install "torch>=2.8" --index-url https://download.pytorch.org/whl/cu128    # NVIDIA，Linux 或 Windows（cu126、cu128、cu129、cu130、cu132：按驱动支持的版本选）
@@ -34,15 +34,15 @@ pip install "torch>=2.8"                                                       #
 pip install "torch>=2.8" --index-url https://download.pytorch.org/whl/cpu      # 只用 CPU
 ```
 
-然后一次装好 Mizuoto；需要时加上需要接受许可的引擎的 wheel：
+然后一次装好 Mizuoto；需要时加上需要接受许可的引擎：
 
 ```bash
-pip install dist/mizuoto-*.whl                  # + dist/mizuoto_fishspeech-*.whl dist/mizuoto_indextts-*.whl
+pip install mizuoto                             # + mizuoto-fishspeech mizuoto-indextts
 mizuoto doctor
 mizuoto webui                                   # http://127.0.0.1:7869
 ```
 
-Mizuoto 没有发布到 PyPI：wheel 来自发布构建的产物，或在源码目录中用 `python scripts/dev.py wheels` 构建（需要接受许可的引擎也一样）。
+用 uv 也一样：在虚拟环境中执行 `uv pip install mizuoto`。
 
 </Tab>
 <Tab value="源码">
@@ -157,7 +157,7 @@ mizuoto webui
 
 ## 更新
 
-1. 用同样的方式安装新版本，例如 `pip install --upgrade dist/mizuoto-*.whl`（如果用到需要接受许可的引擎，也带上它们的 wheel：它们的版本与 Mizuoto 同步）；源码则 `git pull` 后重新执行安装命令，并重新构建界面。Docker 则重新构建镜像，`/data` 卷保持不变。
+1. 用同样的方式安装新版本，例如 `pip install --upgrade mizuoto`（如果用到需要接受许可的引擎，也带上 `mizuoto-fishspeech mizuoto-indextts`，让 pip 选出与新版 Mizuoto 兼容的版本）；源码则 `git pull` 后重新执行安装命令，并重新构建界面。Docker 则重新构建镜像，`/data` 卷保持不变。
 2. 重启服务器。准备好的音色会在下次使用时自动重建一次。
 
 <Callout title="远程主机">

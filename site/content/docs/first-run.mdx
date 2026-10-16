@@ -31,7 +31,7 @@ icon: Play
 解决办法是把缺少的部分安装到 Mizuoto 所用的 Python 中，然后重启 Mizuoto：
 
 - torch：安装 `mizuoto doctor` 指出的构建，例如 `pip install "torch>=2.8" --index-url https://download.pytorch.org/whl/cu128`（各平台的命令见[安装](/docs/installation#安装方式)）。
-- 需要接受许可的引擎：安装它的 wheel，例如 `pip install dist/mizuoto_indextts-*.whl`。
+- 需要接受许可的引擎：安装它的发行包，例如 `pip install mizuoto-indextts`。
 
 在 **合成** 页选择引擎不可用的模型时，底部按钮会换成安装所缺内容的命令。命令行：
 

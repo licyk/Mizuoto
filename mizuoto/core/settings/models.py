@@ -145,10 +145,10 @@ class DownloadSettings(Record):
     """The endpoint for ``custom``: a Hugging Face compatible server."""
     verify_checksums: bool = True
     concurrency: int = Field(default=2, ge=1, le=8)
-    repository: Literal["official", "mizuoto-model"] = "official"
-    """``official``: each model's own repositories. ``mizuoto-model``: Mizuoto's mirror first (every file
-    laid out as Mizuoto keeps it, ``<engine>/<model>/…``), at the chosen source; a file the mirror lacks
-    comes from the official repositories."""
+    repository: Literal["mizuoto-model", "official"] = "mizuoto-model"
+    """``mizuoto-model``: Mizuoto's mirror first (every file laid out as Mizuoto keeps it, ``<engine>/<model>/…``),
+    at the chosen source; a file the mirror lacks comes from the official repositories. ``official``: each model's
+    own repositories only."""
     mirror_repo: str = "licyk/mizuoto-model"
     """The mirror's repository on Hugging Face (also used through hf-mirror and a custom endpoint)."""
     mirror_repo_modelscope: str = "licyks/mizuoto-model"

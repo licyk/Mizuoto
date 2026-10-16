@@ -94,7 +94,7 @@ The web UI opens on **Speak**, where the dummy engine works right away (it speak
 An engine needs torch (only the dummy engine runs without it) and its implementation: every engine is built into Mizuoto except Fish Speech and IndexTTS, which are distributions of their own. The engine card and `mizuoto doctor <engine>` say what is missing:
 
 - `torch`: install the build `mizuoto doctor` names (see [Installation](/docs/installation#ways-to-install)).
-- `mizuoto-fishspeech` or `mizuoto-indextts`: install its wheel into Mizuoto's Python, such as `pip install dist/mizuoto_indextts-*.whl`.
+- `mizuoto-fishspeech` or `mizuoto-indextts`: install it into Mizuoto's Python, such as `pip install mizuoto-indextts`.
 
 Then restart Mizuoto. Using such a model fails with `engine_not_installed` (exit code 7) and the install command in the hint.
 
@@ -182,7 +182,7 @@ Each engine's licence is in [Engines in depth](/docs/advanced-engines).
 <Accordions>
 <Accordion title="Downloads are slow, or Hugging Face is unreachable">
 
-Choose **hf-mirror.com** or **ModelScope** in **Settings** › **Downloads** › **Download source**, or `mizuoto config set downloads.source hf-mirror`; or set **Repository** to **mizuoto-model mirror first**. A file that fails on one source comes from the next one by itself. See [Model downloads and mirrors](/docs/advanced-downloads).
+Choose **hf-mirror.com** or **ModelScope** in **Settings** › **Downloads** › **Download source**, or `mizuoto config set downloads.source hf-mirror`; **Repository** should stay at its default, **mizuoto-model mirror first**. A file that fails on one source comes from the next one by itself. See [Model downloads and mirrors](/docs/advanced-downloads).
 
 </Accordion>
 <Accordion title="I need a proxy">

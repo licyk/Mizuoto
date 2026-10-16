@@ -92,6 +92,8 @@ def hub(services, tmp_path, monkeypatch):
     services.engines.add(manifest.model_copy(update={"models": [*manifest.models, entry]}))
     fake = Hub()
     services.models.http_transport = httpx.MockTransport(fake.handler)
+    # These tests are about the official sources; the mirror (the default) is tested on its own.
+    services.settings.update({"downloads": {"repository": "official"}})
     # Retries wait 1 s, 2 s…; tests should not.
     monkeypatch.setattr("mizuoto.core.models.download.min", lambda a, b: 0.0, raising=False)
     return fake
@@ -225,6 +227,7 @@ def test_mirror_urls_follow_the_source():
     assert hf_mirror.url("weights/b.pt") == "https://hf-mirror.com/licyk/mizuoto-model/resolve/main/a/b/vocoder/b.pt"
     custom = mirror_source(DownloadSettings(source="custom", endpoint="http://lan:8000/", mirror_repo="me/mirror"), ModelFiles(hf="o/m"), "a/b")
     assert custom.url("c.bin") == "http://lan:8000/me/mirror/resolve/main/a/b/c.bin"
+    assert DownloadSettings().repository == "mizuoto-model"
     assert [s.name for s in sources(DownloadSettings(repository="mizuoto-model"), ModelFiles(hf="o/m"), "r", "a/b")][0] == "mizuoto-model"
     assert "mizuoto-model" not in [s.name for s in sources(DownloadSettings(repository="mizuoto-model"), ModelFiles(hf="o/m"), "r")]
 

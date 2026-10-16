@@ -87,7 +87,7 @@ Mizuoto **0.2.0** 是以此名称发布的第一个版本。
 - 在 NVIDIA 显卡上，所有自回归解码都以 CUDA 图运行，每步只等待设备一次，结果与即时执行（eager）相同；这些提速是在与其他任务
   共用的显卡上测得的。更全面的 GPU 测量（真实模型端到端、注意力后端、显存流式加载、测试套件）尚待完成。
 - ROCm、Intel XPU 与 Apple MPS 在代码中已支持，并用模拟设备测试过，但尚未在这些硬件上验证。
-- Docker 镜像已编写，但尚未完整构建并运行过。wheel 由 CI 构建，未发布到 PyPI。
+- Docker 镜像已编写，但尚未完整构建并运行过。
 
 ## 安装
 
@@ -95,7 +95,7 @@ Mizuoto **0.2.0** 是以此名称发布的第一个版本。
 先从与本机匹配的索引安装 torch，再安装 Mizuoto。`mizuoto doctor` 会检查 torch 构建与硬件是否匹配，不匹配时给出
 确切的安装命令。推荐 NVIDIA 显卡；所有引擎也能在 CPU 上运行，但较慢。
 
-**使用发布的 wheel**（随版本发布附带，或用 `python scripts/dev.py wheels` 自行构建，见下文“构建”）：
+**从 PyPI：**
 
 ```bash
 # 先装 torch，选与硬件匹配的构建（mizuoto doctor 会给出）：
@@ -104,8 +104,8 @@ pip install "torch>=2.8" --index-url https://download.pytorch.org/whl/rocm7.2  #
 pip install "torch>=2.8" --index-url https://download.pytorch.org/whl/xpu      # Intel 显卡，Linux 或 Windows
 pip install "torch>=2.8"                                                       # Apple 芯片的 macOS（MPS）
 pip install "torch>=2.8" --index-url https://download.pytorch.org/whl/cpu      # 仅 CPU
-# 再一次装好 Mizuoto（需接受许可的引擎另加 mizuoto_fishspeech-*.whl mizuoto_indextts-*.whl）：
-pip install mizuoto-*.whl
+# 再一次装好 Mizuoto（需接受许可的引擎另加 mizuoto-fishspeech mizuoto-indextts）：
+pip install mizuoto
 mizuoto doctor
 mizuoto webui                                   # http://127.0.0.1:7869
 ```
@@ -210,7 +210,7 @@ mizuoto train metrics narrator
 | --- | --- |
 | `engines.<id>.device`、`engines.<id>.dtype` | 引擎运行的设备（`auto`、`cuda:1`、`cpu`）与精度 |
 | `downloads.source` | `huggingface`、`hf-mirror`、`modelscope` 或自定义地址 |
-| `downloads.repository` | `mizuoto-model`：优先从 Mizuoto 的镜像下载，缺少的文件再从各模型自己的仓库下载 |
+| `downloads.repository` | `mizuoto-model`（默认）：优先从 Mizuoto 的镜像下载，缺少的文件再从各模型自己的仓库下载；`official`：只用后者 |
 | `compute.max_resident_models`、`compute.unload_after_minutes` | 同时保持加载的模型数，以及空闲模型多久后卸载（`mizuoto runtime` 列出已加载的模型） |
 | `compute.vram_mode`、`compute.vram_limit_mb` | 模型如何使用显存：放不下的模型部分加载，其余权重从内存流式加载（`high`：只整体加载） |
 | `compute.cuda_graphs` | 在 NVIDIA 显卡上以 CUDA 图运行解码步骤（默认开启；结果不变） |

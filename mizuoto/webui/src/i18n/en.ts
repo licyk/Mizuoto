@@ -603,7 +603,7 @@ export default {
     endpoint: 'Custom endpoint',
     repository: 'Repository',
     repositoryHint: "mizuoto-model mirrors the files Mizuoto downloads; what it lacks comes from each model's own repository.",
-    repositories: { official: "Each model's own repository", 'mizuoto-model': 'mizuoto-model mirror first' },
+    repositories: { 'mizuoto-model': 'mizuoto-model mirror first', official: "Each model's own repository" },
     verifyChecksums: 'Verify checksums',
     concurrency: 'Files at once',
     folders: 'Folders',

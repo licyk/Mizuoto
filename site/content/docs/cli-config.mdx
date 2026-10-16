@@ -192,7 +192,7 @@ mizuoto webui
 | `downloads.endpoint` | 空 | `custom` 的地址：一个兼容 Hugging Face 的服务器 | **下载** › **自定义地址** |
 | `downloads.verify_checksums` | `true` | 下载后校验 SHA-256 | **下载** › **校验文件** |
 | `downloads.concurrency` | `2` | 同时下载的文件数（1–8） | **下载** › **同时下载的文件数** |
-| `downloads.repository` | `official` | `official`：各模型自己的仓库；`mizuoto-model`：优先使用 Mizuoto 的镜像仓库，镜像中没有的文件从官方仓库下载 | **下载** › **仓库** |
+| `downloads.repository` | `mizuoto-model` | `mizuoto-model`：优先使用 Mizuoto 的镜像仓库，镜像中没有的文件从官方仓库下载；`official`：各模型自己的仓库 | **下载** › **仓库** |
 | `downloads.mirror_repo` | `licyk/mizuoto-model` | 镜像仓库（Hugging Face 和 ModelScope 上的 id 相同） | — |
 
 ### `tts`：语音

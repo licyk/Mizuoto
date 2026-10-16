@@ -59,7 +59,7 @@ const zhCN = {
       steps: [
         {
           title: "安装 Mizuoto",
-          description: "用发布的 wheel、Docker 镜像或源代码安装，然后运行 mizuoto webui。",
+          description: "从 PyPI、Docker 镜像或源代码安装，然后运行 mizuoto webui。",
         },
         {
           title: "安装引擎与模型",
@@ -104,8 +104,9 @@ const zhCN = {
     install: {
       title: "按文档完成安装",
       description:
-        "从发布的 wheel 安装后运行 mizuoto webui 即可打开网页界面；也可以使用 Docker 镜像或源代码。Fish Speech 与 IndexTTS 需先阅读并接受各自的许可证才能安装。安装文档会说明系统要求、显卡与每种方式的完整步骤。",
+        "Mizuoto 可以从 PyPI 安装，也可以使用 Docker 镜像或源代码。安装文档会说明系统要求、适合本机显卡的 torch 与每种方式的完整步骤；Fish Speech 与 IndexTTS 需先阅读并接受各自的许可证。",
       link: "查看安装文档",
+      href: "/docs/installation#安装方式",
     },
     footer: {
       label: "页脚导航",
@@ -206,7 +207,7 @@ const en = {
       steps: [
         {
           title: "Install Mizuoto",
-          description: "From the release wheels, the Docker image or a source checkout; then run mizuoto webui.",
+          description: "From PyPI, the Docker image or a source checkout; then run mizuoto webui.",
         },
         {
           title: "Add an engine and a model",
@@ -260,8 +261,9 @@ const en = {
     install: {
       title: "Install with the guide",
       description:
-        "Install the release wheels and run mizuoto webui to open the web UI, or use the Docker image or a source checkout. Fish Speech and IndexTTS install only after you read and accept their licences. The installation guide covers the requirements, graphics cards and every way step by step.",
+        "Install Mizuoto from PyPI, or use the Docker image or a source checkout. The installation guide covers the requirements, the torch build for your graphics card and every way step by step; Fish Speech and IndexTTS need their licences read and accepted first.",
       link: "Read the installation guide",
+      href: "/docs/installation#ways-to-install",
     },
     footer: {
       label: "Footer navigation",

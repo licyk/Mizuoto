@@ -94,7 +94,7 @@ Web UI 直接打开 **合成** 页，演示引擎（dummy）立即可用，它�
 引擎需要 torch（只有演示引擎不需要）和它的实现：除了 Fish Speech 和 IndexTTS 是单独的发行包，其他引擎都内置在 Mizuoto 中。引擎卡片和 `mizuoto doctor <引擎>` 会说明缺什么：
 
 - `torch`：安装 `mizuoto doctor` 指出的构建（见[安装](/docs/installation#安装方式)）。
-- `mizuoto-fishspeech` 或 `mizuoto-indextts`：把它的 wheel 装到 Mizuoto 所用的 Python 中，例如 `pip install dist/mizuoto_indextts-*.whl`。
+- `mizuoto-fishspeech` 或 `mizuoto-indextts`：把它装到 Mizuoto 所用的 Python 中，例如 `pip install mizuoto-indextts`。
 
 然后重启 Mizuoto。使用这类模型会以 `engine_not_installed`（退出码 7）失败，提示中带有安装命令。
 
@@ -182,7 +182,7 @@ mizuoto engine accept-licence fishspeech
 <Accordions>
 <Accordion title="下载很慢或连不上 Hugging Face？">
 
-在 **设置** › **下载** › **下载来源** 选 **hf-mirror.com** 或 **ModelScope**，或用 `mizuoto config set downloads.source hf-mirror`。也可以把 **仓库** 设为 **优先使用 mizuoto-model 镜像**。每个文件在一个来源失败时会自动换下一个来源。详见 [模型下载与镜像](/docs/advanced-downloads)。
+在 **设置** › **下载** › **下载来源** 选 **hf-mirror.com** 或 **ModelScope**，或用 `mizuoto config set downloads.source hf-mirror`。**仓库** 保持默认的 **优先使用 mizuoto-model 镜像**。每个文件在一个来源失败时会自动换下一个来源。详见 [模型下载与镜像](/docs/advanced-downloads)。
 
 </Accordion>
 <Accordion title="需要通过代理下载？">

@@ -1,7 +1,6 @@
 /*
- * Homepage install section: the two commands of a release-build install and a
- * link to the installation guide, which covers the rest (Docker, a source
- * checkout, graphics cards).
+ * Homepage install section: no commands, only a link to the installation guide,
+ * which covers every way (PyPI, Docker, a source checkout) and graphics cards.
  */
 
 .home-install-card {
@@ -59,20 +58,6 @@
   font-size: var(--page-lead);
   line-height: 1.75;
   text-wrap: pretty;
-}
-
-.home-install-command {
-  overflow-x: auto;
-  margin-top: 1.1rem;
-  padding: 0.85rem 1rem;
-  border: 1px solid var(--color-fd-border);
-  border-radius: 0.8rem;
-  background: color-mix(in srgb, var(--page-accent) 6%, var(--color-fd-background));
-  color: var(--page-ink);
-  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
-  font-size: 0.82rem;
-  line-height: 1.7;
-  white-space: pre;
 }
 
 .home-install-link {

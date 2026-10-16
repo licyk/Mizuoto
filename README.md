@@ -94,8 +94,7 @@ Mizuoto **0.2.0** is the first release under this name.
   the same output as eager mode. These speed-ups were measured on a GPU shared with other work. Wider GPU measurements
   are still to come: real models end to end, attention backends, memory streaming and the test suite.
 - ROCm, Intel XPU and Apple MPS are supported in code and tested with simulated devices, but not yet on such hardware.
-- The Docker image is written but has not yet been built and run as a whole. Wheels are built by CI and are not on
-  PyPI.
+- The Docker image is written but has not yet been built and run as a whole.
 
 ## Install
 
@@ -104,7 +103,7 @@ CPU). Install torch first, from the index that matches your machine, then Mizuot
 against the hardware and prints the exact command when they do not match. An NVIDIA GPU is recommended; every engine
 also runs on a CPU, slowly.
 
-**From release wheels** (attached to a release, or built with `python scripts/dev.py wheels`, see *Build*):
+**From PyPI:**
 
 ```bash
 # torch first, the build for your hardware (mizuoto doctor names it):
@@ -113,8 +112,8 @@ pip install "torch>=2.8" --index-url https://download.pytorch.org/whl/rocm7.2  #
 pip install "torch>=2.8" --index-url https://download.pytorch.org/whl/xpu      # Intel GPUs, Linux or Windows
 pip install "torch>=2.8"                                                       # macOS on Apple silicon (MPS)
 pip install "torch>=2.8" --index-url https://download.pytorch.org/whl/cpu      # CPU only
-# then Mizuoto, in one install (add mizuoto_fishspeech-*.whl mizuoto_indextts-*.whl for the licence-gated engines):
-pip install mizuoto-*.whl
+# then Mizuoto, in one install (add mizuoto-fishspeech mizuoto-indextts for the licence-gated engines):
+pip install mizuoto
 mizuoto doctor
 mizuoto webui                                   # http://127.0.0.1:7869
 ```
@@ -221,7 +220,7 @@ come from an environment variable instead, e.g. `MIZUOTO_SERVER__PORT=8000`. A f
 | --- | --- |
 | `engines.<id>.device`, `engines.<id>.dtype` | where an engine runs (`auto`, `cuda:1`, `cpu`) and its precision |
 | `downloads.source` | `huggingface`, `hf-mirror`, `modelscope` or a custom endpoint |
-| `downloads.repository` | `mizuoto-model`: Mizuoto's mirror first, then each model's own repository |
+| `downloads.repository` | `mizuoto-model` (default): Mizuoto's mirror first, then each model's own repository; `official`: only the latter |
 | `compute.max_resident_models`, `compute.unload_after_minutes` | how many models stay loaded, and when an idle one is unloaded (`mizuoto runtime` lists them) |
 | `compute.vram_mode`, `compute.vram_limit_mb` | how models use GPU memory: a model that does not fit loads partly, the rest of its weights streaming from RAM (`high`: whole or not at all) |
 | `compute.cuda_graphs` | decoding steps as CUDA graphs on NVIDIA GPUs (on by default; same results) |

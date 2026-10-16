@@ -603,7 +603,7 @@ export default {
     endpoint: '自定义地址',
     repository: '仓库',
     repositoryHint: 'mizuoto-model 镜像收录 Mizuoto 下载的文件；镜像中没有的文件从各模型自己的仓库下载。',
-    repositories: { official: '各模型自己的仓库', 'mizuoto-model': '优先使用 mizuoto-model 镜像' },
+    repositories: { 'mizuoto-model': '优先使用 mizuoto-model 镜像', official: '各模型自己的仓库' },
     verifyChecksums: '校验文件',
     concurrency: '同时下载的文件数',
     folders: '文件夹',

@@ -39,7 +39,7 @@ MIZUOTO_DOWNLOADS__SOURCE=modelscope mizuoto model download qwen3tts/1.7b-base  
 
 每个文件单独选择来源：
 
-1. `downloads.repository` 为 `mizuoto-model` 时，先试 [mizuoto-model 镜像](#mizuoto-model-镜像)；
+1. `downloads.repository` 为 `mizuoto-model`（默认值）时，先试 [mizuoto-model 镜像](#mizuoto-model-镜像)；
 2. 然后是 `downloads.source` 选中的来源；
 3. 然后依次是其余的 `huggingface`、`hf-mirror`、`modelscope`（选了 `custom` 时，`custom` 排在这三者之前）。
 
@@ -119,13 +119,13 @@ _assets/<引擎>/<共享文件>/<路径>   例如 _assets/gptsovits/encoders/…
 <Tabs items={["Web UI", "命令行"]}>
 <Tab value="Web UI">
 
-**设置** › **下载** › **仓库** 选 **优先使用 mizuoto-model 镜像**。镜像从 **下载来源** 选中的地方访问。
+**设置** › **下载** › **仓库** 选 **优先使用 mizuoto-model 镜像**（默认）。镜像从 **下载来源** 选中的地方访问。选 **各模型自己的仓库** 则不使用镜像。
 
 </Tab>
 <Tab value="命令行">
 
 ```bash
-mizuoto config set downloads.repository mizuoto-model
+mizuoto config set downloads.repository mizuoto-model   # 默认值；official 不使用镜像
 mizuoto config set downloads.source modelscope          # 从 ModelScope 上的镜像下载
 mizuoto config set downloads.mirror_repo licyk/mizuoto-model               # 默认值，Hugging Face 上的镜像
 mizuoto config set downloads.mirror_repo_modelscope licyks/mizuoto-model   # 默认值，ModelScope 上的镜像
@@ -136,7 +136,7 @@ mizuoto config set downloads.mirror_repo_modelscope licyks/mizuoto-model   # 默
 
 | 设置 | 默认值 | 说明 |
 | --- | --- | --- |
-| `downloads.repository` | `official` | `official`：各模型自己的仓库；`mizuoto-model`：先试镜像 |
+| `downloads.repository` | `mizuoto-model` | `mizuoto-model`：先试镜像；`official`：各模型自己的仓库 |
 | `downloads.mirror_repo` | `licyk/mizuoto-model` | Hugging Face 上的镜像仓库，通过 hf-mirror 和自定义地址访问时也用它 |
 | `downloads.mirror_repo_modelscope` | `licyks/mizuoto-model` | ModelScope 上的镜像仓库，`downloads.source` 为 `modelscope` 时使用 |
 
