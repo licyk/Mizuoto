@@ -480,6 +480,13 @@ class RuntimeService:
                     fix="; ".join(fixes),
                 )
             ]
+        try:
+            mismatch = self.inference.incompatible(engine_id, set(m.options))
+        except Exception as e:
+            mismatch = f"it does not import: {type(e).__name__}: {e}"
+        if mismatch:
+            fix = f"pip install --upgrade mizuoto {DISTRIBUTIONS[engine_id]}" if engine_id in DISTRIBUTIONS else ""
+            return [DoctorFinding(level="error", engine=engine_id, check="engine", message=f"{m.title} does not go with this Mizuoto: {mismatch}", fix=fix or None)]
         findings = [DoctorFinding(level="ok", engine=engine_id, check="engine", message=f"{m.title}: available")]
         try:
             extras = self.inference.extras_missing(engine_id)

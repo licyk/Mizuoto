@@ -1,7 +1,14 @@
-# What every push must pass: Mizuoto with every engine on three platforms and four Python versions, on a CPU build
-# of torch, each cell linted, type-checked for its own Python and platform, and tested; the oldest torch it supports
-# and the newest; the web UI's tests and types; the generated API types; the documentation site's types, tests and
-# build. Release (release.yml) runs this file as its checks.
+# What a change must pass, for what it changes (scripts/ci.py scope). Mizuoto and the licence-gated engines'
+# packages are released on their own, so each is checked on its own:
+# - Mizuoto (mizuoto/, tests/, scripts/, pyproject.toml): three platforms and four Python versions, on a CPU build of
+#   torch, each cell linted, type-checked for its own Python and platform, and tested; the web UI's API types; and both
+#   gated packages, which run on its runtime;
+# - a gated engine (packages/native/<id>): its package on three platforms, on Mizuoto at this commit and on the oldest
+#   Mizuoto its range allows;
+# - the oldest torch Mizuoto supports and the newest, for whatever Python is checked;
+# - the web UI (mizuoto/webui) and the documentation site (site/): their own tests, types and builds.
+# A change to the workflows or to scripts/ci.py checks everything; so do manual runs and Release's (release.yml runs
+# this file as its checks). "CI passed" is the last job, the one to require in branch protection: the others may skip.
 name: CI
 
 on:
@@ -30,38 +37,64 @@ env:
   UV_SYSTEM_PYTHON: 1
 
 jobs:
-  # A push to main that changes mizuoto/version.py starts Release, which runs this file as its checks; CI's own run
-  # of that push sets `run` to false, which skips every job below. github.workflow is "Release" inside that call, so
-  # the call itself always runs. The changed files come from the compare API (the push's before...after, as
-  # Release's `paths` filter sees it); any failure runs CI.
-  gate:
-    name: Not checked by Release
+  # The changed files decide the checks: a push's come from the compare API (before...after, as Release's `paths`
+  # filter sees it), a pull request's from its files. A new branch, a tag, a manual run, a list GitHub cuts short (the
+  # compare API stops at 300 files) or any failure checks everything.
+  # A push to main that changes a version file starts Release, which runs this file as its checks; CI's own run of
+  # that push then skips every job. github.workflow is "Release" inside that call, so the call itself always runs.
+  scope:
+    name: What changed
     runs-on: ubuntu-latest
     outputs:
-      run: ${{ steps.check.outputs.run }}
+      run: ${{ steps.scope.outputs.run }}
+      core: ${{ steps.scope.outputs.core }}
+      web: ${{ steps.scope.outputs.web }}
+      site: ${{ steps.scope.outputs.site }}
+      gated: ${{ steps.scope.outputs.gated }}
+      python: ${{ steps.scope.outputs.python }}
+      editables: ${{ steps.scope.outputs.editables }}
+      test_paths: ${{ steps.scope.outputs.test_paths }}
     steps:
-      - id: check
+      - uses: actions/checkout@v7.0.1
+        with:
+          sparse-checkout: |
+            scripts
+            packages/native
+      - id: scope
         env:
           GH_TOKEN: ${{ github.token }}
           WORKFLOW: ${{ github.workflow }}
           BEFORE: ${{ github.event.before }}
+          PR: ${{ github.event.pull_request.number }}
         run: |
-          run=true
-          if [ "$WORKFLOW" = CI ] && [ "$GITHUB_EVENT_NAME" = push ] && [ "$GITHUB_REF" = refs/heads/main ]; then
+          files=""
+          known=false
+          if [ "$GITHUB_EVENT_NAME" = pull_request ]; then
+            if files=$(gh api "repos/$GITHUB_REPOSITORY/pulls/$PR/files" --paginate --jq '.[].filename'); then known=true; fi
+          elif [ "$GITHUB_EVENT_NAME" = push ] && [ "$GITHUB_REF_TYPE" = branch ] && [ -n "$BEFORE" ] && [ "${BEFORE//0/}" != "" ]; then
             if files=$(gh api "repos/$GITHUB_REPOSITORY/compare/$BEFORE...$GITHUB_SHA" --jq '.files[].filename'); then
-              printf 'Changed files:\n%s\n' "$files"
-              if grep -qx 'mizuoto/version.py' <<< "$files"; then
-                echo "Release runs these checks for this push."
-                run=false
-              fi
+              if [ "$(grep -c . <<< "$files")" -lt 300 ]; then known=true; fi
             fi
+          fi
+          printf 'Changed files:\n%s\n' "${files:-(not known: everything is checked)}"
+          if [ "$known" = true ]; then
+            python3 scripts/ci.py scope <<< "$files" > "$RUNNER_TEMP/scope.json"
+          else
+            python3 scripts/ci.py scope --all < /dev/null > "$RUNNER_TEMP/scope.json"
+          fi
+          cat "$RUNNER_TEMP/scope.json"
+          run=true
+          if [ "$WORKFLOW" = CI ] && [ "$GITHUB_EVENT_NAME" = push ] && [ "$GITHUB_REF" = refs/heads/main ] && [ "$known" = true ] \
+             && [ "$(python3 -c 'import json, sys; print(json.load(open(sys.argv[1]))["release_files"])' "$RUNNER_TEMP/scope.json")" = True ]; then
+            echo "A version file changed: Release runs these checks for this push."
+            run=false
           fi
           echo "run=$run" >> "$GITHUB_OUTPUT"
 
   host:
-    name: host · ${{ matrix.os }} · Python ${{ matrix.python }}
-    needs: gate
-    if: needs.gate.outputs.run == 'true'
+    name: mizuoto · ${{ matrix.os }} · Python ${{ matrix.python }}
+    needs: scope
+    if: needs.scope.outputs.run == 'true' && needs.scope.outputs.core == 'true'
     runs-on: ${{ matrix.os }}
     defaults:
       run:
@@ -84,28 +117,108 @@ jobs:
           enable-cache: false
       - name: Environment
         id: environment
+        # Mizuoto alone: the gated packages are checked in their own jobs (ty reads their sources through extra-paths).
         run: |
           uv pip install torch --index-url "$TORCH_INDEX"
-          uv pip install -e . -e packages/native/fishspeech -e packages/native/indextts pytest pytest-cov ruff ty httpx tomli
+          uv pip install -e . pytest pytest-cov ruff ty httpx tomli
       # Lint, types and tests each run once the environment is there, so one failing does not hide the others.
       - name: Lint
         if: ${{ !cancelled() && steps.environment.outcome == 'success' }}
         run: python scripts/dev.py lint
       - name: Types
-        # For this cell's Python and platform: the standard library's stubs differ between them.
+        # For this cell's Python and platform: the standard library's stubs differ between them. The gated packages'
+        # tests are type-checked in their jobs, where their own dependencies are installed.
         if: ${{ !cancelled() && steps.environment.outcome == 'success' }}
         run: |
           platform=$(python -c "import sys; print({'win32': 'win32', 'darwin': 'darwin'}.get(sys.platform, 'linux'))")
-          python scripts/dev.py typecheck-py --python-version "${{ matrix.python }}" --python-platform "$platform"
+          python scripts/dev.py typecheck-py --python-version "${{ matrix.python }}" --python-platform "$platform" mizuoto tests scripts
       - name: Tests
         if: ${{ !cancelled() && steps.environment.outcome == 'success' }}
-        run: python -m pytest -q
+        run: python -m pytest -q tests
+
+  gated:
+    # A licence-gated engine's package on Mizuoto at this commit: lint, its tests' types, and its tests.
+    name: ${{ matrix.engine }} · ${{ matrix.os }} · Python ${{ matrix.python }}
+    needs: scope
+    if: needs.scope.outputs.run == 'true' && needs.scope.outputs.gated != '[]'
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
+    strategy:
+      fail-fast: false
+      matrix:
+        engine: ${{ fromJSON(needs.scope.outputs.gated) }}
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        python: ["3.10", "3.13"]
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: actions/setup-python@v7.0.0
+        with:
+          python-version: ${{ matrix.python }}
+      - uses: astral-sh/setup-uv@v10.2.0
+        with:
+          enable-cache: false
+      - name: Environment
+        id: environment
+        run: |
+          uv pip install torch --index-url "$TORCH_INDEX"
+          uv pip install -e . -e "packages/native/${{ matrix.engine }}" pytest ruff ty httpx tomli
+      - name: Lint
+        if: ${{ !cancelled() && steps.environment.outcome == 'success' }}
+        run: |
+          python -m ruff check "packages/native/${{ matrix.engine }}"
+          python -m ruff format --check "packages/native/${{ matrix.engine }}"
+      - name: Types
+        if: ${{ !cancelled() && steps.environment.outcome == 'success' }}
+        run: |
+          platform=$(python -c "import sys; print({'win32': 'win32', 'darwin': 'darwin'}.get(sys.platform, 'linux'))")
+          python scripts/dev.py typecheck-py --python-version "${{ matrix.python }}" --python-platform "$platform" "packages/native/${{ matrix.engine }}/tests"
+      - name: Tests
+        if: ${{ !cancelled() && steps.environment.outcome == 'success' }}
+        run: python -m pytest -q "packages/native/${{ matrix.engine }}/tests"
+
+  oldest-mizuoto:
+    # A gated engine's package on the oldest Mizuoto its pyproject.toml allows, from PyPI: it must not use what that
+    # release lacks. The tests run outside the checkout, with only its tests/ on the path, so `import mizuoto` finds
+    # the released one.
+    name: ${{ matrix.engine }} · oldest Mizuoto
+    needs: scope
+    if: needs.scope.outputs.run == 'true' && needs.scope.outputs.gated != '[]'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        engine: ${{ fromJSON(needs.scope.outputs.gated) }}
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: actions/setup-python@v7.0.0
+        with:
+          python-version: "3.12"
+      - uses: astral-sh/setup-uv@v10.2.0
+        with:
+          enable-cache: false
+      - name: Environment
+        run: |
+          oldest=$(python scripts/ci.py lower-bound "${{ matrix.engine }}" | python -c 'import json, sys; print(json.load(sys.stdin)["version"])')
+          echo "The oldest Mizuoto mizuoto-${{ matrix.engine }} allows: $oldest"
+          uv pip install torch --index-url "$TORCH_INDEX"
+          uv pip install "mizuoto==$oldest" -e "packages/native/${{ matrix.engine }}" pytest httpx tomli
+      - name: Tests
+        # Not the range check: it compares the range with Mizuoto at this commit, which the other jobs test.
+        run: |
+          mkdir -p "$RUNNER_TEMP/paths"
+          ln -s "$GITHUB_WORKSPACE/tests" "$RUNNER_TEMP/paths/tests"
+          cd "$RUNNER_TEMP"
+          python -c "import mizuoto; print('mizuoto', mizuoto.VERSION, 'from', mizuoto.__file__)"
+          PYTHONPATH="$RUNNER_TEMP/paths" python -m pytest -q -o pythonpath= -c "$GITHUB_WORKSPACE/pyproject.toml" --rootdir "$GITHUB_WORKSPACE" \
+            -k "not version_and_mizuoto_range" "$GITHUB_WORKSPACE/packages/native/${{ matrix.engine }}/tests"
 
   torch:
-    # API drift: the oldest torch Mizuoto supports (pyproject: torch>=2.8) and the newest release.
+    # API drift: the oldest torch Mizuoto supports (pyproject: torch>=2.8) and the newest release, for what is checked.
     name: torch ${{ matrix.torch }}
-    needs: gate
-    if: needs.gate.outputs.run == 'true'
+    needs: scope
+    if: needs.scope.outputs.run == 'true' && needs.scope.outputs.python == 'true'
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -123,15 +236,15 @@ jobs:
         run: |
           if [ "${{ matrix.torch }}" = latest ]; then spec=torch; else spec="torch==${{ matrix.torch }}"; fi
           uv pip install --upgrade "$spec" --index-url "$TORCH_INDEX"
-          uv pip install -e . -e packages/native/fishspeech -e packages/native/indextts pytest httpx tomli
+          uv pip install ${{ needs.scope.outputs.editables }} pytest httpx tomli
           python -c "import torch; print('torch', torch.__version__)"
       - name: Tests
-        run: python -m pytest -q
+        run: python -m pytest -q ${{ needs.scope.outputs.test_paths }}
 
   web:
     name: Web UI
-    needs: gate
-    if: needs.gate.outputs.run == 'true'
+    needs: scope
+    if: needs.scope.outputs.run == 'true' && needs.scope.outputs.web == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7.0.1
@@ -155,8 +268,8 @@ jobs:
 
   site:
     name: Documentation site
-    needs: gate
-    if: needs.gate.outputs.run == 'true'
+    needs: scope
+    if: needs.scope.outputs.run == 'true' && needs.scope.outputs.site == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7.0.1
@@ -170,3 +283,17 @@ jobs:
           bun run test
           bun run build
         working-directory: site
+
+  passed:
+    # One check for branch protection: it fails when a job above failed or was cancelled, and passes when they passed
+    # or were skipped because the change does not touch what they check.
+    name: CI passed
+    needs: [scope, host, gated, oldest-mizuoto, torch, web, site]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - env:
+          RESULTS: ${{ join(needs.*.result, ' ') }}
+        run: |
+          echo "Results: $RESULTS"
+          case " $RESULTS " in *" failure "*|*" cancelled "*) exit 1 ;; esac

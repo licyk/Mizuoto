@@ -136,6 +136,7 @@ known-first-party = ["mizuoto", "mizuoto_fishspeech", "mizuoto_indextts"]
 
 [tool.ruff.lint.per-file-ignores]
 "tests/*" = ["ANN", "B011", "B017"]
+"packages/native/*/tests/*" = ["ANN", "B011", "B017"]
 "scripts/*" = ["ANN"]
 # Copied verbatim from torchaudio so it stays bit-exact and diffable against upstream.
 "mizuoto/nn/dsp/kaldi.py" = ["ANN", "E741"]
@@ -164,11 +165,15 @@ output-format = "concise"
 error-on-warning = true
 
 [tool.ty.src]
-include = ["mizuoto", "tests", "scripts"]
+# The gated packages' tests; their sources are read through extra-paths, not checked themselves yet.
+include = ["mizuoto", "tests", "scripts", "packages/native/fishspeech/tests", "packages/native/indextts/tests"]
 exclude = ["mizuoto/webui/dist", "mizuoto/webui/node_modules"]
 
 [tool.pytest.ini_options]
-testpaths = ["tests"]
+# The gated engines' tests live in their packages and run with the rest; the repository root goes on sys.path for
+# the helpers they share with tests/engines_native.
+testpaths = ["tests", "packages/native/fishspeech/tests", "packages/native/indextts/tests"]
+pythonpath = ["."]
 markers = [
     "live: tests that need something outside this repository (deselected by default)",
     "engine: the engine contract suite against installed models (deselected by default; scripts/dev.py test-engines)",

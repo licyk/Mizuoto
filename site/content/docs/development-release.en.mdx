@@ -1,10 +1,10 @@
 ---
 title: "Release"
-description: "Mizuoto's dependencies and why, the platforms it supports, and how its distributions are made and checked: versions in lockstep, wheels, the smoke test, CI and the release workflow, the Docker image, the model mirror and this docs site."
+description: "Mizuoto's dependencies and why, the platforms it supports, and how its distributions are made and checked: versions released on their own, wheels, the smoke test, CI and the release workflow, the Docker image, the model mirror and this docs site."
 icon: Package
 ---
 
-A release produces three distributions: `mizuoto` (wheel and sdist, with the built web UI inside, every engine under a permissive licence included) and the wheels of the two licence-gated engines, `mizuoto-fishspeech` and `mizuoto-indextts`. All three install into one environment over a torch the user chose. This page covers how they are built, checked and published. The release workflow publishes all three to PyPI with twine; until its first release, the wheels come from `scripts/build_wheels.py` (`dist/`) or the workflow's artifacts.
+A release produces three distributions: `mizuoto` (wheel and sdist, with the built web UI inside, every engine under a permissive licence included) and the wheels of the two licence-gated engines, `mizuoto-fishspeech` and `mizuoto-indextts`. All three install into one environment over a torch the user chose, and each is versioned, checked and released on its own. This page covers how they are built, checked and published to PyPI (with twine, by the release workflow).
 
 ## Dependencies
 
@@ -69,26 +69,32 @@ CI tests every combination of Linux x86_64, Windows x86_64 and macOS arm64 with 
 The code has paths for these devices (device probing, float64 modules on the CPU where a device lacks float64, no compilation on MPS, CUDA graphs and half precision only on CUDA) and they are tested on simulated devices, but they have not been verified on AMD, Intel or Apple hardware.
 </Callout>
 
-## Versions in lockstep
+## Versions
 
-Every distribution carries the same version (0.2.0), which lives in these places and changes in all of them at once:
+Each distribution has a version of its own, in a file that holds nothing else; a push to `main` that changes it releases that distribution (see [below](#ci-and-the-release-workflow)):
 
-| File | What |
-| --- | --- |
-| `mizuoto/version.py` | `VERSION`, the dynamic version of `mizuoto` |
-| `packages/native/fishspeech/mizuoto_fishspeech/__init__.py` | `VERSION` of `mizuoto-fishspeech` |
-| `packages/native/indextts/mizuoto_indextts/__init__.py` | `VERSION` of `mizuoto-indextts` |
+| File | Version of | Tag |
+| --- | --- | --- |
+| `mizuoto/version.py` | `mizuoto` (the web UI's `package.json` follows it by hand) | `v<version>` |
+| `packages/native/fishspeech/mizuoto_fishspeech/version.py` | `mizuoto-fishspeech` | `mizuoto-fishspeech-v<version>` |
+| `packages/native/indextts/mizuoto_indextts/version.py` | `mizuoto-indextts` | `mizuoto-indextts-v<version>` |
 
-The gated packages depend on `mizuoto` (their `pyproject.toml`). `tests/core/test_engines.py::test_gated_distributions_move_in_lockstep` checks that both carry Mizuoto's version and depend on `mizuoto`; `check_versions()` in `scripts/build_wheels.py` checks the versions again at build time and fails on a mismatch.
+A gated package names the Mizuoto versions it works with in its `pyproject.toml`: `mizuoto>=0.2.0,<0.3`. Its code runs on Mizuoto's runtime and its manifest (options, catalogue, licence) ships in `mizuoto`, so:
+
+- **The lower bound** is the oldest Mizuoto release with everything the package uses. CI tests the package on that release from PyPI (the `oldest-mizuoto` job); raise the bound when the package starts using something newer, and release Mizuoto first.
+- **The upper bound** is the next minor release while Mizuoto is 0.x. `check_gated_distribution` (in `tests/core/test_engines.py`, run by each package's `test_<id>_package.py`) fails once Mizuoto's version leaves the range, so a Mizuoto release past it also releases the gated packages with a raised range.
+- **A change to a gated engine's options** changes its manifest in `mizuoto` too: release Mizuoto with the manifest, then the package with its lower bound raised to that release.
+
+`mizuoto doctor` reports an installed gated engine that does not go with this Mizuoto (its range excludes it, or its `OPTION_SCHEMA` and the manifest disagree) as an error with `pip install --upgrade mizuoto mizuoto-<id>`, and `mizuoto version` lists each distribution's version.
 
 <Callout type="info" title="What an upgrade changes on disk">
-Voice caches are keyed by Mizuoto's version, so they are rebuilt once after an upgrade. Settings keys a version no longer knows are ignored (see [Architecture](/docs/development-architecture#settings)). A host and its remote agents must speak the same protocol version (`AGENT_PROTOCOL`, now 2): otherwise each refuses the other at `hello` with an upgrade hint. More in [The data folder and compatibility](/docs/development-architecture#the-data-folder-and-compatibility).
+Voice caches are keyed by Mizuoto's version, and for a gated engine by its distribution's version too, so they are rebuilt once after an upgrade of either. Settings keys a version no longer knows are ignored (see [Architecture](/docs/development-architecture#settings)). A host and its remote agents must speak the same protocol version (`AGENT_PROTOCOL`, now 2): otherwise each refuses the other at `hello` with an upgrade hint. More in [The data folder and compatibility](/docs/development-architecture#the-data-folder-and-compatibility).
 </Callout>
 
 ## Wheels: `scripts/build_wheels.py`
 
 ```bash
-python scripts/dev.py wheels                       # all: mizuoto and every gated engine
+python scripts/dev.py wheels                       # all: mizuoto and every gated engine, each at its own version
 python scripts/dev.py wheels host                  # mizuoto only
 python scripts/dev.py wheels native indextts       # chosen gated engines
 python scripts/build_wheels.py host --skip-web --out /wheels
@@ -105,28 +111,30 @@ The package data that ships in the wheel is listed in `pyproject.toml` (`[tool.s
 ```bash
 python scripts/dev.py smoke                        # same as python scripts/smoke_wheels.py --dist dist
 python scripts/smoke_wheels.py --dist dist --python 3.13 --torch torch==2.8.0
+python scripts/smoke_wheels.py --dist dist --others none   # only the wheels in dist/
 ```
 
-It tries the built distributions as a user gets them. In a temporary folder outside the checkout, uv creates a new environment (`--python`, 3.11 by default), installs torch first from `--torch-index` (the CPU build by default; `--torch` picks the version, `torch>=2.8` by default), then, in one install, the `mizuoto` wheel of this version and the gated wheels found beside it (their other dependencies from `--index`), which must leave that torch in place. uv runs without the machine's configuration (`--no-config`, no `UV_*`/`PIP_*` variables). Then, in a temporary data folder:
+It tries the built distributions as a user gets them. In a temporary folder outside the checkout, uv creates a new environment (`--python`, 3.11 by default), installs torch first from `--torch-index` (the CPU build by default; `--torch` picks the version, `torch>=2.8` by default), then, in one install, the wheels in `--dist` and the distributions it lacks from `--index` (`--others index`, the default), which must leave that torch in place. Since each distribution is released on its own, a release is tried with the others as users have them: a `mizuoto` wheel with the gated engines' released packages, a gated engine's wheel with the newest released Mizuoto its range allows. A Mizuoto release the released gated packages do not allow fails here. The installed versions must be the wheels'. uv runs without the machine's configuration (`--no-config`, no `UV_*`/`PIP_*` variables). Then, in a temporary data folder:
 
 1. `mizuoto version`, `mizuoto env vars` and `mizuoto doctor`: every engine must be available;
-2. every engine's implementation and trainer imported (`get_engine`), every module of `mizuoto` and the gated packages imported, and every data file the checkout has beside the code found installed (the ones engines read at run time actually read);
+2. every engine's implementation and trainer imported (`get_engine`), every module of `mizuoto` and the gated packages imported, and every data file the checkout has beside the code of the distributions built from it found installed (the ones engines read at run time actually read);
 3. a dummy-engine `mizuoto speak`;
 4. the server: `/api/v1/app/health`, the UI, and a dummy speak through the API.
 
 ## CI and the release workflow
 
-`.github/workflows/ci.yml` runs the tests on every push (see [Testing](/docs/development-testing#ci)): the `host` matrix (Ubuntu, Windows, macOS × Python 3.10–3.13, CPU torch, the gated packages installed), the `torch` job (torch 2.8.0 and the latest release), `web` and `site`.
+`.github/workflows/ci.yml` checks each push and pull request for what it changes: Mizuoto, a gated package, the web UI, the docs site (see [Testing](/docs/development-testing#ci)).
 
-`.github/workflows/release.yml` runs on a push to `main` that changes `mizuoto/version.py`, on a pushed `v*` tag (GitHub applies no path filter to tags) and by hand. One release runs at a time per ref, and none is cancelled. Packages are installed with uv, as in CI.
+`.github/workflows/release.yml` runs on a push to `main` that changes a version file (`mizuoto/version.py`, `packages/native/*/mizuoto_*/version.py`), on a pushed tag `v*` or `mizuoto-*-v*` (GitHub applies no path filter to tags) and by hand (its `packages` input: `all`, `mizuoto`, `mizuoto-fishspeech` or `mizuoto-indextts`). One release runs at a time per ref, and none is cancelled. Packages are installed with uv, as in CI.
 
-1. `checks`: `ci.yml` itself, called as a reusable workflow. CI's own run of the same push to `main` skips its jobs, so nothing runs twice (see [Testing](/docs/development-testing#ci)).
-2. `build` (Ubuntu, Python 3.11, uv, bun): a tag must equal `VERSION` in `mizuoto/version.py` (`v0.2.0` for 0.2.0); `python scripts/build_wheels.py all`; `twine check dist/*`; `dist/` is uploaded as the `dist` artifact.
-3. `smoke` (Ubuntu, Python 3.10 and 3.13): downloads the artifact and runs `smoke_wheels.py --dist dist --python <version>`.
-4. `publish`: in the `pypi` environment (which can require an approval), `twine upload dist/* --skip-existing` with the `TWINE_PASSWORD` secret (a PyPI API token; user `__token__`). It uploads every distribution, `mizuoto` (wheel and sdist), `mizuoto-fishspeech` and `mizuoto-indextts`; a version already on PyPI is skipped.
-5. `github-release` (tags only): a GitHub release named after the tag, with the files and generated notes.
+1. `plan`: `python scripts/ci.py release` decides what this run releases. A push releases each distribution whose version file it changed (the compare API's files); a tag releases the one it names and must equal its version (`v0.2.0` for Mizuoto 0.2.0, `mizuoto-indextts-v0.2.1` for mizuoto-indextts 0.2.1); a manual run, its input.
+2. `checks`: `ci.yml` itself, called as a reusable workflow, for what the push changed (a version file checks its distribution; a tag or a manual run, everything). CI's own run of the same push to `main` skips its jobs, so nothing runs twice.
+3. `build` (Ubuntu, Python 3.11, uv; bun for Mizuoto's web UI): `build_wheels.py host` and/or `build_wheels.py native <id>…`, only what is released; `twine check dist/*`; `dist/` is uploaded as the `dist` artifact.
+4. `smoke` (Ubuntu, Python 3.10 and 3.13): downloads the artifact and runs `smoke_wheels.py --dist dist --python <version> --others index`, so the release is tried with the other distributions as released on PyPI.
+5. `publish`: in the `pypi` environment (which can require an approval), with the `TWINE_PASSWORD` secret (a PyPI API token; user `__token__`), `twine upload --skip-existing` of Mizuoto first, then the gated wheels, so a package that needs a new Mizuoto never appears before it. A version already on PyPI is skipped.
+6. `github-release` (tags only): a GitHub release named after the tag, with that distribution's files and notes generated from the previous tag of the same distribution; a gated engine's release is not marked latest.
 
-So the usual release is: bump the version in the three files above, push to `main` (the release publishes it), then push the tag `v<version>` for the GitHub release (its upload finds the files already on PyPI).
+So the usual release of one distribution is: bump its version file, push to `main` (the release publishes it), then push its tag (`v<version>`, or `mizuoto-<id>-v<version>`) for the GitHub release (its upload finds the files already on PyPI). Bumping several version files in one push releases them together, Mizuoto first.
 
 ## Docker
 
@@ -172,7 +180,7 @@ Publishing the mirror is the mirror owner's step; the weights keep their own lic
 
 ## The docs site
 
-This site lives in `site/`. It is built on fumadocs (TanStack Start + Vite) with bun into static files (`.output/public`); `site/vercel.json` is ready for a Vercel deployment.
+This site lives in `site/`. It is built on fumadocs (TanStack Start + Vite) with bun into static files (`.output/public`). `.github/workflows/site.yml` publishes it to GitHub Pages: on a push to `main` that changes `site/` (or by hand) it runs the site's checks, builds it with `VITE_BASE_PATH=/Mizuoto/` (Pages serves it under `https://licyk.github.io/Mizuoto/`; the router and the search index follow Vite's base), adds `.nojekyll`, and force-pushes the output to the `gh-pages` branch over SSH with the `GITEE_RSA_PRIVATE_KEY` secret (a key with write access to the repository). The repository's Pages settings serve that branch. `site/vercel.json` is ready for a Vercel deployment at the root path.
 
 ```bash
 python scripts/dev.py site-install   # bun install in site/
@@ -181,7 +189,7 @@ python scripts/dev.py site           # vite build, then scripts/prepare-static-o
 python scripts/dev.py test-site      # vitest, then tsc --noEmit
 ```
 
-CI's `site` job runs `bun install --frozen-lockfile`, `bun run check`, `bun run test` and `bun run build` in `site/`.
+CI's `site` job runs `bun install --frozen-lockfile`, `bun run check`, `bun run test` and `bun run build` in `site/`, for changes to `site/` only.
 
 - Pages are in `site/content/docs/`: `<slug>.mdx` in Simplified Chinese (the default language, `zh-CN`) and `<slug>.en.mdx` in English, with the same structure. The sidebars are `meta.json` and `meta.en.json`, grouped by `---Title---` separators.
 - The frontmatter has `title`, `description` and `icon` (a Lucide icon name). The MDX components are in `site/src/components/mdx.tsx`: `Cards`/`Card`, `Callout`, `Tabs`/`Tab`, `Steps`/`Step`, `Accordions`/`Accordion` and `Mermaid` (a `chart` prop; rendered in the browser with Mermaid loaded from a CDN, following the site's light or dark theme).

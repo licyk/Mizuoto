@@ -20,6 +20,7 @@ pytest.importorskip("safetensors")
 pytest.importorskip("mizuoto_fishspeech")
 
 from safetensors.torch import load_file  # noqa: E402
+from test_fishspeech_tiny import TINY_CODEC, build_model  # noqa: E402
 
 from mizuoto.core.audio.io import encode  # noqa: E402
 from mizuoto.core.jobs.events import MetricEvent, OutputEvent, ResultEvent  # noqa: E402
@@ -33,7 +34,6 @@ from mizuoto.training.stage import stage_main  # noqa: E402
 from mizuoto.training.trainer import trainer_for  # noqa: E402
 from mizuoto_fishspeech import engine as engine_module  # noqa: E402
 from mizuoto_fishspeech.finetune import LORA_CONFIGS, Draws, Group, Samples, Sentence, collate, encode_sentence  # noqa: E402
-from tests.engines_native.test_fishspeech_tiny import TINY_CODEC, build_model  # noqa: E402
 
 
 @pytest.fixture(scope="module", autouse=True)

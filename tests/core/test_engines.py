@@ -86,47 +86,69 @@ def test_language_support_and_detection():
     assert languages.detect("1234") is None
 
 
-def test_manifest_options_match_the_engines():
-    """Each engine's ``OPTION_SCHEMA`` mirrors its manifest's options (engine modules import no torch)."""
-    from mizuoto.core.inference.service import DISTRIBUTIONS
-    from mizuoto.runtime.engine import engine_ids, get_engine
+def check_options_mirror(engine_id: str) -> None:
+    """``engine_id``'s ``OPTION_SCHEMA`` mirrors its manifest's options (engine modules import no torch). The gated
+    packages' tests call it for their engine: their manifests ship in mizuoto, their code on its own."""
+    from mizuoto.runtime.engine import get_engine
 
-    implemented = engine_ids()
-    for path in sorted(MANIFESTS_DIR.glob("*.toml")):
-        m = load_manifest(path)
-        if m.id not in implemented:
-            assert m.id in DISTRIBUTIONS, f"{m.id} has no implementation"
-            continue
-        schema = get_engine(m.id).OPTION_SCHEMA
-        assert set(schema) == set(m.options), f"{m.id}: manifest options {sorted(m.options)} != OPTION_SCHEMA {sorted(schema)}"
-        for name, spec in schema.items():
-            o = m.options[name]
-            assert (spec.type, spec.default, spec.min, spec.max) == (o.type, o.default, o.min, o.max), f"{m.id}.{name}"
-            assert (list(spec.choices) if spec.choices else None) == o.choices, f"{m.id}.{name}"
+    m = load_manifest(MANIFESTS_DIR / f"{engine_id}.toml")
+    schema = get_engine(m.id).OPTION_SCHEMA
+    assert set(schema) == set(m.options), f"{m.id}: manifest options {sorted(m.options)} != OPTION_SCHEMA {sorted(schema)}"
+    for name, spec in schema.items():
+        o = m.options[name]
+        assert (spec.type, spec.default, spec.min, spec.max) == (o.type, o.default, o.min, o.max), f"{m.id}.{name}"
+        assert (list(spec.choices) if spec.choices else None) == o.choices, f"{m.id}.{name}"
 
 
-def test_manifest_devices_match_the_engines():
-    """Each manifest's ``devices`` are the kinds its implementation declares (``Engine.DEVICES``), known kinds only;
-    a training method's devices and a trainer's ``DEVICES`` are among them."""
-    from mizuoto.core.inference.service import DISTRIBUTIONS
-    from mizuoto.runtime.engine import DEVICE_KINDS, engine_ids, get_engine
+def check_devices_mirror(engine_id: str) -> None:
+    """``engine_id``'s manifest ``devices`` are the kinds its implementation declares (``Engine.DEVICES``); a trainer's
+    ``DEVICES`` are among them."""
+    from mizuoto.runtime.engine import get_engine
     from mizuoto.training.trainer import trainer_class, trainer_for
 
-    implemented = engine_ids()
+    m = load_manifest(MANIFESTS_DIR / f"{engine_id}.toml")
+    engine = get_engine(m.id)
+    assert set(engine.DEVICES) == set(m.devices), f"{m.id}: manifest devices {m.devices} != DEVICES {engine.DEVICES}"
+    trainer = trainer_for(m.id)
+    own = trainer_class(trainer).DEVICES if trainer else None
+    assert own is None or set(own) <= set(m.devices), f"{m.id}: trainer DEVICES {own}"
+
+
+def _builtin_manifests() -> list[str]:
+    from mizuoto.core.inference.service import DISTRIBUTIONS
+
+    return [p.stem for p in sorted(MANIFESTS_DIR.glob("*.toml")) if p.stem not in DISTRIBUTIONS]
+
+
+def test_every_manifest_has_an_implementation():
+    """A built-in engine is in BUILTIN; a licence-gated one comes in its distribution (its packages' tests check it)."""
+    from mizuoto.core.inference.service import DISTRIBUTIONS
+    from mizuoto.runtime.engine import BUILTIN
+
+    for path in sorted(MANIFESTS_DIR.glob("*.toml")):
+        assert path.stem in BUILTIN or path.stem in DISTRIBUTIONS, f"{path.stem} has no implementation"
+
+
+@pytest.mark.parametrize("engine_id", _builtin_manifests())
+def test_manifest_options_match_the_engines(engine_id):
+    check_options_mirror(engine_id)
+
+
+@pytest.mark.parametrize("engine_id", _builtin_manifests())
+def test_manifest_devices_match_the_engines(engine_id):
+    check_devices_mirror(engine_id)
+
+
+def test_manifest_devices_are_known_kinds():
+    """Every manifest's ``devices`` (and its training methods') are known kinds, the CPU among them; every engine but the
+    dummy runs on every kind of device the runtime drives."""
+    from mizuoto.runtime.engine import DEVICE_KINDS
+
     for path in sorted(MANIFESTS_DIR.glob("*.toml")):
         m = load_manifest(path)
         assert set(m.devices) <= set(DEVICE_KINDS) and "cpu" in m.devices, f"{m.id}: {m.devices}"
         for method_id, method in m.training.items():
             assert method.devices is None or set(method.devices) <= set(m.devices), f"{m.id}.{method_id}: {method.devices}"
-        if m.id not in implemented:
-            assert m.id in DISTRIBUTIONS, f"{m.id} has no implementation"
-            continue
-        engine = get_engine(m.id)
-        assert set(engine.DEVICES) == set(m.devices), f"{m.id}: manifest devices {m.devices} != DEVICES {engine.DEVICES}"
-        trainer = trainer_for(m.id)
-        own = trainer_class(trainer).DEVICES if trainer else None
-        assert own is None or set(own) <= set(m.devices), f"{m.id}: trainer DEVICES {own}"
-    # every engine but the dummy runs on every kind of device the runtime drives
     assert all(set(load_manifest(p).devices) == set(DEVICE_KINDS) for p in MANIFESTS_DIR.glob("*.toml") if p.stem != "dummy")
 
 
@@ -145,18 +167,46 @@ def test_catalogue_models_have_files_manifests():
                 assert all(f["size"] >= 0 and len(f["sha256"]) == 64 for f in data["files"])
 
 
-def test_gated_distributions_move_in_lockstep():
+def check_gated_distribution(engine_id: str) -> None:
+    """A licence-gated engine's distribution, released on its own: its version in ``mizuoto_<id>/version.py`` (the
+    file whose change releases it), and a ``mizuoto>=…,<…`` range that holds this Mizuoto's version, so a Mizuoto
+    release past the range needs the package released too. Its packages' tests call this."""
     import re
     from pathlib import Path
 
+    from mizuoto.core.inference.service import DISTRIBUTIONS, satisfies
     from mizuoto.version import VERSION
 
-    root = Path(__file__).resolve().parents[2]
-    inits = sorted(root.glob("packages/native/*/mizuoto_*/__init__.py"))
-    assert len(inits) == 2
-    for init in inits:
-        assert re.search(rf'^VERSION = "{re.escape(VERSION)}"$', init.read_text(), re.M), f"{init} is not at {VERSION}"
-        assert '"mizuoto"' in (init.parent.parent / "pyproject.toml").read_text(), f"{init.parent.parent.name} does not depend on mizuoto"
+    package = Path(__file__).resolve().parents[2] / "packages" / "native" / engine_id
+    pyproject = (package / "pyproject.toml").read_text(encoding="utf-8")
+    assert f'name = "{DISTRIBUTIONS[engine_id]}"' in pyproject
+    assert f'version = {{ attr = "mizuoto_{engine_id}.version.VERSION" }}' in pyproject
+    version = re.search(r'^VERSION = "([^"]+)"$', (package / f"mizuoto_{engine_id}" / "version.py").read_text(encoding="utf-8"), re.M)
+    assert version and re.fullmatch(r"\d+\.\d+\.\d+", version.group(1)), f"{engine_id}: no VERSION in version.py"
+    found = re.search(r'"mizuoto(>=[^",]+,<[^",]+)"', pyproject)
+    assert found, f"{engine_id} does not depend on mizuoto>=…,<…"
+    assert satisfies(VERSION, found.group(1)), f"{DISTRIBUTIONS[engine_id]} works with mizuoto{found.group(1)}, not this Mizuoto ({VERSION}): raise its range"
+
+
+def test_version_ranges():
+    from mizuoto.core.inference.service import satisfies
+
+    assert satisfies("0.2.0", ">=0.2.0,<0.3") and satisfies("0.2.9", "<0.3,>=0.2.0")
+    assert not satisfies("0.3.0", ">=0.2.0,<0.3") and not satisfies("0.1.9", ">=0.2.0,<0.3")
+    assert satisfies("0.3", "==0.3.0") and satisfies("1.4.2", "~=1.4") and not satisfies("2.0", "~=1.4")
+    assert satisfies("0.2.1rc1", ">=0.2.1") and satisfies("0.2.0", "")
+
+
+def test_doctor_reports_a_gated_engine_that_does_not_go_with_this_mizuoto(services, monkeypatch):
+    from mizuoto.core.inference import service
+
+    inference = services.runtime.inference
+    monkeypatch.setattr(inference, "implemented", lambda engine_id: True)
+    monkeypatch.setattr(service, "distribution_version", lambda engine_id: "9.0.0")
+    monkeypatch.setattr(service, "mizuoto_range", lambda engine_id: ">=9.0,<10")
+    found = [f for f in services.runtime.doctor("indextts").findings if f.check == "engine"]
+    assert found[0].level == "error" and "mizuoto-indextts 9.0.0 works with Mizuoto >=9.0,<10" in found[0].message
+    assert found[0].fix == "pip install --upgrade mizuoto mizuoto-indextts"
 
 
 def test_licence_training_rule(services):

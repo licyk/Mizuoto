@@ -10,6 +10,7 @@ from __future__ import annotations
 import functools
 import importlib.util
 import logging
+import re
 import threading
 from typing import TYPE_CHECKING, Any
 
@@ -25,6 +26,70 @@ DISTRIBUTIONS: dict[str, str] = {"fishspeech": "mizuoto-fishspeech", "indextts":
 """Engines implemented in distributions of their own (their licences cover the ports), by engine id."""
 TORCH_FREE = frozenset({"dummy"})
 """Engines that run without torch (the dummy engine: numpy only)."""
+
+_REQUIREMENT = re.compile(r"^\s*([A-Za-z0-9._-]+)\s*(?:\[[^\]]*\])?\s*\(?([^;)]*)\)?\s*(?:;.*)?$")
+_SPECIFIER = re.compile(r"^\s*(~=|==|!=|<=|>=|<|>)\s*([0-9][0-9.]*)")
+
+
+def distribution_version(engine_id: str) -> str | None:
+    """The installed version of the distribution a licence-gated engine comes in (None: built in, or not installed).
+    The gated distributions are released on their own, so their version is not Mizuoto's."""
+    from importlib import metadata
+
+    name = DISTRIBUTIONS.get(engine_id)
+    if name is None:
+        return None
+    try:
+        return metadata.version(name)
+    except metadata.PackageNotFoundError:
+        return None
+
+
+def mizuoto_range(engine_id: str) -> str | None:
+    """The Mizuoto versions an installed gated distribution says it works with (its ``mizuoto`` requirement:
+    ``<0.3,>=0.2.0``); None when it is not installed or names no range."""
+    from importlib import metadata
+
+    name = DISTRIBUTIONS.get(engine_id)
+    if name is None:
+        return None
+    try:
+        requires = metadata.requires(name) or []
+    except metadata.PackageNotFoundError:
+        return None
+    for requirement in requires:
+        found = _REQUIREMENT.match(requirement)
+        if found and found.group(1).lower() == "mizuoto" and found.group(2).strip():
+            return found.group(2).strip()
+    return None
+
+
+def _release(version: str) -> tuple[int, ...]:
+    """A version's release numbers (``0.2.0rc1`` → ``(0, 2, 0)``), without trailing zeros so ``0.3`` equals ``0.3.0``."""
+    found = re.match(r"\d+(?:\.\d+)*", version.strip())
+    numbers = [int(n) for n in found.group(0).split(".")] if found else [0]
+    while len(numbers) > 1 and numbers[-1] == 0:
+        numbers.pop()
+    return tuple(numbers)
+
+
+def satisfies(version: str, spec: str) -> bool:
+    """Whether ``version`` is in ``spec`` (``>=0.2.0,<0.3``), by release numbers (the ranges Mizuoto's distributions
+    declare; a clause this does not read is taken as met)."""
+    have = _release(version)
+    for clause in spec.split(","):
+        found = _SPECIFIER.match(clause)
+        if not found:
+            continue
+        op, bound = found.group(1), _release(found.group(2))
+        if op == "~=":
+            prefix = bound[:-1] if len(bound) > 1 else bound
+            ok = have >= bound and have[: len(prefix)] == prefix
+        else:
+            ok = {"==": have == bound, "!=": have != bound, "<=": have <= bound, ">=": have >= bound, "<": have < bound, ">": have > bound}[op]
+        if not ok:
+            return False
+    return True
 
 
 @functools.cache
@@ -147,6 +212,26 @@ class InferenceService:
 
     def available(self, engine_id: str) -> bool:
         return not self.missing(engine_id)
+
+    def incompatible(self, engine_id: str, options: set[str]) -> str | None:
+        """Why an installed licence-gated engine does not go with this Mizuoto, or None. It is released on its own: its
+        ``mizuoto`` range must hold this version (pip enforces it, unless told not to), and its ``OPTION_SCHEMA`` must
+        name the options of the manifest Mizuoto ships for it (``options``). Imports the engine's module (not torch)."""
+        from mizuoto.version import VERSION
+
+        name = DISTRIBUTIONS.get(engine_id)
+        if name is None or not self.implemented(engine_id):
+            return None
+        version = distribution_version(engine_id) or "?"
+        spec = mizuoto_range(engine_id)
+        if spec and not satisfies(VERSION, spec):
+            return f"{name} {version} works with Mizuoto {spec}, not {VERSION}"
+        from mizuoto.runtime.engine import get_engine
+
+        schema = set(get_engine(engine_id).OPTION_SCHEMA)
+        if schema != options:
+            return f"{name} {version} and Mizuoto {VERSION} disagree on its options ({', '.join(sorted(schema ^ options))})"
+        return None
 
     def extras_missing(self, engine_id: str) -> dict[str, list[str]]:
         """The engine's optional features whose packages do not import: install spec → the missing modules

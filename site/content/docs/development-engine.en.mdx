@@ -215,7 +215,7 @@ The runtime finds an implementation by id (`get_engine` in `mizuoto/runtime/engi
   fishspeech = "mizuoto_fishspeech:FishSpeechEngine"
   ```
 
-  Entry points are read once per process: installing such a distribution means restarting Mizuoto. Its package follows the engines' layer rule (`test_native_engine_packages_import_like_engines`), carries Mizuoto's version (`test_gated_distributions_move_in_lockstep`) and is built by `scripts/build_wheels.py native`.
+  Entry points are read once per process: installing such a distribution means restarting Mizuoto. Its package follows the engines' rules and mirrors its manifest (`check_native_package`, `check_options_mirror`, called by its `tests/test_<id>_package.py`), has its own version in `mizuoto_<id>/version.py` with the Mizuoto versions it works with in its `pyproject.toml` (`check_gated_distribution`), is checked by CI's `gated` and `oldest-mizuoto` jobs and is built by `scripts/build_wheels.py native` (see [Release](/docs/development-release#versions)).
 
 An engine is *available* when torch imports (the dummy engine needs none) and its implementation is registered; otherwise `EngineStatus.missing` names what is missing and the UI and `mizuoto doctor` show the fix.
 
@@ -294,7 +294,7 @@ Registration: `BUILTIN` in `mizuoto/runtime/engine.py`, or the `mizuoto.engines`
 </Step>
 <Step>
 
-Tests: `tests/engines_native/test_<id>_tiny.py`; the engine id list in `tests/core/test_engines.py::test_registry_lookups` and the `engines` override in `tests/engines/test_contract.py`.
+Tests: `tests/engines_native/test_<id>_tiny.py` (an engine in its own distribution keeps them in its package's `tests/`, as `packages/native/<pkg>/tests/` do); the engine id list in `tests/core/test_engines.py::test_registry_lookups` and the `engines` override in `tests/engines/test_contract.py`.
 
 </Step>
 <Step>

@@ -1,0 +1,70 @@
+# Builds the documentation site (site/: the home page and the docs) and publishes it to the gh-pages branch, which
+# GitHub Pages serves under /Mizuoto/. Netlify and Vercel (site/vercel.json) build the same site at the root path.
+# The site's checks run here too, as in CI's site job; a push that does not change site/ deploys nothing.
+name: Documentation site
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "site/**"
+      - ".github/workflows/site.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# One deploy at a time, the newest last: gh-pages is pushed with --force.
+concurrency:
+  group: site-deploy
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Build and publish to GitHub Pages
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: oven-sh/setup-bun@v2.2.0
+
+      - name: Environment
+        run: bun install --frozen-lockfile
+        working-directory: site
+
+      - name: Types, tests and build
+        env:
+          VITE_BASE_PATH: /Mizuoto/
+        run: |
+          bun run check
+          bun run test
+          bun run build
+          # GitHub Pages' Jekyll step would drop files whose names start with an underscore.
+          touch .output/public/.nojekyll
+        working-directory: site
+
+      - name: Configure Git
+        # GITEE_RSA_PRIVATE_KEY: an SSH key with write access to this repository.
+        env:
+          DEPLOY_PRI: ${{ secrets.GITEE_RSA_PRIVATE_KEY }}
+          GIT_USERNAME: ${{ github.repository_owner }}
+          GIT_EMAIL: ${{ github.repository_owner }}@user.github.com
+        run: |
+          mkdir -p ~/.ssh/
+          echo "${DEPLOY_PRI}" > ~/.ssh/id_rsa
+          chmod 600 ~/.ssh/id_rsa
+          ssh-keyscan github.com >> ~/.ssh/known_hosts
+          git config --global user.name "${GIT_USERNAME}"
+          git config --global user.email "${GIT_EMAIL}"
+
+      - name: Commit the site
+        env:
+          GIT_URL: "git@github.com:licyk/Mizuoto.git"
+        run: |
+          git -C "${{ github.workspace }}/site/.output/public" init
+          git -C "${{ github.workspace }}/site/.output/public" remote add origin "${GIT_URL}"
+          git -C "${{ github.workspace }}/site/.output/public" add -A
+          git -C "${{ github.workspace }}/site/.output/public" commit -m "Site auto generated. Time: $(date +'%Y-%m-%d %H:%M:%S')"
+
+      - name: Push the site
+        run: |
+          git -C "${{ github.workspace }}/site/.output/public" push origin HEAD:gh-pages --force

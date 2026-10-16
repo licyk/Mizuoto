@@ -1,16 +1,27 @@
-# The distributions: the mizuoto wheel and sdist, with the web UI built in, and the licence-gated engines' wheels
-# (mizuoto-fishspeech, mizuoto-indextts), tried in a new environment with a CPU torch and published to PyPI with
-# twine once every check passes. A push to main that changes mizuoto/version.py, a version tag and a manual run each
-# release; a tag must match the version, and also gets a GitHub release with the files.
+# The distributions, each released on its own: the mizuoto wheel and sdist, with the web UI built in, and the
+# licence-gated engines' wheels (mizuoto-fishspeech, mizuoto-indextts). What a run releases (scripts/ci.py release):
+# - a push to main releases each distribution whose version file it changes (mizuoto/version.py,
+#   packages/native/<id>/mizuoto_<id>/version.py);
+# - a tag releases the one it names and must match its version: v<version> for Mizuoto, mizuoto-<id>-v<version> for a
+#   gated engine; it also gets a GitHub release with that distribution's files;
+# - a manual run releases what its input names.
+# The chosen distributions are built, tried in a new environment with a CPU torch and the other distributions as
+# released on PyPI, and published with twine once every check passes.
 name: Release
 
 on:
   push:
     branches: [main]
-    # GitHub does not apply path filters to tag pushes: a v* tag always releases.
-    tags: ["v*"]
-    paths: ["mizuoto/version.py"]
+    # GitHub does not apply path filters to tag pushes: a matching tag always releases.
+    tags: ["v*", "mizuoto-*-v*"]
+    paths: ["mizuoto/version.py", "packages/native/*/mizuoto_*/version.py"]
   workflow_dispatch:
+    inputs:
+      packages:
+        description: "What to release (a version already on PyPI is skipped)"
+        type: choice
+        default: all
+        options: [all, mizuoto, mizuoto-fishspeech, mizuoto-indextts]
 
 permissions:
   contents: read
@@ -25,17 +36,41 @@ env:
   UV_SYSTEM_PYTHON: 1
 
 jobs:
+  plan:
+    name: What to release
+    runs-on: ubuntu-latest
+    outputs:
+      any: ${{ steps.plan.outputs.any }}
+      host: ${{ steps.plan.outputs.host }}
+      gated_ids: ${{ steps.plan.outputs.gated_ids }}
+      names: ${{ steps.plan.outputs.names }}
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - id: plan
+        # A push's changed files come from the compare API, as CI's scope job reads them.
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BEFORE: ${{ github.event.before }}
+          PACKAGES: ${{ inputs.packages }}
+        run: |
+          files=""
+          if [ "$GITHUB_EVENT_NAME" = push ] && [ "$GITHUB_REF_TYPE" = branch ]; then
+            files=$(gh api "repos/$GITHUB_REPOSITORY/compare/$BEFORE...$GITHUB_SHA" --jq '.files[].filename')
+            printf 'Changed files:\n%s\n' "$files"
+          fi
+          python3 scripts/ci.py release --packages "${PACKAGES:-all}" <<< "$files"
+
   checks:
     name: Checks
-    # CI's own run of this push skips itself (its gate job), so the checks run once, here.
+    needs: plan
+    if: needs.plan.outputs.any == 'true'
+    # CI's own run of this push skips itself (its scope job), so the checks run once, here, for what the push changes.
     uses: ./.github/workflows/ci.yml
 
   build:
-    name: Build the distributions
-    needs: [checks]
+    name: Build ${{ needs.plan.outputs.names }}
+    needs: [plan, checks]
     runs-on: ubuntu-latest
-    outputs:
-      version: ${{ steps.version.outputs.version }}
     steps:
       - uses: actions/checkout@v7.0.1
       - uses: actions/setup-python@v7.0.0
@@ -45,27 +80,18 @@ jobs:
         with:
           enable-cache: false
       - uses: oven-sh/setup-bun@v2.2.0
+        if: needs.plan.outputs.host == 'true'
       - run: uv pip install --upgrade twine
-
-      - name: The tag and mizuoto/version.py agree
-        id: version
-        # Read as text: importing mizuoto needs its dependencies. build_wheels.py checks the gated packages' versions.
-        run: |
-          version=$(sed -nE 's/^VERSION = "([^"]+)"$/\1/p' mizuoto/version.py)
-          if [ -z "$version" ]; then echo "::error::No VERSION in mizuoto/version.py"; exit 1; fi
-          echo "version=$version" >> "$GITHUB_OUTPUT"
-          echo "Package version: $version"
-          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
-            tag="${GITHUB_REF_NAME#v}"
-            if [ "$tag" != "$version" ]; then
-              echo "::error::Tag $GITHUB_REF_NAME does not match VERSION $version in mizuoto/version.py"
-              exit 1
-            fi
-          fi
 
       - name: Build
         # build_wheels.py needs only the standard library, uv and bun; it builds the web UI first.
-        run: python scripts/build_wheels.py all
+        env:
+          GATED: ${{ needs.plan.outputs.gated_ids }}
+        run: |
+          if [ "${{ needs.plan.outputs.host }}" = true ]; then python scripts/build_wheels.py host; fi
+          read -ra engines <<< "$GATED"
+          if [ ${#engines[@]} -gt 0 ]; then python scripts/build_wheels.py native "${engines[@]}"; fi
+          ls -l dist
 
       - name: Check the metadata
         # Not --strict: the gated packages have no README, so twine warns that their long description is missing.
@@ -97,8 +123,8 @@ jobs:
         with:
           name: dist
           path: dist/
-      - name: Install the wheels in a new environment (torch, then one install of the wheels) and try them
-        run: python scripts/smoke_wheels.py --dist dist --python ${{ matrix.python }}
+      - name: Install the wheels with the released distributions they go with (torch first) and try them
+        run: python scripts/smoke_wheels.py --dist dist --python ${{ matrix.python }} --others index
 
   publish:
     name: Publish to PyPI
@@ -107,7 +133,7 @@ jobs:
     # The environment can require an approval before a release.
     environment:
       name: pypi
-      url: https://pypi.org/p/mizuoto
+      url: https://pypi.org/user/licyk/
     steps:
       - uses: actions/setup-python@v7.0.0
         with:
@@ -122,12 +148,17 @@ jobs:
           name: dist
           path: dist/
       - name: Publish
-        # Every distribution in dist/: mizuoto (wheel and sdist), mizuoto-fishspeech and mizuoto-indextts. A version
-        # already on PyPI is skipped, so a tag pushed after its version's main release only adds the GitHub release.
+        # Mizuoto first, so a gated package that needs the new Mizuoto never appears before it. A version already on
+        # PyPI is skipped, so a tag pushed after its version's main release only adds the GitHub release.
         env:
           TWINE_USERNAME: __token__
           TWINE_PASSWORD: ${{ secrets.TWINE_PASSWORD }}
-        run: python -m twine upload dist/* --skip-existing --non-interactive
+        run: |
+          shopt -s nullglob
+          host=(dist/mizuoto-[0-9]*)
+          gated=(dist/mizuoto_*)
+          if [ ${#host[@]} -gt 0 ]; then python -m twine upload "${host[@]}" --skip-existing --non-interactive; fi
+          if [ ${#gated[@]} -gt 0 ]; then python -m twine upload "${gated[@]}" --skip-existing --non-interactive; fi
 
   github-release:
     name: GitHub release
@@ -138,11 +169,21 @@ jobs:
       contents: write
     steps:
       - uses: actions/checkout@v7.0.1
+        with:
+          fetch-depth: 0
       - uses: actions/download-artifact@v8.0.1
         with:
           name: dist
           path: dist/
       - name: Create the release with the built files
+        # Its notes start at the previous tag of the same distribution; only Mizuoto's releases are marked latest.
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create "$GITHUB_REF_NAME" dist/* --title "$GITHUB_REF_NAME" --generate-notes
+        run: |
+          tag="$GITHUB_REF_NAME"
+          prefix="${tag%%[0-9]*}"
+          previous=$(git tag --list "${prefix}[0-9]*" --sort=-v:refname | awk -v t="$tag" 'found { print; exit } $0 == t { found = 1 }')
+          args=(--title "$tag" --generate-notes)
+          if [ -n "$previous" ]; then args+=(--notes-start-tag "$previous"); fi
+          if [ "$prefix" != v ]; then args+=(--latest=false); fi
+          gh release create "$tag" dist/* "${args[@]}"

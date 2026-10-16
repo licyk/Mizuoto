@@ -32,6 +32,10 @@ tests/
                          streaming.py（模拟设备上的流式加载检查）、training_memory.py（训练显存工具的检查）
   engines/               test_contract.py：针对真实模型的契约套件（默认排除）
   fixtures/dsp/          由 scripts/parity/dsp_fixtures.py 生成的 DSP 夹具
+packages/native/<pkg>/tests/
+                         需要接受许可的引擎自己的测试，与其许可证覆盖的代码放在一起：小模型测试
+                         （test_fishspeech_tiny.py、test_fishspeech_train_tiny.py、test_indextts_tiny.py）和
+                         test_<id>_package.py（它的版本与 Mizuoto 范围、清单对照、引擎规则）
 ```
 
 `pyproject.toml` 定义了四个标记，默认全部排除（`addopts = "-m 'not live and not engine and not weights and not e2e'"`）：
@@ -84,11 +88,11 @@ def make_services(tmp_path: Path):
 
 ## 小型随机模型
 
-`tests/engines_native/` 为每个引擎搭一个与引擎结构相同、只有几个小层、权重随机的模型，按引擎期望的样子写进临时目录（配置、字节级词表、safetensors），然后驱动真实的代码：用 `Runtime(DeviceService(), ModelManager(...))` 调 `Engine.load`，配一个 `RequestContext`，测音色提示、解码、批处理、可重复的种子和取消。`test_<id>_train_tiny.py` 用几段音频跑完引擎训练器的每个阶段。它们不需要下载，所以 CI 每次推送都用 CPU 版 torch 运行；需要接受许可的引擎的测试，在没装它们的包时跳过。
+`tests/engines_native/` 为每个引擎搭一个与引擎结构相同、只有几个小层、权重随机的模型，按引擎期望的样子写进临时目录（配置、字节级词表、safetensors），然后驱动真实的代码：用 `Runtime(DeviceService(), ModelManager(...))` 调 `Engine.load`，配一个 `RequestContext`，测音色提示、解码、批处理、可重复的种子和取消。`test_<id>_train_tiny.py` 用几段音频跑完引擎训练器的每个阶段。它们不需要下载，所以 CI 每次推送都用 CPU 版 torch 运行。需要接受许可的引擎的测试放在各自的包里，即 `packages/native/<pkg>/tests/`；`pyproject.toml` 的 `testpaths` 列出了这些目录，所以 `python -m pytest` 会连同其余测试一起运行它们，没装对应的包时跳过。它们用到 `tests/engines_native` 的辅助模块（`streaming.py`、`accel_checks.py`），所以要在仓库根目录运行；在包目录里运行也可以，根目录 `pyproject.toml` 的 `pythonpath` 会把根目录加进 `sys.path`。
 
 这里还守着几条跨引擎的规则：
 
-- **注意力。** 每个调用点传入的 `mask_info` 都与它的稠密掩码对照检查。`MIZUOTO_TEST_ACCEL=count python -m pytest tests/engines_native` 让每次注意力调用都经过一个策略：它统计调用点，并按调用点自己的参照方式计算；如果某个调用点从没以这种方式被调用到（例如有代码绕过 `compute.attention` 直接调用 SDPA），测试结束时就会失败。
+- **注意力。** 每个调用点传入的 `mask_info` 都与它的稠密掩码对照检查。`MIZUOTO_TEST_ACCEL=count python -m pytest tests/engines_native packages/native` 让每次注意力调用都经过一个策略：它统计调用点，并按调用点自己的参照方式计算；如果某个调用点从没以这种方式被调用到（例如有代码绕过 `compute.attention` 直接调用 SDPA），测试结束时就会失败。每个 conftest 列出本目录的调用点（`SITES_TESTED`）；检查本身在 `tests/engines_native/accel_checks.py`。
 - **训练显存工具。** `training_memory.py` 的 `check_checkpointing` 把训练器的阶段在全新的工作目录里跑两遍，一遍原样，一遍每个块都做梯度检查点，比较每个指标和每个写出的权重文件：必须完全相同。保持结果的其他工具（如把优化器状态放在内存里）用同样的方式检查。
 
 ### 模拟设备上的流式加载
@@ -185,18 +189,34 @@ $W/native-env/bin/python scripts/parity/compare.py qwen3tts --a reference --b na
 
 ## CI
 
-`.github/workflows/ci.yml` 在每次推送到分支和每个拉取请求时运行四个作业，使用 torch 的 CPU 构建（`https://download.pytorch.org/whl/cpu`）。依赖用 uv 安装（`astral-sh/setup-uv`，`UV_SYSTEM_PYTHON=1`：装进 `setup-python` 提供的 Python，不建虚拟环境；缓存关闭，因为解包后的 torch wheel 会挤占 10 GB 的缓存上限）：
+`.github/workflows/ci.yml` 在每次推送到分支和每个拉取请求时运行，使用 torch 的 CPU 构建（`https://download.pytorch.org/whl/cpu`）。Mizuoto 和两个需要接受许可的包各自发布，所以各自检查，一次改动只运行它所改内容的检查。依赖用 uv 安装（`astral-sh/setup-uv`，`UV_SYSTEM_PYTHON=1`：装进 `setup-python` 提供的 Python，不建虚拟环境；缓存关闭，因为解包后的 torch wheel 会挤占 10 GB 的缓存上限）。
+
+第一个作业 `scope` 读取改动的文件（推送的来自 compare API，拉取请求的来自它的文件列表），由 `python scripts/ci.py scope` 映射为检查：
+
+| 改动 | 检查 |
+| --- | --- |
+| `packages/native/<id>/**` | 该包的 `gated` 和 `oldest-mizuoto` 作业，以及针对它的 `torch` |
+| `mizuoto/webui/**` | `web` |
+| `site/**` | `site`（文档站的测试和构建） |
+| `mizuoto/`、`tests/`、`scripts/` 下的其他内容、`pyproject.toml`，或新路径 | `host`、`web`（它的 API 类型来自代码）、`torch`，以及两个包的作业：它们跑在本次提交的 Mizuoto 运行时上 |
+| `.github/workflows/**`、`scripts/ci.py` | 全部 |
+| `README*.md`、`AGENTS.md`、`CLAUDE.md`、`LICENSE`、`Dockerfile`、`.gitignore`…… | 无 |
+
+新分支、手动触发、被 compare API 截断的列表（300 个文件）或读取失败时检查全部；`tests/test_ci.py` 覆盖这套映射。
 
 | 作业 | 环境 | 步骤 |
 | --- | --- | --- |
-| `host` | Ubuntu、Windows、macOS × Python 3.10、3.11、3.12、3.13 | 从 CPU 索引 `uv pip install torch`，再装 `-e . -e packages/native/fishspeech -e packages/native/indextts pytest pytest-cov ruff ty httpx tomli`；每个组合都运行 `dev.py lint`、`dev.py typecheck-py --python-version <该组合> --python-platform <该组合>`（标准库的类型存根随 Python 版本和平台而不同）和 `python -m pytest -q`（包括小模型测试）；三者中一个失败，其余照常运行 |
-| `torch` | Ubuntu、Python 3.12，torch 2.8.0 和最新版 | 用 Mizuoto 支持的最旧和最新的 torch 跑测试，发现 torch 的接口变化 |
+| `host` | Ubuntu、Windows、macOS × Python 3.10、3.11、3.12、3.13 | 从 CPU 索引 `uv pip install torch`，再装 `-e . pytest pytest-cov ruff ty httpx tomli`（只有 Mizuoto）；每个组合都运行 `dev.py lint`（整个仓库）、`dev.py typecheck-py --python-version <该组合> --python-platform <该组合> mizuoto tests scripts`（标准库的类型存根随 Python 版本和平台而不同）和 `python -m pytest -q tests`；三者中一个失败，其余照常运行 |
+| `gated` | 范围内的每个包 × Ubuntu、Windows、macOS × Python 3.10、3.13 | `-e . -e packages/native/<id>`；对 `packages/native/<id>` 运行 `ruff check` 和 `ruff format --check`，对它的 `tests/` 运行 `typecheck-py` 和 `pytest` |
+| `oldest-mizuoto` | 范围内的每个包，Ubuntu、Python 3.12 | 用该包 `pyproject.toml` 允许的最旧 Mizuoto（`python scripts/ci.py lower-bound <id>`，来自 PyPI）测试它：测试在源码目录之外运行，`PYTHONPATH` 上只有 `tests/`，所以 `import mizuoto` 找到的是已发布的那个（不含范围检查，它比较的是范围与本次提交的 Mizuoto） |
+| `torch` | Ubuntu、Python 3.12，torch 2.8.0 和最新版 | 用 Mizuoto 支持的最旧和最新的 torch 跑范围内的测试，发现 torch 的接口变化 |
 | `web` | Ubuntu、Python 3.11、bun | `dev.py web-install`、`dev.py test-web`、`dev.py typegen-check` |
 | `site` | Ubuntu、bun | 在 `site/` 里 `bun install --frozen-lockfile`、`bun run check`、`bun run test`、`bun run build` |
+| `passed`（"CI passed"） | Ubuntu | 上面有作业失败或被取消时失败，都通过或因改动无关而跳过时通过：分支保护只需要求这一项 |
 
-同一分支较新的运行会取消较旧的运行。推送到 `main` 且改动了 `mizuoto/version.py` 时会启动发布工作流，它把 `ci.yml` 作为自己的检查来运行；CI 自己对这次推送的运行会跳过所有作业（它的 `gate` 作业通过 compare API 查询这次推送改了哪些文件），所以检查只跑一次。版本标签只启动发布工作流。
+同一分支较新的运行会取消较旧的运行。推送到 `main` 且改动了某个版本文件时会启动发布工作流，它把 `ci.yml` 作为自己的检查，检查这次推送改动的内容；CI 自己对这次推送的运行会跳过所有作业（`scope` 看到了版本文件），所以检查只跑一次。标签只启动发布工作流，它的检查是全部。把文档站推送到 GitHub Pages 由 `site.yml` 负责，不在 CI 里（见[发布](/docs/development-release#文档站)）。
 
-`python scripts/dev.py check` 在本地运行同样的内容（只在你的平台和 Python 上）。契约套件和对照工具需要模型（对照还需要参照实现的环境），权重有几十 GB，所以不进 CI；发布工作流有自己的 wheel 冒烟测试（见[发布](/docs/development-release)）。
+`python scripts/dev.py check` 在本地运行全部内容（只在你的平台和 Python 上，装上需要接受许可的包，基于你检出的 Mizuoto）。契约套件和对照工具需要模型（对照还需要参照实现的环境），权重有几十 GB，所以不进 CI；发布工作流有自己的 wheel 冒烟测试（见[发布](/docs/development-release)）。
 
 <Callout type="info" title="CI 覆盖的是 CPU">
 CI 只有 CPU 版 torch。GPU 上的路径（CUDA 图、可选的注意力后端、显存流式加载的异步预取）在 CPU 上测的是逻辑；它们在 GPU 上的表现要在有 GPU 的机器上用契约套件和对照工具检查。

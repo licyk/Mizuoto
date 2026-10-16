@@ -171,18 +171,19 @@ def test_native_layer_imports(layer: str) -> None:
 
 
 NATIVE_PACKAGES = ROOT / "packages" / "native"
-"""Engines distributed on their own (licence-gated, decision D1): as ``mizuoto.engines`` but outside the host package."""
+"""Engines distributed on their own (licence-gated, decision D1): as ``mizuoto.engines`` but outside the host package.
+Each package's own tests hold it to these rules (``check_native_package``), so a change to one is checked there."""
 
 
-def _native_packages() -> list[Path]:
-    return sorted(p for p in NATIVE_PACKAGES.glob("*/mizuoto_*") if p.is_dir())
-
-
-@pytest.mark.parametrize("package", _native_packages(), ids=lambda p: p.name)
-def test_native_engine_packages_import_like_engines(package: Path) -> None:
+def check_native_package(package: Path) -> None:
+    """A gated engine's package (``packages/native/<id>/mizuoto_<id>``) imports like an engine, leaves the process
+    state alone and computes attention only through ``mizuoto.runtime.accel``."""
     own, third = NATIVE_RULES["engines"]
     bad = _check(package.parent, package.name, own - {"mizuoto.engines"}, third | {package.name})
     assert not bad, "Imports outside the layer rule:\n" + "\n".join(bad)
+    paths = sorted(package.rglob("*.py"))
+    bad = _global_state_changes(paths) + _attention_outside_accel(paths)
+    assert not bad, "\n".join(bad)
 
 
 def test_engines_import_no_other_engine() -> None:
@@ -207,11 +208,9 @@ def _dotted(node: ast.AST) -> str | None:
     return None
 
 
-def test_native_code_leaves_global_state_alone() -> None:
-    """Engines share the process, so they change nothing process-wide."""
+def _global_state_changes(paths: list[Path]) -> list[str]:
+    """What in ``paths`` changes process-wide state: engines share the process."""
     bad = []
-    paths = [p for layer in ("runtime", "nn", "text", "engines") for p in (HOST / layer).rglob("*.py")]
-    paths += [p for package in _native_packages() for p in package.rglob("*.py")]
     for path in paths:
         for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
             if not isinstance(node, ast.stmt | ast.expr):
@@ -230,21 +229,31 @@ def test_native_code_leaves_global_state_alone() -> None:
                 name = _dotted(target.value if isinstance(target, ast.Subscript) else target) or ""
                 if name == "os.environ" or (name.startswith(("torch.backends.", "torch._inductor.config")) and path.relative_to(ROOT).as_posix() != PROCESS_FLAGS):
                     bad.append(f"{path.relative_to(ROOT)}:{node.lineno}: assigns {name}")
+    return bad
+
+
+def test_native_code_leaves_global_state_alone() -> None:
+    """Engines share the process, so they change nothing process-wide."""
+    bad = _global_state_changes([p for layer in ("runtime", "nn", "text", "engines") for p in (HOST / layer).rglob("*.py")])
     assert not bad, "\n".join(bad)
 
 
-def test_attention_goes_through_the_accel_entry_point() -> None:
-    """Every attention computation is a site of ``mizuoto.runtime.accel``, so the backend
-    switch reaches it; SDPA and its kernels are called only there."""
+def _attention_outside_accel(paths: list[Path]) -> list[str]:
+    """SDPA or its kernels called in ``paths`` outside ``mizuoto.runtime.accel``."""
     bad = []
-    paths = [p for layer in ("runtime", "nn", "engines", "training") for p in (HOST / layer).rglob("*.py")]
-    paths += [p for package in _native_packages() for p in package.rglob("*.py")]
     for path in paths:
         if (HOST / "runtime" / "accel") in path.parents:
             continue
         for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
             if isinstance(node, ast.Attribute) and (node.attr == "scaled_dot_product_attention" or node.attr.startswith("_scaled_dot_product")):
                 bad.append(f"{path.relative_to(ROOT)}:{node.lineno}: {node.attr}")
+    return bad
+
+
+def test_attention_goes_through_the_accel_entry_point() -> None:
+    """Every attention computation is a site of ``mizuoto.runtime.accel``, so the backend
+    switch reaches it; SDPA and its kernels are called only there."""
+    bad = _attention_outside_accel([p for layer in ("runtime", "nn", "engines", "training") for p in (HOST / layer).rglob("*.py")])
     assert not bad, "\n".join(bad)
 
 

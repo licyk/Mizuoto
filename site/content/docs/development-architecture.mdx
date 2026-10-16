@@ -88,7 +88,7 @@ site/          本文档站
 
 - `test_only_core_inference_reaches_model_code`：`mizuoto/core` 里除 `core/inference` 之外，没有模块导入运行时、`nn`、引擎或训练器。
 - `test_shared_modules_are_standard_library_only`：`core/codes.py`、`core/jobs/events.py`、`core/jobs/jsonl.py`、`core/remote/frames.py` 和 `core/inference/tasks.py` 只导入标准库（以及彼此）。运行时、引擎和训练阶段都要用它们。
-- `test_native_engine_packages_import_like_engines`：`packages/native/*/mizuoto_*` 遵守引擎的规则（另可导入自己的包）。
+- `check_native_package`，由每个需要接受许可的包的 `test_<id>_package.py` 对自己调用：`packages/native/*/mizuoto_*` 遵守引擎的规则（另可导入自己的包），不改变进程状态，注意力只经 `mizuoto.runtime.accel` 计算。
 - `test_engines_import_no_other_engine`：`mizuoto/engines/<a>` 永远不导入 `mizuoto/engines/<b>`；两个引擎共用的东西应放进 `nn` 或 `runtime`。
 - `test_native_code_leaves_global_state_alone`：`runtime`、`nn`、`text`、各引擎和需要接受许可的包里，不允许出现改动进程级状态的调用（见[运行时](/docs/development-runtime#全局状态)）。
 - `test_attention_goes_through_the_accel_entry_point`：`runtime/accel` 之外，运行时、`nn`、引擎、训练器和需要接受许可的包都不直接调用 SDPA 或它的 aten 内核；每次注意力计算都经过 `accel.attention`，`compute.attention` 才能切换它（见[注意力加速](/docs/development-acceleration)）。
@@ -235,7 +235,7 @@ with open_services() as services:
 音色是 `voices/<slug>/voice.json` 加 `references/<sha256>.flac`（单声道，保留原采样率）。文件夹就是事实来源，列表是一次扫描；删除进回收站。种类有 `reference`、`designed`（设计结果，生成的片段作为主参考）、`preset`（某个模型的预设说话人）和 `trained`。
 
 - `fit_voice(voice, model, variant)` 回答“这个模型能否用这个音色、怎样用”：模式（`preset`、`design`、`clone`、`clone_no_transcript`）、还需要什么（`transcribe`、`trim`）、警告，或不能用的原因。合成和界面的音色选择器都用它。
-- **音色缓存。** 加载模型之后，任务对每个键调用一次 `prepare_voice`，写入 `voices/<slug>/cache/<引擎>/<模型>/<键>/` 并记下 `cache.json`；临时参考音频写入 `cache/voices/…`。键是（模型、模型版本、参考音频的 SHA-256 与转写、音色模式、Mizuoto 版本）的哈希，所以升级 Mizuoto 会重建一次缓存。
+- **音色缓存。** 加载模型之后，任务对每个键调用一次 `prepare_voice`，写入 `voices/<slug>/cache/<引擎>/<模型>/<键>/` 并记下 `cache.json`；临时参考音频写入 `cache/voices/…`。键是（模型、模型版本、参考音频的 SHA-256 与转写、音色模式、Mizuoto 版本，以及需要接受许可的引擎的发行包版本）的哈希，所以升级 Mizuoto 或该发行包会重建一次缓存。
 - **音色自有权重**（`Voice.weights[engine]`）：清单有 `[weights]` 角色的引擎（GPT-SoVITS 的 `gpt` 和 `sovits`）可以带一个音色专属的微调，存于 `weights/<引擎>/`，随音色导出导入；版本由文件判断，与变体的 `weights_version` 相同时才使用。
 - 缺少转写时，开启 `tts.auto_transcribe` 且 ASR 可用就先转写（结果按音频 SHA-256 和模型缓存在 `transcripts` 表里，并写回音色）；否则模型有 `clone_no_transcript` 就用它，没有就报 `capability_not_supported` 并提示安装命令。
 
@@ -273,7 +273,7 @@ with open_services() as services:
 
 - 模型文件夹和模型文件清单、音色（文件夹、参考音频、权重）、输出、数据集、实验、项目和预设都原样可用。只校验清单里的文件，所以清单删掉的旧文件留着也无害。
 - `settings.toml` 的键保持不变；某个版本改名或删除的键会被忽略。数据库只追加迁移。
-- 音色缓存的键含 Mizuoto 版本，升级后第一次使用时重建。
+- 音色缓存的键含 Mizuoto 版本（以及需要接受许可的引擎的发行包版本），升级后第一次使用时重建。
 - 主机和它的远程 agent 必须使用同一个协议版本，不同时互相拒绝。
 - 一个任务记录它所属的进程；打开数据目录时，只有进程已经不在的任务才标为 `interrupted`，所以另一条命令不会打断正在进行的渲染。
 

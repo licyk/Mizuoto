@@ -9,7 +9,9 @@ requires-python = ">=3.10"
 dynamic = ["version"]
 license = "LicenseRef-Fish-Audio-Research"
 # A separate distribution because the Fish Audio Research License covers this port. It runs inside Mizuoto's own environment and registers itself as an engine.
-dependencies = ["mizuoto", "tokenizers>=0.20", "safetensors"]
+# The Mizuoto versions it works with: its code uses Mizuoto's runtime, and its manifest ships in mizuoto. The lower bound is
+# the oldest release with everything it uses (CI tests it); the upper one the next minor, while Mizuoto is 0.x.
+dependencies = ["mizuoto>=0.2.0,<0.3", "tokenizers>=0.20", "safetensors"]
 
 [project.entry-points."mizuoto.engines"]
 fishspeech = "mizuoto_fishspeech:FishSpeechEngine"
@@ -22,4 +24,4 @@ include = ["mizuoto_fishspeech*"]
 mizuoto_fishspeech = ["LICENSE.md"]
 
 [tool.setuptools.dynamic]
-version = { attr = "mizuoto_fishspeech.VERSION" }
+version = { attr = "mizuoto_fishspeech.version.VERSION" }

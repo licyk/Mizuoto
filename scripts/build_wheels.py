@@ -6,7 +6,8 @@
   ``mizuoto-indextts``; decision D1), one wheel each, from a clean copy (no ``__pycache__``);
 - ``all`` (the default): both.
 
-Every distribution carries the same version (``mizuoto.version.VERSION``); a mismatch fails the build.
+Each distribution has its own version (``mizuoto/version.py``, ``packages/native/<id>/mizuoto_<id>/version.py``) and
+is released on its own; a gated engine's ``pyproject.toml`` names the Mizuoto versions it works with.
 Standard library only, plus uv (``uv build``) and bun for the UI.
 """
 
@@ -52,14 +53,11 @@ def native_packages() -> list[str]:
     return sorted(p.name for p in NATIVE.iterdir() if (p / "pyproject.toml").is_file())
 
 
-def check_versions() -> str:
-    """Mizuoto and the gated engines' distributions move in lockstep."""
-    version = version_of(ROOT / "mizuoto" / "version.py")
-    others = {f"mizuoto-{name}": version_of(NATIVE / name / f"mizuoto_{name}" / "__init__.py") for name in native_packages()}
-    wrong = {k: v for k, v in others.items() if v != version}
-    if wrong:
-        sys.exit(f"Versions differ from mizuoto {version}: {wrong}")
-    return version
+def versions() -> dict[str, str]:
+    """Each distribution's version, by name."""
+    found = {"mizuoto": version_of(ROOT / "mizuoto" / "version.py")}
+    found |= {f"mizuoto-{name}": version_of(NATIVE / name / f"mizuoto_{name}" / "version.py") for name in native_packages()}
+    return found
 
 
 def build_host(out: Path, skip_web: bool = False) -> None:
@@ -99,17 +97,21 @@ def main(argv: list[str]) -> int:
     parser.add_argument("--out", type=Path, default=ROOT / "dist")
     parser.add_argument("--skip-web", action="store_true", help="Use the web UI already built in mizuoto/webui/dist (a Docker stage built it)")
     args = parser.parse_args(argv)
-    version = check_versions()
+    known = versions()
     out = args.out.resolve()
     out.mkdir(parents=True, exist_ok=True)
+    built = []
     if args.what in ("all", "host"):
         build_host(out, args.skip_web)
+        built.append("mizuoto")
     if args.what in ("all", "native"):
         for name in args.engines or native_packages():
             build_native(name, out)
-    print(f"Mizuoto {version} → {out}", file=sys.stderr)
-    for wheel in sorted(out.glob(f"*-{version}-*.whl")):
-        print(f"  {wheel.name}  {wheel.stat().st_size / 1e6:.2f} MB", file=sys.stderr)
+            built.append(f"mizuoto-{name}")
+    print(f"→ {out}", file=sys.stderr)
+    for name in built:
+        for wheel in sorted(out.glob(f"{name.replace('-', '_')}-{known[name]}-*.whl")):
+            print(f"  {wheel.name}  {wheel.stat().st_size / 1e6:.2f} MB", file=sys.stderr)
     return 0
 
 

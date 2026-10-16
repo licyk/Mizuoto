@@ -40,35 +40,3 @@ def test_rotary_with_precomputed_tables_matches_the_original(dtype):
         assert torch.equal(apply_rotary(t, rope_tables(freqs)), expected), shape
         assert torch.equal(apply_rotary(t, freqs), expected), shape
         assert torch.equal(apply_rotary(t, rope_tables(freqs), 0.5), _upstream_rotary(t, freqs, 0.5)), shape
-
-
-def test_gpt2s_in_place_gelu_matches_the_original():
-    gpt = pytest.importorskip("mizuoto_indextts.gpt")
-    import math
-
-    def upstream(x: torch.Tensor) -> torch.Tensor:
-        return 0.5 * x * (1.0 + torch.tanh(math.sqrt(2.0 / math.pi) * (x + 0.044715 * torch.pow(x, 3.0))))
-
-    g = torch.Generator().manual_seed(0)
-    for dtype in (torch.float32, torch.float16, torch.bfloat16):
-        for shape in ((3, 1, 5120), (1, 50, 5120), (7,)):
-            x = (torch.randn(shape, generator=g) * 4).to(dtype)
-            assert torch.equal(gpt.gelu_new(x), upstream(x)), (dtype, shape)
-
-
-def test_fish_codecs_in_place_snake_matches_the_original():
-    codec = pytest.importorskip("mizuoto_fishspeech.codec")
-
-    def upstream(x: torch.Tensor, alpha: torch.Tensor) -> torch.Tensor:
-        shape = x.shape
-        x = x.reshape(shape[0], shape[1], -1)
-        return (x + (alpha + 1e-9).reciprocal() * torch.sin(alpha * x).pow(2)).reshape(shape)
-
-    g = torch.Generator().manual_seed(0)
-    for dtype in (torch.float32, torch.bfloat16):
-        for shape in ((1, 64, 3001), (2, 16, 7)):
-            x = (torch.randn(shape, generator=g) * 3).to(dtype)
-            alpha = (torch.rand(1, shape[1], 1, generator=g) * 2).to(dtype)
-            with torch.no_grad():
-                assert torch.equal(codec.snake(x, alpha), upstream(x, alpha)), (dtype, shape)
-            assert torch.equal(codec.snake(x, alpha), upstream(x, alpha)), (dtype, shape)

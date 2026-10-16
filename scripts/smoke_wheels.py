@@ -1,8 +1,10 @@
 """Try the built distributions as a user gets them: ``python scripts/smoke_wheels.py [--dist dist]``.
 
 A new virtual environment outside the checkout gets torch (the CPU build: ``--torch-index``), then, with one
-``pip install``, the ``mizuoto`` wheel of this version and the licence-gated engines' wheels found beside it (their
-other dependencies from ``--index``), which must leave that torch in place. uv runs without the machine's
+``pip install``, the wheels in ``--dist`` and the distributions it lacks from ``--index``, which must leave that torch
+in place. The distributions are released on their own, so a release is tried with the others as users have them: a
+Mizuoto wheel with the gated engines' released packages, a gated engine's wheel with the released Mizuoto (the newest
+its range allows); ``--others none`` installs only the wheels. uv runs without the machine's
 configuration (``--no-config``, no ``UV_*``/``PIP_*`` variables). In a temporary data folder it then runs:
 
 - ``mizuoto version``, ``mizuoto env vars`` and ``mizuoto doctor`` (every engine must be available);
@@ -20,7 +22,6 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import re
 import shutil
 import socket
 import subprocess
@@ -99,16 +100,14 @@ def free_port() -> int:
         return int(s.getsockname()[1])
 
 
-def version() -> str:
-    found = re.search(r'^VERSION\s*=\s*"([^"]+)"', (ROOT / "mizuoto" / "version.py").read_text(encoding="utf-8"), re.M)
-    if not found:
-        sys.exit("No VERSION in mizuoto/version.py")
-    return found.group(1)
+def wheel_version(wheel: Path) -> str:
+    return wheel.name.split("-")[1]
 
 
-def expected_data(gated: list[str]) -> list[str]:
-    """The checkout's data files beside the code (not .py), as paths relative to site-packages."""
-    roots = [ROOT / "mizuoto"] + [NATIVE / g / f"mizuoto_{g}" for g in gated]
+def expected_data(host: bool, gated: list[str]) -> list[str]:
+    """The checkout's data files beside the code (not .py) of the distributions built from it, as paths relative to
+    site-packages (those from the index are as they were released)."""
+    roots = ([ROOT / "mizuoto"] if host else []) + [NATIVE / g / f"mizuoto_{g}" for g in gated]
     found = []
     for root in roots:
         for path in root.rglob("*"):
@@ -138,15 +137,24 @@ def main(argv: list[str]) -> int:
     parser.add_argument("--torch-index", default="https://download.pytorch.org/whl/cpu", help="Where torch comes from (the build is the user's choice)")
     parser.add_argument("--torch", default="torch>=2.8", help="Which torch (torch==2.8.0: the oldest Mizuoto supports)")
     parser.add_argument("--index", default="https://pypi.org/simple", help="Where the other dependencies come from")
+    parser.add_argument("--others", choices=["index", "none"], default="index", help="The distributions --dist lacks: from --index, or none")
     args = parser.parse_args(argv)
     uv = shutil.which("uv") or str(Path(sys.executable).parent / "uv")
     dist = args.dist.resolve()
-    ver = version()
-    host = dist / f"mizuoto-{ver}-py3-none-any.whl"
-    if not host.is_file():
-        sys.exit(f"No {host.name} in {dist}: python scripts/build_wheels.py host")
-    wheels = sorted(dist.glob(f"mizuoto_*-{ver}-py3-none-any.whl"))
-    gated = [w.name.split("-")[0].removeprefix("mizuoto_") for w in wheels]
+    hosts = sorted(dist.glob("mizuoto-[0-9]*-py3-none-any.whl"))
+    wheels = sorted(dist.glob("mizuoto_*-py3-none-any.whl"))
+    if len(hosts) > 1:
+        sys.exit(f"More than one mizuoto wheel in {dist}: {[w.name for w in hosts]}")
+    built = [w.name.split("-")[0].removeprefix("mizuoto_") for w in wheels]
+    if not hosts and not built:
+        sys.exit(f"No wheels in {dist}: python scripts/build_wheels.py")
+    if not hosts and args.others == "none":
+        sys.exit(f"No mizuoto wheel in {dist}, and --others none: python scripts/build_wheels.py host")
+    every = sorted(p.name for p in NATIVE.iterdir() if (p / "pyproject.toml").is_file())
+    from_index = ([] if hosts else ["mizuoto"]) + ([f"mizuoto-{g}" for g in every if g not in built] if args.others == "index" else [])
+    gated = sorted(set(built) | ({g for g in every if f"mizuoto-{g}" in from_index}))
+    expected_versions = {"mizuoto": wheel_version(hosts[0])} if hosts else {}
+    expected_versions |= {f"mizuoto-{g}": wheel_version(w) for g, w in zip(built, wheels)}
     with tempfile.TemporaryDirectory(prefix="mizuoto-smoke-") as tmp:
         folder = Path(tmp)
         venv = folder / "venv"
@@ -159,8 +167,9 @@ def main(argv: list[str]) -> int:
         torch_version = [str(python), "-c", "import torch; print(torch.__version__)"]
         run([uv, "pip", "install", "-q", "--no-config", "--python", str(python), "--default-index", args.torch_index, args.torch], uv_env)
         torch_before = run(torch_version, uv_env).strip()
-        # One install of the wheels (by path: an index's ``mizuoto`` must not win); their dependencies from --index.
-        run([uv, "pip", "install", "-q", "--no-config", "--python", str(python), "--default-index", args.index, str(host), *map(str, wheels)], uv_env)
+        # One install of the wheels (by path: an index's ``mizuoto`` must not win) and of the released distributions they
+        # go with; their dependencies from --index.
+        run([uv, "pip", "install", "-q", "--no-config", "--python", str(python), "--default-index", args.index, *map(str, hosts + wheels), *from_index], uv_env)
         torch_after = run(torch_version, uv_env).strip()
         if torch_after != torch_before:
             sys.exit(f"Installing mizuoto replaced torch {torch_before} with {torch_after}: the build is the user's choice")
@@ -171,7 +180,12 @@ def main(argv: list[str]) -> int:
         where = run([str(python), "-c", "import mizuoto; print(mizuoto.__file__)"], env).strip()
         if not where.startswith(str(venv)):
             sys.exit(f"mizuoto came from {where}, not the new environment")
-        print(f"mizuoto {about['mizuoto']} from {where}; gated: {', '.join(gated) or 'none'}")
+        names = ["mizuoto", *(f"mizuoto-{g}" for g in gated)]
+        installed = json.loads(run([str(python), "-c", f"import json; from importlib.metadata import version; print(json.dumps({{n: version(n) for n in {names!r}}}))"], env))
+        wrong = {n: (installed[n], v) for n, v in expected_versions.items() if installed[n] != v}
+        if wrong:
+            sys.exit(f"Installed versions are not the wheels' (installed, wheel): {wrong}")
+        print(f"mizuoto {about['mizuoto']} from {where}; " + ", ".join(f"{n} {v} ({'wheel' if n in expected_versions else 'index'})" for n, v in installed.items()))
         run([*mizuoto, "env", "vars"], env)
         report = json.loads(run([*mizuoto, "doctor", "--json"], env))
         print(f"torch {report['torch']} ({report['torch_build']}); this machine: {report['recommended_build']}")
@@ -180,7 +194,7 @@ def main(argv: list[str]) -> int:
         if unavailable or not engines:
             sys.exit(f"doctor: engines not available: {unavailable or 'none listed'}")
         print(f"doctor: {len(engines)} engines available")
-        checked = json.loads(run([str(python), "-c", CHECK, json.dumps(expected_data(gated))], env))
+        checked = json.loads(run([str(python), "-c", CHECK, json.dumps(expected_data(bool(hosts), built))], env))
         missing = sorted(set(gated) - set(checked["gated"]))
         if missing:
             sys.exit(f"gated engines installed but not registered: {missing}")

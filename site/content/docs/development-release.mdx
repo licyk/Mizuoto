@@ -1,10 +1,10 @@
 ---
 title: "发布"
-description: "Mizuoto 的依赖及其理由、支持的平台，以及发行包怎样构建和检查：版本同步、wheel、冒烟测试、CI 与发布工作流、Docker 镜像、模型镜像和本文档站。"
+description: "Mizuoto 的依赖及其理由、支持的平台，以及发行包怎样构建和检查：各自发布的版本、wheel、冒烟测试、CI 与发布工作流、Docker 镜像、模型镜像和本文档站。"
 icon: Package
 ---
 
-一次发布产出三个发行包：`mizuoto`（wheel 和 sdist，内含构建好的 Web UI，以及所有采用宽松许可证的引擎），以及两个需要接受许可的引擎的 wheel：`mizuoto-fishspeech` 和 `mizuoto-indextts`。三者都装进同一个环境，装在用户自选的 torch 之上。本页讲它们怎样构建、检查和发布。发布工作流用 twine 把三者发布到 PyPI；在它第一次发布之前，wheel 来自 `scripts/build_wheels.py`（`dist/`）或该工作流的产物。
+一次发布产出三个发行包：`mizuoto`（wheel 和 sdist，内含构建好的 Web UI，以及所有采用宽松许可证的引擎），以及两个需要接受许可的引擎的 wheel：`mizuoto-fishspeech` 和 `mizuoto-indextts`。三者都装进同一个环境，装在用户自选的 torch 之上，各自有版本号、各自检查、各自发布。本页讲它们怎样构建、检查并发布到 PyPI（由发布工作流用 twine 完成）。
 
 ## 依赖
 
@@ -69,26 +69,32 @@ CI 在 Linux x86_64、Windows x86_64 和 macOS arm64 上，用 CPU 版 torch 测
 代码为这些设备准备了相应的路径（设备探测、没有 float64 的设备上把 float64 模块放在 CPU、MPS 上不编译、只在 CUDA 上用 CUDA 图和半精度），并在模拟的设备上测试过，但还没有在 AMD、Intel 或 Apple 的硬件上验证。
 </Callout>
 
-## 版本同步
+## 版本
 
-所有发行包都带同一个版本号（0.2.0），它出现在下面这些地方，改动时要一起改：
+每个发行包有自己的版本号，放在一个只含版本号的文件里；推送到 `main` 时改动了它，就发布这个发行包（见[下文](#ci-与发布工作流)）：
 
-| 文件 | 内容 |
-| --- | --- |
-| `mizuoto/version.py` | `VERSION`，`mizuoto` 的动态版本 |
-| `packages/native/fishspeech/mizuoto_fishspeech/__init__.py` | `mizuoto-fishspeech` 的 `VERSION` |
-| `packages/native/indextts/mizuoto_indextts/__init__.py` | `mizuoto-indextts` 的 `VERSION` |
+| 文件 | 谁的版本 | 标签 |
+| --- | --- | --- |
+| `mizuoto/version.py` | `mizuoto`（Web UI 的 `package.json` 手动跟随） | `v<版本>` |
+| `packages/native/fishspeech/mizuoto_fishspeech/version.py` | `mizuoto-fishspeech` | `mizuoto-fishspeech-v<版本>` |
+| `packages/native/indextts/mizuoto_indextts/version.py` | `mizuoto-indextts` | `mizuoto-indextts-v<版本>` |
 
-需要接受许可的包依赖 `mizuoto`（见它们的 `pyproject.toml`）。`tests/core/test_engines.py::test_gated_distributions_move_in_lockstep` 检查两者都带着 Mizuoto 的版本号并依赖 `mizuoto`；`scripts/build_wheels.py` 的 `check_versions()` 在构建时再检查一遍版本，不一致就失败。
+需要接受许可的包在自己的 `pyproject.toml` 里写明它适用的 Mizuoto 版本：`mizuoto>=0.2.0,<0.3`。它的代码跑在 Mizuoto 的运行时上，它的清单（选项、模型目录、许可）随 `mizuoto` 发布，所以：
+
+- **下限**是包含该包所用一切的最旧 Mizuoto 版本。CI 用 PyPI 上的这个版本测试该包（`oldest-mizuoto` 作业）；包开始用到更新的东西时提高下限，并先发布 Mizuoto。
+- **上限**在 Mizuoto 还是 0.x 时取下一个次版本。`check_gated_distribution`（在 `tests/core/test_engines.py`，由各包的 `test_<id>_package.py` 调用）在 Mizuoto 的版本超出范围时失败，所以 Mizuoto 发布越过上限时，也要提高范围并发布这两个包。
+- **改动一个需要接受许可的引擎的选项**，也会改动 `mizuoto` 里它的清单：先发布带新清单的 Mizuoto，再发布把下限提高到该版本的包。
+
+已安装的需要接受许可的引擎与当前 Mizuoto 不匹配时（范围不包含当前版本，或它的 `OPTION_SCHEMA` 与清单不一致），`mizuoto doctor` 报告为错误，并给出 `pip install --upgrade mizuoto mizuoto-<id>`；`mizuoto version` 列出每个发行包的版本。
 
 <Callout type="info" title="升级会改变磁盘上的什么">
-音色缓存按 Mizuoto 的版本区分，所以升级后会重建一次。某个版本不再认识的设置键会被忽略（见[整体架构](/docs/development-architecture#设置)）。主机和它的远程 agent 必须使用同一个协议版本（`AGENT_PROTOCOL`，当前为 2）：版本不同时双方在 `hello` 时互相拒绝，并提示升级。更多见[数据目录与兼容性](/docs/development-architecture#数据目录与兼容性)。
+音色缓存按 Mizuoto 的版本区分，需要接受许可的引擎还按它自己发行包的版本区分，所以升级其中任何一个后会重建一次。某个版本不再认识的设置键会被忽略（见[整体架构](/docs/development-architecture#设置)）。主机和它的远程 agent 必须使用同一个协议版本（`AGENT_PROTOCOL`，当前为 2）：版本不同时双方在 `hello` 时互相拒绝，并提示升级。更多见[数据目录与兼容性](/docs/development-architecture#数据目录与兼容性)。
 </Callout>
 
 ## Wheel：`scripts/build_wheels.py`
 
 ```bash
-python scripts/dev.py wheels                       # all：mizuoto 和每个需要接受许可的引擎
+python scripts/dev.py wheels                       # all：mizuoto 和每个需要接受许可的引擎，各用自己的版本
 python scripts/dev.py wheels host                  # 只构建 mizuoto
 python scripts/dev.py wheels native indextts       # 指定的需要接受许可的引擎
 python scripts/build_wheels.py host --skip-web --out /wheels
@@ -105,28 +111,30 @@ python scripts/build_wheels.py host --skip-web --out /wheels
 ```bash
 python scripts/dev.py smoke                        # 等同于 python scripts/smoke_wheels.py --dist dist
 python scripts/smoke_wheels.py --dist dist --python 3.13 --torch torch==2.8.0
+python scripts/smoke_wheels.py --dist dist --others none   # 只装 dist/ 里的 wheel
 ```
 
-它像用户那样试用构建出的发行包。在源码目录之外的临时文件夹里，uv 新建一个环境（`--python`，默认 3.11），先从 `--torch-index` 装 torch（默认 CPU 构建；`--torch` 指定版本，默认 `torch>=2.8`），再一次性安装本版本的 `mizuoto` wheel 和放在旁边的需要接受许可的 wheel（其他依赖来自 `--index`），这次安装不得替换已装的 torch。uv 不读取本机配置（`--no-config`，不带 `UV_*`/`PIP_*` 变量）。然后在临时数据目录里：
+它像用户那样试用构建出的发行包。在源码目录之外的临时文件夹里，uv 新建一个环境（`--python`，默认 3.11），先从 `--torch-index` 装 torch（默认 CPU 构建；`--torch` 指定版本，默认 `torch>=2.8`），再一次性安装 `--dist` 里的 wheel，以及它缺少的发行包（来自 `--index`；`--others index`，默认），这次安装不得替换已装的 torch。由于每个发行包各自发布，一次发布要和用户手里其他已发布的包一起试：`mizuoto` 的 wheel 配上两个需要接受许可的引擎已发布的包，需要接受许可的引擎的 wheel 配上其范围允许的最新已发布 Mizuoto。已发布的那两个包不允许的 Mizuoto 版本会在这里失败。装上的版本必须就是这些 wheel 的版本。uv 不读取本机配置（`--no-config`，不带 `UV_*`/`PIP_*` 变量）。然后在临时数据目录里：
 
 1. `mizuoto version`、`mizuoto env vars` 和 `mizuoto doctor`：每个引擎都必须可用；
-2. 导入每个引擎的实现和训练器（`get_engine`），导入 `mizuoto` 和需要接受许可的包的每个模块，确认源码里与代码放在一起的每个数据文件都装上了（引擎运行时会读的那些还要真正读一遍）；
+2. 导入每个引擎的实现和训练器（`get_engine`），导入 `mizuoto` 和需要接受许可的包的每个模块，确认由源码构建的发行包里与代码放在一起的每个数据文件都装上了（引擎运行时会读的那些还要真正读一遍）；
 3. 用 dummy 引擎执行一次 `mizuoto speak`；
 4. 服务器：`/api/v1/app/health`、界面，以及经 API 用 dummy 引擎合成一次。
 
 ## CI 与发布工作流
 
-`.github/workflows/ci.yml` 在每次推送时运行测试（见[测试](/docs/development-testing#ci)）：`host` 矩阵（Ubuntu、Windows、macOS × Python 3.10–3.13，CPU 版 torch，装上需要接受许可的包）、`torch` 作业（torch 2.8.0 和最新版）、`web` 和 `site`。
+`.github/workflows/ci.yml` 按每次推送和拉取请求改动的内容检查：Mizuoto、某个需要接受许可的包、Web UI、文档站（见[测试](/docs/development-testing#ci)）。
 
-`.github/workflows/release.yml` 在推送到 `main` 且改动了 `mizuoto/version.py` 时、推送 `v*` 标签时（GitHub 对标签不应用路径过滤）以及手动触发时运行。同一引用同时只运行一次发布，且不会被取消。依赖和 CI 一样用 uv 安装。
+`.github/workflows/release.yml` 在推送到 `main` 且改动了某个版本文件（`mizuoto/version.py`、`packages/native/*/mizuoto_*/version.py`）时、推送 `v*` 或 `mizuoto-*-v*` 标签时（GitHub 对标签不应用路径过滤）以及手动触发时运行（输入 `packages`：`all`、`mizuoto`、`mizuoto-fishspeech` 或 `mizuoto-indextts`）。同一引用同时只运行一次发布，且不会被取消。依赖和 CI 一样用 uv 安装。
 
-1. `checks`：把 `ci.yml` 本身作为可复用工作流调用。CI 自己对同一次推送到 `main` 的运行会跳过它的作业，所以不会重复运行（见[测试](/docs/development-testing#ci)）。
-2. `build`（Ubuntu、Python 3.11、uv、bun）：标签必须等于 `mizuoto/version.py` 里的 `VERSION`（0.2.0 对应 `v0.2.0`）；`python scripts/build_wheels.py all`；`twine check dist/*`；`dist/` 作为 `dist` 产物上传。
-3. `smoke`（Ubuntu，Python 3.10 和 3.13）：下载产物，运行 `smoke_wheels.py --dist dist --python <版本>`。
-4. `publish`：在 `pypi` 环境中（可以要求审批），用 `TWINE_PASSWORD` 密钥（PyPI API 令牌，用户名 `__token__`）运行 `twine upload dist/* --skip-existing`。它上传每个发行包：`mizuoto`（wheel 和 sdist）、`mizuoto-fishspeech` 和 `mizuoto-indextts`；PyPI 上已有的版本会被跳过。
-5. `github-release`（仅标签）：以标签命名的 GitHub 发布，附上这些文件和自动生成的说明。
+1. `plan`：`python scripts/ci.py release` 决定这次发布什么。推送发布它改动了版本文件的每个发行包（文件列表来自 compare API）；标签发布它指明的那个，且必须等于其版本（Mizuoto 0.2.0 对应 `v0.2.0`，mizuoto-indextts 0.2.1 对应 `mizuoto-indextts-v0.2.1`）；手动触发发布输入指定的。
+2. `checks`：把 `ci.yml` 本身作为可复用工作流调用，检查这次推送改动的内容（版本文件检查它所属的发行包；标签或手动触发检查全部）。CI 自己对同一次推送到 `main` 的运行会跳过它的作业，所以不会重复运行。
+3. `build`（Ubuntu、Python 3.11、uv；构建 Mizuoto 的 Web UI 时还有 bun）：只构建要发布的，`build_wheels.py host` 和/或 `build_wheels.py native <id>…`；`twine check dist/*`；`dist/` 作为 `dist` 产物上传。
+4. `smoke`（Ubuntu，Python 3.10 和 3.13）：下载产物，运行 `smoke_wheels.py --dist dist --python <版本> --others index`，让这次发布与 PyPI 上已发布的其他发行包一起试用。
+5. `publish`：在 `pypi` 环境中（可以要求审批），用 `TWINE_PASSWORD` 密钥（PyPI API 令牌，用户名 `__token__`）先 `twine upload --skip-existing` Mizuoto，再上传需要接受许可的 wheel，所以需要新 Mizuoto 的包不会先于它出现。PyPI 上已有的版本会被跳过。
+6. `github-release`（仅标签）：以标签命名的 GitHub 发布，附上该发行包的文件，说明从同一发行包的上一个标签起自动生成；需要接受许可的引擎的发布不标记为 latest。
 
-所以通常的发布流程是：在上面三个文件里改版本号，推送到 `main`（发布工作流把它发布出去），再推送标签 `v<版本>` 生成 GitHub 发布（它上传时会发现这些文件已在 PyPI 上）。
+所以发布一个发行包的通常流程是：改它的版本文件，推送到 `main`（发布工作流把它发布出去），再推送它的标签（`v<版本>` 或 `mizuoto-<id>-v<版本>`）生成 GitHub 发布（它上传时会发现这些文件已在 PyPI 上）。一次推送改了几个版本文件，就一起发布，Mizuoto 先发。
 
 ## Docker
 
@@ -172,7 +180,7 @@ python scripts/mirror_models.py check --repo licyk/mizuoto-model
 
 ## 文档站
 
-本站在 `site/`，基于 fumadocs（TanStack Start + Vite），用 bun 构建为静态文件（`.output/public`）；`site/vercel.json` 可直接用于 Vercel 部署。
+本站在 `site/`，基于 fumadocs（TanStack Start + Vite），用 bun 构建为静态文件（`.output/public`）。`.github/workflows/site.yml` 把它发布到 GitHub Pages：推送到 `main` 且改动了 `site/` 时（或手动触发），它运行站点的检查，以 `VITE_BASE_PATH=/Mizuoto/` 构建（Pages 在 `https://licyk.github.io/Mizuoto/` 下提供；路由和搜索索引跟随 Vite 的 base），加上 `.nojekyll`，再用 `GITEE_RSA_PRIVATE_KEY` 密钥（对本仓库有写权限的 SSH 密钥）经 SSH 把输出强制推送到 `gh-pages` 分支。仓库的 Pages 设置以该分支为来源。`site/vercel.json` 可直接用于在根路径部署到 Vercel。
 
 ```bash
 python scripts/dev.py site-install   # 在 site/ 中 bun install
@@ -181,7 +189,7 @@ python scripts/dev.py site           # vite build，再运行 scripts/prepare-st
 python scripts/dev.py test-site      # vitest，然后 tsc --noEmit
 ```
 
-CI 的 `site` 作业在 `site/` 中依次运行 `bun install --frozen-lockfile`、`bun run check`、`bun run test` 和 `bun run build`。
+CI 的 `site` 作业在 `site/` 中依次运行 `bun install --frozen-lockfile`、`bun run check`、`bun run test` 和 `bun run build`，只在 `site/` 有改动时运行。
 
 - 页面在 `site/content/docs/`：`<slug>.mdx` 是简体中文（默认语言 `zh-CN`），`<slug>.en.mdx` 是英文，两者结构相同。侧边栏是 `meta.json` 与 `meta.en.json`，以 `---标题---` 分组。
 - 页首的 frontmatter 有 `title`、`description` 和 `icon`（Lucide 图标名）。可用的 MDX 组件见 `site/src/components/mdx.tsx`：`Cards`/`Card`、`Callout`、`Tabs`/`Tab`、`Steps`/`Step`、`Accordions`/`Accordion` 和 `Mermaid`（`chart` 属性，在浏览器中从 CDN 加载 Mermaid 渲染，随站点的明暗主题）。

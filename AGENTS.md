@@ -43,8 +43,13 @@ command line sit over one core, and every engine runs natively in the same Pytho
   sample for sample on the CPU (fp32, same seed). The reference is 0.1, the engine-worker release that ran upstream's
   code in one environment per engine (git tag `v1-engine-workers`). VoxCPM, which 0.1 never had, is checked against
   upstream's own package.
-- Version 0.2.0. `mizuoto.version.VERSION` and the gated packages' `VERSION` move together (a test checks it); the
-  web UI's `package.json` follows by hand.
+- Each distribution has its own version and is checked and released on its own: `mizuoto/version.py` (0.2.0; the
+  web UI's `package.json` follows by hand) and `packages/native/<id>/mizuoto_<id>/version.py`. A push to main that
+  changes a version file releases that distribution; tags are `v<version>` and `mizuoto-<id>-v<version>`. A gated
+  package names the Mizuoto versions it works with (`mizuoto>=0.2.0,<0.3` in its `pyproject.toml`): raise the lower
+  bound when it uses something newer (release Mizuoto first), and release it with a raised range when Mizuoto leaves
+  the range (its `test_<id>_package.py` fails then). A gated engine's options are in its manifest in the core, so
+  changing them needs a Mizuoto release too. Details: `development-release`.
 
 ## 2. Layout
 
@@ -76,15 +81,17 @@ mizuoto/
   training/     Trainer, StageContext, stage.py (python -m mizuoto.training.stage), memory.py, rng.py
   engines/      one package per engine (engine.py, train.py where it trains, its own modules and data)
   webui/        Vue 3 + Material 3 (src/; built into dist/, which ships in the wheel)
-packages/native/  fishspeech/mizuoto_fishspeech, indextts/mizuoto_indextts (licence-gated engines)
-scripts/      dev.py (task runner), model_manifests.py, build_wheels.py, smoke_wheels.py, generate_openapi.py,
-              mirror_models.py / mirror_fetch.py / mirror_readme.py (the model mirror), parity/ (parity and speed
-              harness, README there)
+packages/native/  fishspeech/mizuoto_fishspeech, indextts/mizuoto_indextts (licence-gated engines), each with its
+              version.py and tests/ (tiny random models, test_<id>_package.py; run with the root's tests, sharing
+              tests/engines_native's and tests/core's helpers)
+scripts/      dev.py (task runner), ci.py (what CI checks and Release releases for a change), model_manifests.py,
+              build_wheels.py, smoke_wheels.py, generate_openapi.py, mirror_models.py / mirror_fetch.py /
+              mirror_readme.py (the model mirror), parity/ (parity and speed harness, README there)
 site/         the documentation site (fumadocs + TanStack Start, bun)
 tests/        core/ api/ cli/ runtime/ text/ engines_native/ (tiny random models) engines/ (contract suite, deselected)
-              test_architecture.py
+              test_architecture.py, test_ci.py
 Dockerfile    one image: server, UI, every engine (GATED=1 adds the licence-gated ones)
-.github/workflows/  ci.yml, release.yml
+.github/workflows/  ci.yml (checks by what a change touches), release.yml (per distribution), site.yml (GitHub Pages)
 ```
 
 ## 3. Rules the architecture keeps
@@ -151,9 +158,9 @@ Details: `development-runtime`, `development-memory`, `development-acceleration`
   outputs with an earlier round. A faster path that changes bits ships only as an opt-in, named in the output's
   `applied`/`params`, measured against the exact path, never instead of it.
 - Behaviour changes and bug fixes against upstream are separate changes, recorded on the engine's page.
-- Exactness is checked by `tests/engines_native/` (tiny random models, every engine and trainer, in CI), the contract
-  suite (`scripts/dev.py test-engines`, real models through the whole stack) and the parity harness
-  (`scripts/parity/`; tiers T0–T4 on `development-testing`).
+- Exactness is checked by `tests/engines_native/` and `packages/native/*/tests/` (tiny random models, every engine and
+  trainer, in CI), the contract suite (`scripts/dev.py test-engines`, real models through the whole stack) and the
+  parity harness (`scripts/parity/`; tiers T0–T4 on `development-testing`).
 - On a GPU, "identical" means identical to the code before on the same GPU, driver, torch and settings.
 - Compare CPU runs with the same thread count: CPU kernels split their sums by it.
 
@@ -183,7 +190,7 @@ Details: `development-runtime`, `development-memory`, `development-acceleration`
 ## 7. Working here
 
 ```bash
-python scripts/dev.py check          # what CI runs: lint, typecheck-py, test-py, test-web, typegen-check
+python scripts/dev.py check          # all CI checks: lint, typecheck-py, test-py, test-web, typegen-check
 python scripts/dev.py format         # ruff format and the safe fixes
 python scripts/dev.py dev            # API server + Vite with hot reload (http://localhost:5173)
 python scripts/dev.py test-engines qwen3tts      # contract suite (installed models; MIZUOTO_TEST_DEVICE=cpu|cuda:N)

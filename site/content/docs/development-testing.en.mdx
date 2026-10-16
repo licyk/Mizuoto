@@ -33,6 +33,10 @@ tests/
                          training memory tools)
   engines/               test_contract.py: the contract suite for real models (deselected by default)
   fixtures/dsp/          the DSP fixtures made by scripts/parity/dsp_fixtures.py
+packages/native/<pkg>/tests/
+                         the gated engines' own tests, kept with the code their licences cover: the tiny models
+                         (test_fishspeech_tiny.py, test_fishspeech_train_tiny.py, test_indextts_tiny.py) and
+                         test_<id>_package.py (its version and Mizuoto range, its manifest mirror, the engine rules)
 ```
 
 `pyproject.toml` defines four markers, all deselected by default (`addopts = "-m 'not live and not engine and not weights and not e2e'"`):
@@ -85,11 +89,11 @@ def make_services(tmp_path: Path):
 
 ## Tiny random models
 
-`tests/engines_native/` builds, for each engine, a model of the engine's own architecture with a few small layers and random weights, writes it to a temporary folder as the engine expects to find it (configs, a byte-level vocabulary, safetensors), and drives the real code: `Engine.load` with a `Runtime(DeviceService(), ModelManager(...))`, a `RequestContext`, voice prompts, decoding, batches, seeds that repeat, cancellation. `test_<id>_train_tiny.py` runs every stage of the engine's trainer on a few clips. They need no download, so CI runs them on every push with CPU torch; the gated engines' tests skip unless their packages are installed.
+`tests/engines_native/` builds, for each engine, a model of the engine's own architecture with a few small layers and random weights, writes it to a temporary folder as the engine expects to find it (configs, a byte-level vocabulary, safetensors), and drives the real code: `Engine.load` with a `Runtime(DeviceService(), ModelManager(...))`, a `RequestContext`, voice prompts, decoding, batches, seeds that repeat, cancellation. `test_<id>_train_tiny.py` runs every stage of the engine's trainer on a few clips. They need no download, so CI runs them on every push with CPU torch. The gated engines' tests are in their packages, `packages/native/<pkg>/tests/`; `testpaths` in `pyproject.toml` lists those folders, so `python -m pytest` runs them with the rest, and they skip unless their packages are installed. They use `tests/engines_native`'s helpers (`streaming.py`, `accel_checks.py`), so run them from the repository root, or from the package folder with the root's `pyproject.toml` (its `pythonpath` puts the root on `sys.path`).
 
 A few rules across engines are held here too:
 
-- **Attention.** Every `mask_info` an attention site passes is checked against its dense mask. `MIZUOTO_TEST_ACCEL=count python -m pytest tests/engines_native` also routes every attention call through a policy that counts its site and computes the site's own reference; it fails at the end when a site the engines have was never reached that way (a direct SDPA call that bypasses `compute.attention`).
+- **Attention.** Every `mask_info` an attention site passes is checked against its dense mask. `MIZUOTO_TEST_ACCEL=count python -m pytest tests/engines_native packages/native` also routes every attention call through a policy that counts its site and computes the site's own reference; it fails at the end when a site the engines have was never reached that way (a direct SDPA call that bypasses `compute.attention`). Each conftest lists its folder's sites (`SITES_TESTED`); the checks themselves are in `tests/engines_native/accel_checks.py`.
 - **Training memory tools.** `check_checkpointing` in `training_memory.py` runs a trainer's stages twice in fresh work folders, once as given and once with every block checkpointed, and compares every metric and every weight file written: they must be identical. The other tools that keep results (such as the optimiser state in RAM) are checked the same way.
 
 ### Streaming on a simulated device
@@ -186,18 +190,34 @@ The docs site (`site/`) has its own vitest tests; `src/lib/i18n-content.test.ts`
 
 ## CI
 
-`.github/workflows/ci.yml` runs four jobs on every push to a branch and every pull request, with torch's CPU build (`https://download.pytorch.org/whl/cpu`). Packages are installed with uv (`astral-sh/setup-uv`, `UV_SYSTEM_PYTHON=1`: into the Python that `setup-python` provides, no virtual environment; the cache stays off, since unpacked torch wheels would crowd the 10 GB cache limit):
+`.github/workflows/ci.yml` runs on every push to a branch and every pull request, with torch's CPU build (`https://download.pytorch.org/whl/cpu`). Mizuoto and the two gated packages are released on their own, so each is checked on its own, and a change runs only the checks for what it changes. Packages are installed with uv (`astral-sh/setup-uv`, `UV_SYSTEM_PYTHON=1`: into the Python that `setup-python` provides, no virtual environment; the cache stays off, since unpacked torch wheels would crowd the 10 GB cache limit).
+
+The first job, `scope`, reads the changed files (a push's from the compare API, a pull request's from its file list) and `python scripts/ci.py scope` maps them to checks:
+
+| Changed | Checks |
+| --- | --- |
+| `packages/native/<id>/**` | that package's `gated` and `oldest-mizuoto` jobs, and `torch` for it |
+| `mizuoto/webui/**` | `web` |
+| `site/**` | `site` (the docs site's tests and build) |
+| anything else under `mizuoto/`, `tests/`, `scripts/`, `pyproject.toml`, or a new path | `host`, `web` (its API types come from the code), `torch`, and both packages' jobs: they run on Mizuoto's runtime at this commit |
+| `.github/workflows/**`, `scripts/ci.py` | everything |
+| `README*.md`, `AGENTS.md`, `CLAUDE.md`, `LICENSE`, `Dockerfile`, `.gitignore`… | nothing |
+
+A new branch, a manual run, a list the compare API cuts short (300 files) or a failure to read it checks everything; `tests/test_ci.py` covers the mapping.
 
 | Job | Environment | Steps |
 | --- | --- | --- |
-| `host` | Ubuntu, Windows, macOS × Python 3.10, 3.11, 3.12, 3.13 | `uv pip install torch` from the CPU index, then `-e . -e packages/native/fishspeech -e packages/native/indextts pytest pytest-cov ruff ty httpx tomli`; in every cell `dev.py lint`, `dev.py typecheck-py --python-version <cell> --python-platform <cell>` (the standard library's stubs differ between Pythons and platforms) and `python -m pytest -q` (the tiny-model tests included); each of the three runs even when another failed |
-| `torch` | Ubuntu, Python 3.12, torch 2.8.0 and the latest release | The tests against the oldest torch Mizuoto supports and the newest, to catch torch's API drift |
+| `host` | Ubuntu, Windows, macOS × Python 3.10, 3.11, 3.12, 3.13 | `uv pip install torch` from the CPU index, then `-e . pytest pytest-cov ruff ty httpx tomli` (Mizuoto alone); in every cell `dev.py lint` (the whole repository), `dev.py typecheck-py --python-version <cell> --python-platform <cell> mizuoto tests scripts` (the standard library's stubs differ between Pythons and platforms) and `python -m pytest -q tests`; each of the three runs even when another failed |
+| `gated` | each package in scope × Ubuntu, Windows, macOS × Python 3.10, 3.13 | `-e . -e packages/native/<id>`; `ruff check` and `ruff format --check` of `packages/native/<id>`, `typecheck-py` and `pytest` of its `tests/` |
+| `oldest-mizuoto` | each package in scope, Ubuntu, Python 3.12 | The package on the oldest Mizuoto its `pyproject.toml` allows (`python scripts/ci.py lower-bound <id>`), from PyPI: its tests run outside the checkout, with only `tests/` on `PYTHONPATH`, so `import mizuoto` finds the released one (the range check, which compares the range with Mizuoto at this commit, is left out) |
+| `torch` | Ubuntu, Python 3.12, torch 2.8.0 and the latest release | The tests in scope against the oldest torch Mizuoto supports and the newest, to catch torch's API drift |
 | `web` | Ubuntu, Python 3.11, bun | `dev.py web-install`, `dev.py test-web`, `dev.py typegen-check` |
 | `site` | Ubuntu, bun | `bun install --frozen-lockfile`, `bun run check`, `bun run test`, `bun run build` in `site/` |
+| `passed` ("CI passed") | Ubuntu | Fails when a job above failed or was cancelled, passes when they passed or were skipped: the one check to require in branch protection |
 
-A newer run of the same branch cancels the older one. A push to `main` that changes `mizuoto/version.py` starts the release workflow, which runs `ci.yml` as its checks; CI's own run of that push skips every job (its `gate` job asks the compare API which files the push changed), so the checks run once. Version tags start only the release workflow.
+A newer run of the same branch cancels the older one. A push to `main` that changes a version file starts the release workflow, which runs `ci.yml` as its checks for what the push changed; CI's own run of that push skips every job (`scope` sees the version file), so the checks run once. Tags start only the release workflow, whose checks are everything. Pushing the docs site to GitHub Pages is `site.yml`'s, not CI's (see [Release](/docs/development-release#the-docs-site)).
 
-`python scripts/dev.py check` runs the same locally (on your platform and Python only). The contract suite and the parity harness need models (and, for parity, the reference environments) weighing tens of gigabytes, so they stay out of CI; the release workflow has its own wheel smoke test (see [Release](/docs/development-release)).
+`python scripts/dev.py check` runs all of it locally (on your platform and Python only, with the gated packages installed, on Mizuoto at your checkout). The contract suite and the parity harness need models (and, for parity, the reference environments) weighing tens of gigabytes, so they stay out of CI; the release workflow has its own wheel smoke test (see [Release](/docs/development-release)).
 
 <Callout type="info" title="CI covers the CPU">
 CI has only a CPU build of torch. The GPU paths (CUDA graphs, the optional attention backends, weight streaming's asynchronous prefetch) are tested there for their logic; how they behave on a GPU has to be checked on a machine with one, with the contract suite and the parity harness.

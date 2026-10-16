@@ -215,7 +215,7 @@ self.handles = [
   fishspeech = "mizuoto_fishspeech:FishSpeechEngine"
   ```
 
-  入口点每个进程只读一次：装上这样的发行包后要重启 Mizuoto。它的包遵守引擎的分层规则（`test_native_engine_packages_import_like_engines`），带着 Mizuoto 的版本号（`test_gated_distributions_move_in_lockstep`），由 `scripts/build_wheels.py native` 构建。
+  入口点每个进程只读一次：装上这样的发行包后要重启 Mizuoto。它的包遵守引擎的规则并与清单一致（`check_native_package`、`check_options_mirror`，由它的 `tests/test_<id>_package.py` 调用），版本号在 `mizuoto_<id>/version.py`，适用的 Mizuoto 版本写在它的 `pyproject.toml` 里（`check_gated_distribution`），由 CI 的 `gated` 和 `oldest-mizuoto` 作业检查，由 `scripts/build_wheels.py native` 构建（见[发布](/docs/development-release#版本)）。
 
 当 torch 能导入（dummy 引擎不需要）且实现已注册时，引擎就是*可用*的；否则 `EngineStatus.missing` 写明缺什么，界面和 `mizuoto doctor` 给出解决办法。
 
@@ -294,7 +294,7 @@ Mizuoto 对移植的标准是：在 CPU 上以 fp32、带种子运行时，输�
 </Step>
 <Step>
 
-测试：`tests/engines_native/test_<id>_tiny.py`；`tests/core/test_engines.py::test_registry_lookups` 里的引擎 id 列表，以及 `tests/engines/test_contract.py` 里的 `engines` 覆盖。
+测试：`tests/engines_native/test_<id>_tiny.py`（单独发行的引擎把它们放在自己包的 `tests/` 里，如 `packages/native/<pkg>/tests/`）；`tests/core/test_engines.py::test_registry_lookups` 里的引擎 id 列表，以及 `tests/engines/test_contract.py` 里的 `engines` 覆盖。
 
 </Step>
 <Step>

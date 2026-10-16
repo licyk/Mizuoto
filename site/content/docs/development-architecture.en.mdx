@@ -90,7 +90,7 @@ More checks:
 
 - `test_only_core_inference_reaches_model_code`: no module of `mizuoto/core` outside `core/inference` imports the runtime, `nn`, the engines or the trainers.
 - `test_shared_modules_are_standard_library_only`: `core/codes.py`, `core/jobs/events.py`, `core/jobs/jsonl.py`, `core/remote/frames.py` and `core/inference/tasks.py` import only the standard library (and each other). The runtime, the engines and the training stages share them.
-- `test_native_engine_packages_import_like_engines`: `packages/native/*/mizuoto_*` follow the engines' rule (and may import their own package).
+- `check_native_package`, which each gated package's `test_<id>_package.py` calls for itself: `packages/native/*/mizuoto_*` follow the engines' rule (and may import their own package), leave the process state alone and compute attention only through `mizuoto.runtime.accel`.
 - `test_engines_import_no_other_engine`: `mizuoto/engines/<a>` never imports `mizuoto/engines/<b>`; what two engines share belongs in `nn` or `runtime`.
 - `test_native_code_leaves_global_state_alone`: no call that changes process-wide state in `runtime`, `nn`, `text`, the engines and the gated packages (see [Runtime](/docs/development-runtime#global-state)).
 - `test_attention_goes_through_the_accel_entry_point`: outside `runtime/accel`, the runtime, `nn`, the engines, the trainers and the gated packages never call SDPA or its aten kernels directly; every attention computation goes through `accel.attention`, so `compute.attention` can switch it (see [Attention acceleration](/docs/development-acceleration)).
@@ -237,7 +237,7 @@ How to write an engine is in [Adding an engine](/docs/development-engine).
 A voice is `voices/<slug>/voice.json` plus `references/<sha256>.flac` (mono, at the clip's own rate). The folders are the truth and the list is a scan; delete goes to the trash. The kinds are `reference`, `designed` (a design result, its clip the primary reference), `preset` (one model's preset speaker) and `trained`.
 
 - `fit_voice(voice, model, variant)` answers whether and how a model can use a voice: the mode (`preset`, `design`, `clone`, `clone_no_transcript`), what it still needs (`transcribe`, `trim`), warnings, or why it cannot. Synthesis and the UI's voice picker both use it.
-- **Voice caches.** After loading the model, the job calls `prepare_voice` once per key into `voices/<slug>/cache/<engine>/<model>/<key>/` and records `cache.json`; one-off references go to `cache/voices/…`. The key hashes (model, model revision, the references' SHA-256 and transcripts, voice mode, Mizuoto's version), so upgrading Mizuoto rebuilds the caches once.
+- **Voice caches.** After loading the model, the job calls `prepare_voice` once per key into `voices/<slug>/cache/<engine>/<model>/<key>/` and records `cache.json`; one-off references go to `cache/voices/…`. The key hashes (model, model revision, the references' SHA-256 and transcripts, voice mode, Mizuoto's version, and for a licence-gated engine its distribution's version), so upgrading Mizuoto or that distribution rebuilds the caches once.
 - **A voice's own weights** (`Voice.weights[engine]`): an engine whose manifest has `[weights]` roles (GPT-SoVITS's `gpt` and `sovits`) can carry a fine-tune of the voice, kept in `weights/<engine>/` and exported and imported with the voice; its version comes from the files, and it is used when it equals the variant's `weights_version`.
 - A missing transcript is transcribed first when `tts.auto_transcribe` is on and ASR is ready (cached by audio SHA-256 and model in the `transcripts` table, and saved into the voice); otherwise the model's `clone_no_transcript` is used, or the request fails with `capability_not_supported` and the install command.
 
@@ -275,7 +275,7 @@ What is on disk carries over an upgrade like this:
 
 - Model folders and the catalogue's file manifests, voices (folders, references, weights), outputs, datasets, experiments, projects and presets stay valid as they are. Only the files a manifest lists are verified, so old files a manifest dropped do no harm.
 - `settings.toml` keeps its keys; one that a version renames or removes is ignored. The database only gains migrations.
-- Voice caches are keyed by Mizuoto's version and rebuilt on first use after an upgrade.
+- Voice caches are keyed by Mizuoto's version (and a gated engine's distribution's) and rebuilt on first use after an upgrade.
 - A host and its remote agents must speak the same protocol version and refuse each other otherwise.
 - A job records its process; opening the data folder marks only jobs whose process is gone `interrupted`, so a second command does not interrupt a render in progress.
 

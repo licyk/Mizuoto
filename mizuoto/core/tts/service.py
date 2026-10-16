@@ -32,6 +32,7 @@ from mizuoto.core.engines.registry import EngineRegistry
 from mizuoto.core.errors import CapabilityError, LanguageError, NotFoundError, ReferenceInvalidError, ValidationError
 from mizuoto.core.inference.engine import AudioStream, EngineHandle, EngineRequest, ModelRef
 from mizuoto.core.inference.runtime import RuntimeService
+from mizuoto.core.inference.service import distribution_version
 from mizuoto.core.inference.tasks import (
     AudioChunk,
     EditSpan,
@@ -1052,6 +1053,10 @@ class TtsService:
             "mode": plan.voice_mode,
             "mizuoto": VERSION,
         }
+        # A licence-gated engine is released on its own: its version keys the cache too (built-in engines are Mizuoto's).
+        engine_version = distribution_version(plan.engine)
+        if engine_version is not None:
+            key_source["engine_version"] = engine_version
         key = hashlib.sha256(json.dumps(key_source, sort_keys=True).encode("utf-8")).hexdigest()[:20]
         if plan.voice_id and self.voices is not None:
             base = self.voices.cache_dir(self.voices.get(plan.voice_id), plan.engine, plan.model)

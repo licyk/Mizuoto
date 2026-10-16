@@ -109,7 +109,7 @@ InvokeAI 的前后端结构是这个骨架的出发点。采用的部分：
 | 一个 Python 环境，所有引擎在仓库内原生移植，在服务器自己的进程里运行；不 vendoring 上游代码 | 引擎之间的依赖冲突（transformers 4.51 到 5.3、torch 2.3 与 2.8、numpy 1 与 2）都来自上游对库内部接口的使用和版本锁，而不是模型本身的需要。移植后一个 torch、一套依赖即可，引擎环境、worker 进程和进程间协议都不再需要 |
 | 进程内运行的代价（原生代码崩溃会拖垮服务器、无法靠进程退出释放内存）由规则补偿 | 原生代码不改全局状态（有测试），每个请求后有残留检查，卸载真正释放内存；需要进程隔离时可以把引擎放到远程 agent 上；训练仍在子进程里 |
 | Fish Speech 和 IndexTTS 作为独立发行包（`mizuoto-fishspeech`、`mizuoto-indextts`），装进同一环境，经入口点组 `mizuoto.engines` 注册 | 它们的许可（Fish Audio Research License、bilibili Model Use License）覆盖代码，移植版是衍生作品，并入 GPL-3.0 的 `mizuoto` 会冲突 |
-| 所有发行包版本同步；需要接受许可的包依赖不锁版本的 `mizuoto` | wheel 一起构建、一起安装，测试保证版本相同 |
+| 每个发行包有自己的版本，各自检查、各自发布；需要接受许可的包写明它适用的 Mizuoto 版本（`mizuoto>=0.2.0,<0.3`） | 修一个引擎不应等待、也不应强迫其他包发布。范围的两端都有测试：每次提交的 Mizuoto，以及范围允许的最旧发布版 |
 | torch 是依赖，但构建（CUDA、ROCm、XPU、MPS、CPU）由用户先装；`mizuoto doctor` 给出适合本机的安装命令 | 正确的构建取决于硬件和驱动，包管理器无法替用户选择 |
 | 运行时不导入 transformers、onnxruntime、torchaudio、librosa | 它们带来版本冲突、平台限制或全局状态；分词用 `tokenizers`、`tiktoken`、`sentencepiece`，ONNX 模型的权重由仓库内的协议缓冲区读取器转换成 torch 模块 |
 | 只在平台受限的地方保留可选附加依赖：`gptsovits-ja`（`pyopenjtalk==0.4.1`，只有源码包）、`gptsovits-ko`、`mizuoto-indextts[ja]` | 必需的依赖在 CI 覆盖的每个平台上都有 wheel；缺少附加依赖时，相应语言的文本以 `capability_not_supported` 失败并给出安装命令 |
