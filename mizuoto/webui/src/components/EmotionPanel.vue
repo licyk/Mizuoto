@@ -4,7 +4,7 @@ import type { EmotionInput } from '@/api/types';
 import AudioSourceInput from '@/components/AudioSourceInput.vue';
 import type { InputItem } from '@/components/inputs';
 import { useI18n } from '@/i18n';
-import { ParamSlider, SegmentedControl, TextField } from '@/ui';
+import { AxisPanes, ParamSlider, SegmentedControl, TextField } from '@/ui';
 
 /**
  * How the speech should feel, in the ways the model takes it: a weight per emotion (sliders), a clip
@@ -16,7 +16,8 @@ const model = defineModel<EmotionInput | null>({ default: null });
 const { t, tOr } = useI18n();
 
 type Way = 'vector' | 'audio' | 'text';
-const ways = computed<Way[]>(() => (['vector', 'audio', 'text'] as Way[]).filter((w) => props[w] && (w !== 'vector' || props.emotions.length)));
+const WAYS: readonly Way[] = ['vector', 'audio', 'text'];
+const ways = computed<Way[]>(() => WAYS.filter((w) => props[w] && (w !== 'vector' || props.emotions.length)));
 const way = ref<Way>(ways.value[0] ?? 'vector');
 watch(ways, (list) => {
   if (list.length && !list.includes(way.value)) way.value = list[0]!;
@@ -55,31 +56,37 @@ defineExpose({
 <template>
   <div v-if="ways.length" class="emotion">
     <SegmentedControl v-if="wayOptions.length > 1" v-model="way" :options="wayOptions" />
-    <div v-if="way === 'vector'" class="grid">
-      <ParamSlider
-        v-for="e in emotions"
-        :key="e"
-        :model-value="weights[e] ?? 0"
-        :label="tOr(`emotions.${e}`, e)"
-        :min="0"
-        :max="1"
-        :step="0.05"
-        :default-value="0"
-        :reset-label="t('common.reset')"
-        @update:model-value="weights = { ...weights, [e]: $event }"
-      />
-    </div>
-    <template v-else-if="way === 'audio'">
-      <AudioSourceInput v-model="clip" :multiple="false" :label="t('speak.emotionClip')" />
-      <p class="type-body-small muted">{{ t('speak.emotionClipHint') }}</p>
-      <ParamSlider v-model="strength" :label="t('speak.emotionStrength')" :min="0" :max="2" :step="0.05" :default-value="1" :reset-label="t('common.reset')" />
-    </template>
-    <TextField v-else v-model="described" :label="t('speak.emotionText')" :placeholder="t('speak.emotionTextPlaceholder')" />
+    <!-- Each way is a pane; a change slides the way the control moved. -->
+    <AxisPanes :value="way" :order="WAYS">
+      <div v-if="way === 'vector'" key="vector" class="grid">
+        <ParamSlider
+          v-for="e in emotions"
+          :key="e"
+          :model-value="weights[e] ?? 0"
+          :label="tOr(`emotions.${e}`, e)"
+          :min="0"
+          :max="1"
+          :step="0.05"
+          :default-value="0"
+          :reset-label="t('common.reset')"
+          @update:model-value="weights = { ...weights, [e]: $event }"
+        />
+      </div>
+      <div v-else-if="way === 'audio'" key="audio" class="pane">
+        <AudioSourceInput v-model="clip" :multiple="false" :label="t('speak.emotionClip')" />
+        <p class="type-body-small muted">{{ t('speak.emotionClipHint') }}</p>
+        <ParamSlider v-model="strength" :label="t('speak.emotionStrength')" :min="0" :max="2" :step="0.05" :default-value="1" :reset-label="t('common.reset')" />
+      </div>
+      <div v-else key="text" class="pane">
+        <TextField v-model="described" :label="t('speak.emotionText')" :placeholder="t('speak.emotionTextPlaceholder')" />
+      </div>
+    </AxisPanes>
   </div>
 </template>
 
 <style scoped>
 .emotion { display: flex; flex-direction: column; gap: var(--app-space-3); min-width: 0; }
+.pane { display: flex; flex-direction: column; gap: var(--app-space-3); min-width: 0; }
 .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(280px, 100%), 1fr)); gap: var(--app-space-3) var(--app-space-6); }
 .muted { margin: 0; color: var(--md-sys-color-on-surface-variant); }
 </style>

@@ -30,7 +30,7 @@ import { useI18n } from '@/i18n';
 import { useHandoffStore } from '@/stores/handoff';
 import { isFinished, useJobsStore } from '@/stores/jobs';
 import { usePreferencesStore } from '@/stores/preferences';
-import { AppButton, AppDialog, AxisPanes, Badge, Chip, FieldRow, IconButton, PageFooter, SegmentedControl, SelectField, Surface, TextArea, TextField, Tooltip, icons, useSnackbar } from '@/ui';
+import { AppButton, AppDialog, AxisPanes, Badge, Chip, FieldRow, IconButton, PageFooter, SegmentedControl, SelectField, Surface, Switch, TextArea, TextField, Tooltip, icons, useSnackbar } from '@/ui';
 
 const VOICE_KINDS = ['library', 'clip', 'preset', 'design', 'auto'] as const;
 type VoiceKind = (typeof VOICE_KINDS)[number];
@@ -466,11 +466,11 @@ onActivated(() => {
       <JobsTray :jobs="sessionJobs" />
       <ModelGate :model="model">
         <div class="actions">
-          <span v-if="!model" class="type-body-small muted">{{ t('speak.chooseModel') }}</span>
-          <span v-else-if="voiceProblem" class="type-body-small muted">{{ voiceProblem }}</span>
-          <span v-else-if="textProblem" class="type-body-small muted">{{ textProblem }}</span>
+          <span v-if="!model" class="type-body-small muted status">{{ t('speak.chooseModel') }}</span>
+          <span v-else-if="voiceProblem" class="type-body-small muted status">{{ voiceProblem }}</span>
+          <span v-else-if="textProblem" class="type-body-small muted status">{{ textProblem }}</span>
           <Tooltip v-if="spec.data.value" :text="t(`speak.streamHints.${granularity}`)">
-            <Chip :label="t('speak.stream')" :icon="stream ? icons.AudioLines : undefined" :selected="stream" @click="stream = !stream" />
+            <Switch v-model="stream" :label="t('speak.stream')" inline />
           </Tooltip>
           <AppButton variant="text" :disabled="!request" @click="showPlan">{{ t('speak.plan') }}</AppButton>
           <AppButton :icon="icons.Speech" :disabled="!canSpeak" :loading="busy" @click="run">{{ t('speak.speak') }}</AppButton>
@@ -504,7 +504,8 @@ onActivated(() => {
 .attribute > span { min-width: 72px; }
 .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(220px, 100%), 1fr)); gap: var(--app-space-3) var(--app-space-6); align-items: center; }
 .actions { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: var(--app-space-2); }
-.actions > span { margin-right: auto; }
+/* The status message takes the left; the stream switch, Plan and Speak keep together on the right. */
+.actions > .status { margin-right: auto; }
 @container app-content (max-width: 599px) {
   .sections { padding: var(--app-space-3); }
   .section { padding: var(--app-space-4); }
