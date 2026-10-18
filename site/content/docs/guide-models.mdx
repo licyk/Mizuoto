@@ -63,6 +63,7 @@ Mizuoto 根据文件判断它属于哪个引擎、哪个变体：
 | IndexTTS 2 / 2.5 | `use_qwen_emo`（把文字描述的情感转成权重的情感模型，约 1.2 GB）、`use_torch_compile` |
 | F5-TTS | `ode_method`（`euler` 或 `midpoint`） |
 | Qwen3-TTS | `fused_projections`：快速模式，在 GPU 上快几个百分点，结果不再逐位一致 |
+| VoxCPM | `attention_span`：快速模式，在 GPU 上快 1.4–1.7 倍，那里的结果不再逐位一致 |
 
 **更改在模型下次加载时生效（其模型现在会被卸载）。** **设置 › 计算** 中的 **编译模型（torch.compile）** 可以同时为多个引擎提速。详见[性能](/docs/advanced-performance)。
 

@@ -63,6 +63,7 @@ When an engine has load options, its card has **Options**:
 | IndexTTS 2 / 2.5 | `use_qwen_emo` (the emotion model for described emotions, about 1.2 GB), `use_torch_compile` |
 | F5-TTS | `ode_method` (`euler` or `midpoint`) |
 | Qwen3-TTS | `fused_projections`: a fast mode, a few percent faster on a GPU, no longer bit-identical |
+| VoxCPM | `attention_span`: a fast mode, 1.4–1.7× faster on a GPU, no longer bit-identical there |
 
 **Changes apply when the model loads next (its models are unloaded now).** The setting **Compile models (torch.compile)** under **Settings › Compute** speeds up several engines at once. More in [Performance](/docs/advanced-performance).
 

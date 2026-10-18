@@ -19,6 +19,7 @@ Every engine gives its upstream's output sample for sample on the CPU (see [Engi
 | Process-wide GPU switches | `compute.fast` (none) | different |
 | `torch.compile` | `compute.compile` (off) | slightly different on most engines (below) |
 | Qwen3-TTS's fused projections | load option `fused_projections` (off) | identical on the CPU in the parity cases; different on CUDA |
+| VoxCPM's attention span | load option `attention_span` (off) | identical on the CPU; on CUDA another take of the request ([VoxCPM](/docs/engines-voxcpm#memory-and-speed)) |
 | OmniVoice's packed guidance | request option `packed_guidance` (off) | identical on the CPU in the parity cases; on CUDA another take of the request ([OmniVoice](/docs/engines-omnivoice#memory-and-speed)) |
 | Static KV cache | `compute.kv_cache = static` | identical on the CPU; see [Memory](/docs/development-memory#static-kv-cache-and-the-cuda-allocator) |
 

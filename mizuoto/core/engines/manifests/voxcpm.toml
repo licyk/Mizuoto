@@ -133,6 +133,11 @@ default = true
 variants = ["v2"]
 help = "With a transcript, also give the clip as an isolated reference (upstream's demo: best similarity); off: continuation only."
 
+[load_options.attention_span]
+type = "bool"
+default = false
+help = "Fast mode: each decoding step attends over the filled part of the cache instead of all of it. Faster on a GPU, but the audio is no longer identical to the original implementation's there (the same model, other rounding); identical on the CPU. Outputs list it. Applies when the model next loads."
+
 # -- models ---------------------------------------------------------------------------
 
 [[models]]

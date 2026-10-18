@@ -151,7 +151,8 @@ Details: `development-runtime`, `development-memory`, `development-acceleration`
   only for a model wholly on its device and dropped when its weights move. Capture and replay them under
   `torch.cuda.device(graphs.device)` (a replay runs on the current device's stream: a model on `cuda:1` faults
   otherwise); none are captured under cudaMallocAsync (`graphs.usable`). Opt-ins that change bits are labelled in
-  the output: `compute.compile`, non-`auto` attention backends, Qwen3-TTS's `fused_projections`, `compute.fast`.
+  the output: `compute.compile`, non-`auto` attention backends, Qwen3-TTS's `fused_projections`, OmniVoice's
+  `packed_guidance`, VoxCPM's `attention_span`, `compute.fast`.
 - Devices: `cpu`, `cuda:N` (NVIDIA, and AMD under ROCm), `xpu:N`, `mps`. The host probes them without importing
   torch. CosyVoice 3's float64 F0 predictor stays on the CPU where the device lacks float64 (MPS, Intel Arc).
 
@@ -171,9 +172,10 @@ Details: `development-runtime`, `development-memory`, `development-acceleration`
   cache changes bits: VoxCPM's span is CPU-only), and under autocast in-place operations keep their buffer's dtype
   where the out-of-place ones autocast to float32 (Fish Speech's Snake). Check such a change on a GPU, against the code
   before (`development-performance`, G1, runs every step since round 1 that way).
-- TorchScript functions (VoxCPM's Snake, GPT-SoVITS's training gate, both scripted as upstream's) are fused on CUDA
-  after their first call per shape: their bits depend on the shapes the process has seen, and the fuser compiles on
-  the default device. Do not add more.
+- TorchScript functions are fused on CUDA after their first call per shape: their bits depend on the shapes the process
+  has seen, and the fuser compiles on the current device (a training stage makes its device current for it). Only
+  GPT-SoVITS's training gate stays scripted, as upstream's (its symbolic gradients differ from eager ones); VoxCPM's
+  Snake runs eagerly. Do not add more.
 - Compare CPU runs with the same thread count: CPU kernels split their sums by it.
 
 ## 6. Feature areas: where to look

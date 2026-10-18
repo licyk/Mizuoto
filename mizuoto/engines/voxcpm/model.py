@@ -396,7 +396,7 @@ class PatchDecoder:
     their static caches. The language models step before the stop flag is read (upstream reads it first and stops
     before stepping): they draw nothing, and their caches are dropped when generation ends, so the patches are the same,
     and a patch costs one wait (the flag) instead of three. Captured, a patch is one graph per attention span
-    (``attend_span``: the whole cache on CUDA, so one) and setting; the caches are then kept with the model, since the
+    (``attend_span``: the whole cache on CUDA, so one, unless the load option ``attention_span`` is on) and setting; the caches are then kept with the model, since the
     graphs hold their addresses.
     """
 
@@ -466,7 +466,13 @@ class PatchDecoder:
             self._patch(timesteps, cfg_value, estimator, lm)
             return lm
         device = self._ports["base_pos"].device
-        key = (attend_span(base.current_length, base.max_length, device), attend_span(residual.current_length, residual.max_length, device), timesteps, cfg_value)
+        spans = (self.m.base_lm.span_everywhere, self.m.residual_lm.span_everywhere)
+        key = (
+            attend_span(base.current_length, base.max_length, device, spans[0]),
+            attend_span(residual.current_length, residual.max_length, device, spans[1]),
+            timesteps,
+            cfg_value,
+        )
         with torch.cuda.device(graphs.device), graphs.drawing(generator) as own:
             self.generator = own
             graph = self._captured.get(key)

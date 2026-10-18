@@ -256,7 +256,7 @@ v4 收益最小：它的 flow 和声码器占主导，而且在拥挤的 GPU 上
 
 **重复性。** 在默认模式下，每个用例在同一进程的多次运行之间、以及在新进程中都给出相同的音频，只有 VoxCPM 2 的第一个请求例外。`--deterministic` 会改变 CosyVoice 2、IndexTTS 2、OmniVoice 和 VoxCPM 的二进制位（cuBLAS 和 cuDNN 选了别的算法），同样可以重复，并且没有列出任何缺少确定性内核的运算。所以之后的 GPU 轮次在默认模式下精确比较输出，丢弃 VoxCPM 的第一个请求。
 
-**VoxCPM 的第一个请求。** Snake 是 TorchScript 函数，与上游一样。在 CUDA 上，TorchScript 的 profiling executor 对某个形状的第一次调用按单独的运算执行（与即时执行的代码和 CPU 逐位相同），之后改用融合内核，结果最多相差 4.8·10⁻⁷。没见过的形状会退回未融合的运算，直到它被分析过。因此哪些调用被融合取决于进程之前解码过什么，在加载时预热也不能让每个请求都重复。关闭融合器后（仅为实验；原生代码从不设置它），第一个请求与之后的请求一致。融合器还在默认设备上编译内核：在 `cuda:1` 上工作的进程会在 `cuda:0` 上打开一个 256 MB 的上下文（在 VoxCPM 和 GPT-SoVITS 的训练中都观察到，后者的 WaveNet 门控同样是 TorchScript 函数）。CPU 不受影响（那里不做融合）。
+**VoxCPM 的第一个请求。** Snake 是 TorchScript 函数，与上游一样。在 CUDA 上，TorchScript 的 profiling executor 对某个形状的第一次调用按单独的运算执行（与即时执行的代码和 CPU 逐位相同），之后改用融合内核，结果最多相差 4.8·10⁻⁷。没见过的形状会退回未融合的运算，直到它被分析过。因此哪些调用被融合取决于进程之前解码过什么，在加载时预热也不能让每个请求都重复。关闭融合器后（仅为实验；原生代码从不设置它），第一个请求与之后的请求一致。融合器还在默认设备上编译内核：在 `cuda:1` 上工作的进程会在 `cuda:0` 上打开一个 256 MB 的上下文（在 VoxCPM 和 GPT-SoVITS 的训练中都观察到，后者的 WaveNet 门控同样是 TorchScript 函数）。CPU 不受影响（那里不做融合）。（之后已修复：Snake 以 eager 方式运行，每个请求都相同，也与 CPU 相同；VAE 慢约 1 %。见 [VoxCPM](/docs/engines-voxcpm#有意的差异)。）
 
 **时间花在哪里**（在 torch 的 profiler 下多跑一次，按阶段统计设备忙碌时间，对比不开 profiler 时该阶段的预热时间；profiler 会拖慢主机一侧）：
 

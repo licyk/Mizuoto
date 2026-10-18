@@ -46,7 +46,7 @@ Shared: `runtime/ops.py`, `runtime/loading.py` (weight norm folded), `runtime/gr
 - **The tokenizer** is what transformers 5.3's `LlamaTokenizer` builds from the vocabulary, ignoring the file's own pipeline: no normaliser, `Metaspace` with `prepend_scheme="always"` and no split, no unknown token in the BPE, and the config's special tokens added in id order (a token missing from the vocabulary gets the next free id, so VoxCPM2's `<|im_end|>` is 73442, not the file's 73440). The raw `tokenizer.json` gives other ids for text with leading blanks or after a special token. Upstream's wrapper then splits multi-character Han tokens into characters; a character outside the vocabulary is `<unk>`.
 - **The normaliser** is wetext 0.1.2's: the text stripped before tagging and after each FST, and with `remove_erhua` also text with 儿 and no digit handled. Its FSTs differ from those of wetext 0.0.4 (CosyVoice's asset) and of WeTextProcessing (IndexTTS), so they ship with the engine. Numbers are spelled by `inflect`; Mizuoto's 7.3.1 and upstream's 7.5.0 give the same words on the corpus.
 - **Decoding.** VoxCPM2 drops the decoded context patches (the prompt's last `min(3, n)`) from the front; the first generation drops `2 × patch × hop` samples whenever there is any prompt audio, as upstream does whatever the prompt's length. Streaming yields one chunk per patch: VoxCPM2 through the stateful causal decoder, the first generation by decoding the last three patches and keeping the newest.
-- **Snake** is the TorchScript function upstream scripts; weight norm is folded with `torch._weight_norm`, the call upstream's hook makes at each forward.
+- **Snake** computes upstream's operations in upstream's order, as a plain function (upstream scripts it: see Deviations); weight norm is folded with `torch._weight_norm`, the call upstream's hook makes at each forward.
 
 ## Deviations
 
@@ -54,6 +54,7 @@ Shared: `runtime/ops.py`, `runtime/loading.py` (weight norm folded), `runtime/gr
 - **Long text** is split by Mizuoto; upstream does not split.
 - **Cloning with a transcript on VoxCPM2** uses the reference *and* the continuation, as upstream's web demo does (`reference_prefix`, on by default). Upstream's Python API adds the reference only when the caller passes `reference_wav_path`.
 - **`compute.compile`** wraps the local DiT. On the CPU in bf16 it gains nothing, and its float differences can move where the speech ends (VoxCPM-0.5B: 56 320 against 55 040 samples); off by default.
+- **Snake is not scripted.** Upstream's TorchScript `snake` is fused on CUDA from its second call at a shape, up to 4.8e-7 off: a request's bits depended on the shapes the process had seen (the first request differed from later ones), and the fuser compiled on the default device, opening a 256 MB context on `cuda:0` from a process working on `cuda:1`. As a plain function the same operations run eagerly: identical on the CPU (which never fuses) and to upstream's first call at a shape, the same on every request, about 1 % slower in the VAE.
 
 ## Memory and speed
 
@@ -62,6 +63,8 @@ Phases: the VAE encodes a voice prompt and decodes; the model (`kind="sequence"`
 A patch is the DiT's Euler steps (each a guidance pair), the local encoder, the stop head and both language models' steps: some 6 000 small kernels, and three waits for the device (the stop flag and each language model's position copied from a Python integer). `model.PatchDecoder` runs a patch over fixed tensors with one wait, for the stop flag. The language models step before the flag is read (upstream reads it first and stops before stepping); they draw nothing and their caches are dropped when generation ends, so the patches are the same. A full cache raises where upstream's step would.
 
 With `compute.cuda_graphs` (NVIDIA, the model wholly on its device, `compute.compile` off) a patch is one CUDA graph per number of steps and guidance value (the attention span is the whole cache there); the DiT's noise is drawn from the graphs' generator, loaded from the request's and written back at each patch. The language models' static caches are then kept with the model while graphs are kept (the memory a request needs anyway) and go when the weights move or the model unloads. The real 0.5B and 1.5 give the same audio with and without graphs, 1.6–1.9 times faster per request.
+
+**Fast mode** (load option `attention_span`, off): each step attends over the filled blocks of its cache on a GPU too, as on the CPU, instead of all 8192 positions (exact on a GPU only over the whole cache, which made VoxCPM 1.4–1.7× slower in G1). On an RTX 3090: VoxCPM2 2.13 → 1.26 s a request (×1.69), 1.5 0.95 → 0.68 s (×1.40); the audio is another take of the request there, identical on the CPU; outputs list it (`applied.attention_span`). `compute.attention = fast` with FlashAttention installed does the same through the attention kernel (×1.64 and ×1.17).
 
 ## Training
 

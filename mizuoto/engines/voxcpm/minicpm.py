@@ -31,12 +31,13 @@ ATTEND_BLOCK = 256
 """On the CPU a step attends over the cache up to the next multiple of this past the current length (``attend_span``)."""
 
 
-def attend_span(length: int, max_length: int, device: torch.device) -> int:
+def attend_span(length: int, max_length: int, device: torch.device, everywhere: bool = False) -> int:
     """How much of a ``max_length`` static cache holding ``length`` positions a step attends over: on the CPU the next
     ``ATTEND_BLOCK`` multiple, which gives the same bits as the whole cache there; elsewhere the whole cache, as upstream.
     On CUDA the step takes SDPA's math path, whose matrix-vector product and softmax split their sums by the key length,
-    so no cut short of the whole cache gives the same bits (checked at every position up to 3100, bf16, fp16 and fp32)."""
-    if device.type != "cpu":
+    so no cut short of the whole cache gives the same bits (checked at every position up to 3100, bf16, fp16 and fp32).
+    ``everywhere`` (the load option ``attention_span``): the CPU's span on every device, faster and not exact there."""
+    if device.type != "cpu" and not everywhere:
         return max_length
     return min(max_length, -(-length // ATTEND_BLOCK) * ATTEND_BLOCK)
 
@@ -253,6 +254,8 @@ class MiniCPMModel(nn.Module):
         self.norm = RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
         self.rope_emb: LongRoPE | None = None if config.no_rope else LongRoPE(config)
         self.kv_cache: StaticKVCache | None = None
+        self.span_everywhere = False
+        """``attend_span``'s ``everywhere``: the load option ``attention_span``."""
 
     def new_cache(self, max_length: int, device: torch.device | str, dtype: torch.dtype, batch_size: int = 1) -> StaticKVCache:
         c = self.config
@@ -274,7 +277,7 @@ class MiniCPMModel(nn.Module):
         assert self.kv_cache is not None, "the KV cache is not set up"
         position_emb = self.rope_emb(position_id) if self.rope_emb is not None else None
         # the positions written so far (``step()`` counted this one): a whole block of them on the CPU
-        span = attend_span(self.kv_cache.current_length, self.kv_cache.max_length, inputs_embeds.device)
+        span = attend_span(self.kv_cache.current_length, self.kv_cache.max_length, inputs_embeds.device, self.span_everywhere)
         hidden_states = inputs_embeds
         for i, layer in enumerate(self.layers):
             hidden_states = layer.forward_step(hidden_states, position_emb, position_id, self.kv_cache.get_layer_cache(i), span)  # ty: ignore[call-non-callable]

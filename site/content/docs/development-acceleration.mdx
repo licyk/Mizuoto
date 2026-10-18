@@ -19,6 +19,7 @@ icon: Zap
 | 进程级 GPU 开关 | `compute.fast`（无） | 不同 |
 | `torch.compile` | `compute.compile`（关） | 多数引擎略有不同（见下文） |
 | Qwen3-TTS 的合并投影 | 加载选项 `fused_projections`（关） | 在 CPU 上的一致性用例中相同；在 CUDA 上不同 |
+| VoxCPM 的注意力范围 | 加载选项 `attention_span`（关） | 在 CPU 上相同；在 CUDA 上是同一请求的另一次生成（[VoxCPM](/docs/engines-voxcpm#显存与速度)） |
 | OmniVoice 的合并引导 | 请求选项 `packed_guidance`（关） | 在 CPU 上的一致性用例中相同；在 CUDA 上是同一请求的另一次生成（[OmniVoice](/docs/engines-omnivoice#显存与速度)） |
 | 静态 KV 缓存 | `compute.kv_cache = static` | 在 CPU 上相同；见[显存与内存](/docs/development-memory#静态-kv-缓存与-cuda-分配器) |
 

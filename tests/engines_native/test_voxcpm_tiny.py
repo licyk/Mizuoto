@@ -199,12 +199,12 @@ def reference(tmp_path_factory) -> Path:
     return path
 
 
-def load(folder: Path):
+def load(folder: Path, device: str = "cpu", **options):
     engine = VoxCpmEngine()
     variant = engine.detect_variant(folder)
     devices = DeviceService()
     return engine.load(
-        LoadSpec(f"voxcpm/{folder.name}", folder, variant or "", "cpu", options={}), Runtime(devices, ModelManager(devices), RuntimeOptions()), RequestContext("load")
+        LoadSpec(f"voxcpm/{folder.name}", folder, variant or "", device, options=options), Runtime(devices, ModelManager(devices), RuntimeOptions()), RequestContext("load")
     )
 
 
@@ -518,3 +518,23 @@ def test_a_failed_capture_falls_back_to_the_same_audio(folder, monkeypatch, capl
     got = gpu(True)
     assert "CUDA graphs failed" in caplog.text
     assert want.shape == got.shape and (want == got).all()
+
+
+def test_the_attention_span_option_is_exact_on_the_cpu_and_listed(folder, loaded):
+    """``attention_span`` (a fast mode for GPUs) changes nothing on the CPU, which already attends over the filled part
+    of the cache; outputs list it."""
+    spanned = load(folder, attention_span=True)
+    (a, _), (b, ctx) = speak(loaded), speak(spanned)
+    assert np.array_equal(audio(a), audio(b)) and ctx.applied["attention_span"] is True
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="needs a CUDA device")
+def test_the_attention_span_option_on_a_gpu_attends_over_the_filled_cache(folder):
+    """On a GPU the option makes each step attend over the filled blocks of its cache, as on the CPU (by default the
+    whole cache, exact): the audio still has its length and repeats under a seed."""
+    spanned = load(folder, "cuda", attention_span=True)
+    for h in spanned.handles:
+        h.load()
+    assert spanned.model.base_lm.span_everywhere and spanned.model.residual_lm.span_everywhere
+    (a, _), (b, _) = speak(spanned, ctx=RequestContext("r", seed=3, device="cuda")), speak(spanned, ctx=RequestContext("r", seed=3, device="cuda"))
+    assert audio(a).size and np.array_equal(audio(a), audio(b))

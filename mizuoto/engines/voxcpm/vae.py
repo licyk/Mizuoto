@@ -28,7 +28,6 @@ from mizuoto.engines.voxcpm.config import VaeConfig
 from mizuoto.runtime import ops
 
 
-@torch.jit.script
 def snake(x: torch.Tensor, alpha: torch.Tensor) -> torch.Tensor:
     shape = x.shape
     x = x.reshape(shape[0], shape[1], -1)

@@ -48,7 +48,7 @@ CPU、fp32（VoxCPM 还有它默认的 bf16）、同一个种子、同一个 tor
 | T2 阶段 | 教师强制下的 logits；捕获输入得到的离散输出（语音分词器编码、VQ 编码） | argmax 100 % 一致；离散输出 ≥ 99.9 % 一致，且每处翻转都有解释 |
 | T3 端到端 | 一个带种子的完整请求走 Mizuoto 的完整链路 | token 相同；音频相同，或最大绝对误差 ≤ 1e-4 |
 
-上表每个引擎在 T3 上都完全相同、误差为零，只有 CosyVoice 在两边各自生成音色提示时例外。有三条需要主动开启的路径标准放宽：`compute.compile`（在 1e-4 以内，CosyVoice 除外，它的声码器会放大浮点差异）、Qwen3-TTS 的 `fused_projections`（CPU 上相同，GPU 上不同）和 OmniVoice 的 `packed_guidance`（CPU 上的对照用例中相同；GPU 上是同一请求的另一次生成）。
+上表每个引擎在 T3 上都完全相同、误差为零，只有 CosyVoice 在两边各自生成音色提示时例外。有四条需要主动开启的路径标准放宽：`compute.compile`（在 1e-4 以内，CosyVoice 除外，它的声码器会放大浮点差异）、Qwen3-TTS 的 `fused_projections`（CPU 上相同，GPU 上不同）、OmniVoice 的 `packed_guidance`（CPU 上的对照用例中相同；GPU 上是同一请求的另一次生成）和 VoxCPM 的 `attention_span`（CPU 上相同，GPU 上是另一次生成）。
 
 除音频外还比较行为：应用的参数和警告、选中的音色方式、分段、流式各块的长度、采样率，以及无效请求的错误码。
 

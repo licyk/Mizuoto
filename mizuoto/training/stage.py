@@ -65,6 +65,12 @@ def stage_main(request: dict[str, Any], emitter: Emitter) -> None:
             ctx.log("compute.fast fp16_accumulation: training may be numerically unstable (NaN losses)", "warning")
     if ctx.attention != "auto":
         ctx.use_attention(ctx.attention)
+    if ctx.device.startswith("cuda:"):
+        import torch
+
+        # the stage's process trains on this one device: made current, so that TorchScript's fuser (GPT-SoVITS's
+        # scripted training gate) compiles there, and not on cuda:0, where it opened a 256 MB context
+        torch.cuda.set_device(torch.device(ctx.device))
     trainer = load_trainer(str(request["trainer"]))
     result = trainer.run_stage(str(request["stage"]), ctx)
     if ctx.accel is not None:

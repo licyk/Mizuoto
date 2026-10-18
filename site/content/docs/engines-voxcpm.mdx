@@ -46,7 +46,7 @@ OpenBMB 的无离散分词语音合成（[OpenBMB/VoxCPM](https://github.com/Ope
 - **分词器**是 transformers 5.3 的 `LlamaTokenizer` 从词表构建出来的那个，忽略文件自带的流水线：没有 normalizer，`Metaspace` 使用 `prepend_scheme="always"` 且不拆分，BPE 中没有未知 token，配置中的特殊 token 按 id 顺序添加（词表中没有的 token 取下一个空闲 id，所以 VoxCPM2 的 `<|im_end|>` 是 73442，而不是文件中的 73440）。直接使用 `tokenizer.json` 时，以空白开头或位于特殊 token 之后的文本会得到不同的 id。随后上游的包装把多字汉字 token 拆成单字；词表之外的字为 `<unk>`。
 - **文本规范化**采用 wetext 0.1.2 的做法：在标注前和每个 FST 之后去掉首尾空白，开启 `remove_erhua` 时也处理含“儿”但不含数字的文本。它的 FST 与 wetext 0.0.4（CosyVoice 的共享资源）和 WeTextProcessing（IndexTTS）的都不同，所以随引擎提供。数字由 `inflect` 读出；Mizuoto 的 7.3.1 与上游的 7.5.0 在语料上给出相同的词。
 - **解码。** VoxCPM2 从开头去掉解码出的上下文块（提示的最后 `min(3, n)` 块）；第一代只要有提示音频就去掉 `2 × patch × hop` 个采样，与上游一样不管提示多长。流式时每块输出一段：VoxCPM2 经有状态的因果解码器，第一代则解码最后三块并保留最新的一块。
-- **Snake** 是上游用 TorchScript 编译的那个函数；权重归一化用 `torch._weight_norm` 折叠，即上游钩子在每次前向时做的调用。
+- **Snake** 按上游的顺序计算上游的运算，是一个普通函数（上游用 TorchScript 编译它：见有意的差异）；权重归一化用 `torch._weight_norm` 折叠，即上游钩子在每次前向时做的调用。
 
 ## 有意的差异
 
@@ -54,6 +54,7 @@ OpenBMB 的无离散分词语音合成（[OpenBMB/VoxCPM](https://github.com/Ope
 - **长文本**由 Mizuoto 切分；上游不切分。
 - **VoxCPM2 带参考文本克隆时**同时使用参考*和*续写，与上游网页演示相同（`reference_prefix`，默认开启）。上游的 Python 接口只在调用方传入 `reference_wav_path` 时才加参考。
 - **`compute.compile`** 包装局部 DiT。在 CPU 上以 bf16 运行时没有收益，而且它的浮点差异可能改变语音结束的位置（VoxCPM-0.5B：56 320 对 55 040 个采样）；默认关闭。
+- **Snake 不再编译为 TorchScript。** 上游的 TorchScript `snake` 在 CUDA 上从某个形状的第二次调用起被融合，相差最多 4.8e-7：一个请求的数值取决于进程见过的形状（第一个请求与之后的不同），融合器还在默认设备上编译，使工作在 `cuda:1` 上的进程在 `cuda:0` 上打开 256 MB 的上下文。作为普通函数，同样的运算以 eager 方式运行：在 CPU 上（从不融合）与原来相同，也与上游在某个形状上的第一次调用相同，每个请求都一样，VAE 慢约 1 %。
 
 ## 显存与速度
 
@@ -62,6 +63,8 @@ OpenBMB 的无离散分词语音合成（[OpenBMB/VoxCPM](https://github.com/Ope
 一块包括 DiT 的欧拉步（每步一对引导计算）、局部编码器、停止头和两个语言模型各一步：约 6 000 个小内核，外加三次等待设备（停止标志，以及每个语言模型从 Python 整数拷贝的位置）。`model.PatchDecoder` 在固定张量上运行一块，只等待设备一次，用于读取停止标志。语言模型在读取标志之前就前进一步（上游先读标志，在前进之前就停止）；它们不抽样，生成结束时缓存也会丢弃，所以各块完全相同。缓存满时，在上游那一步会报错的地方同样报错。
 
 开启 `compute.cuda_graphs`（NVIDIA，模型完整位于设备上，`compute.compile` 关闭）时，一块就是一个 CUDA 图，按步数和引导值各一个（那里的注意力跨度是整个缓存）；DiT 的噪声从 CUDA 图自己的生成器抽取，该生成器每块从请求的生成器载入并写回。此时只要保留 CUDA 图，语言模型的静态缓存就随模型保留（这是请求本来就需要的显存），在权重移动或模型卸载时释放。真实的 0.5B 和 1.5 在有无 CUDA 图时音频相同，每个请求快 1.6–1.9 倍。
+
+**快速模式**（加载选项 `attention_span`，默认关闭）：在 GPU 上每一步也只关注缓存中已填充的块，与 CPU 上一样，而不是全部 8192 个位置（GPU 上只有关注整个缓存才精确，这使 VoxCPM 在 G1 中慢了 1.4–1.7 倍）。在 RTX 3090 上：VoxCPM2 每个请求 2.13 → 1.26 秒（×1.69），1.5 0.95 → 0.68 秒（×1.40）；那里的音频是同一请求的另一次生成，CPU 上完全相同；输出中会注明（`applied.attention_span`）。安装了 FlashAttention 时，`compute.attention = fast` 通过注意力内核达到同样的效果（×1.64 和 ×1.17）。
 
 ## 训练
 

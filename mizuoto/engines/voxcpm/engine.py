@@ -190,6 +190,10 @@ class LoadedVoxCpm(LoadedEngine):
             load_lora_weights(model, lora[1])
         self.lora = lora[0] if lora else None
         self.model: VoxCpmModel = model.eval()
+        # Fast mode (load option attention_span): decoding attends over the filled part of its cache on a GPU too, as
+        # it does on the CPU; not bit-identical there (SDPA's sums split by the key length)
+        self.attention_span = bool(spec.options.get("attention_span"))
+        model.base_lm.span_everywhere = model.residual_lm.span_everywhere = self.attention_span
 
         ctx.check_cancel()
         ctx.progress("loading:vae", None)
@@ -363,6 +367,8 @@ class LoadedVoxCpm(LoadedEngine):
         from mizuoto.engines.voxcpm.model import Generation, build_inputs
 
         p, o = task.params, task.options
+        if self.attention_span:
+            ctx.applied["attention_span"] = True
         steps = int(p.get("num_steps") or 10)
         cfg = float(p["guidance_scale"]) if p.get("guidance_scale") is not None else 2.0
         normalize = bool(p.get("text_normalization") or False)
