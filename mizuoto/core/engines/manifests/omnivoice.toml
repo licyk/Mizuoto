@@ -139,6 +139,11 @@ max = 600.0
 step = 1.0
 group = "hidden"
 
+[options.packed_guidance]
+type = "bool"
+default = false
+help = "Fast mode: the guided and unguided passes in one row instead of two padded rows, so each step computes fewer positions. Faster, but the audio is no longer identical to the original implementation's (the same model, slightly different rounding); outputs list it."
+
 # -- models ---------------------------------------------------------------------------
 
 [[models]]

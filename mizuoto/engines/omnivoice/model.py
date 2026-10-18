@@ -52,13 +52,15 @@ class OmniVoiceModel(nn.Module):
         self.register_buffer("codebook_layer_offsets", torch.arange(self.num_codebooks) * self.vocab)
         self.audio_heads = ops.Linear(llm["hidden_size"], self.num_codebooks * self.vocab, bias=False)
 
-    def forward(self, input_ids: torch.Tensor, audio_mask: torch.Tensor, attention_mask: torch.Tensor) -> torch.Tensor:
-        """``input_ids`` (batch, codebooks, length), ``audio_mask`` (batch, length) → logits (batch, codebooks, length, vocab)."""
+    def forward(self, input_ids: torch.Tensor, audio_mask: torch.Tensor, attention_mask: torch.Tensor, positions: torch.Tensor | None = None) -> torch.Tensor:
+        """``input_ids`` (batch, codebooks, length), ``audio_mask`` (batch, length) → logits (batch, codebooks, length, vocab).
+        ``positions`` (batch, length): each position's index for RoPE, by default ``0…length−1`` in every row."""
         text = self.llm.get_submodule("embed_tokens")(input_ids[:, 0, :])
         shifted = (input_ids * audio_mask.unsqueeze(1)) + self.get_buffer("codebook_layer_offsets").view(1, -1, 1)
         audio = self.audio_embeddings(shifted).sum(dim=1)
         x = torch.where(audio_mask.unsqueeze(-1), audio, text)
-        positions = torch.arange(0, x.shape[1], device=x.device).unsqueeze(0)
+        if positions is None:
+            positions = torch.arange(0, x.shape[1], device=x.device).unsqueeze(0)
         hidden = self.llm(x, positions, attention_mask)
         batch, length, _ = hidden.shape
         return self.audio_heads(hidden).view(batch, length, self.num_codebooks, self.vocab).permute(0, 2, 1, 3)

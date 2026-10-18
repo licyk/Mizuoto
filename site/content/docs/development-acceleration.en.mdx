@@ -19,6 +19,7 @@ Every engine gives its upstream's output sample for sample on the CPU (see [Engi
 | Process-wide GPU switches | `compute.fast` (none) | different |
 | `torch.compile` | `compute.compile` (off) | slightly different on most engines (below) |
 | Qwen3-TTS's fused projections | load option `fused_projections` (off) | identical on the CPU in the parity cases; different on CUDA |
+| OmniVoice's packed guidance | request option `packed_guidance` (off) | identical on the CPU in the parity cases; on CUDA another take of the request ([OmniVoice](/docs/engines-omnivoice#memory-and-speed)) |
 | Static KV cache | `compute.kv_cache = static` | identical on the CPU; see [Memory](/docs/development-memory#static-kv-cache-and-the-cuda-allocator) |
 
 Native code never changes process-wide state: no `torch.backends` assignments, no `sdpa_kernel` (it switches SDPA's kernels for every thread), no global seeding. `runtime/accel/features.py` is the one exemption, called by the host and by a training stage (an architecture test enforces both).

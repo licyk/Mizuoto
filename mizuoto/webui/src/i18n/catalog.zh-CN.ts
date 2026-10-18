@@ -168,5 +168,7 @@ const catalog: Record<string, string> = {
   'attn implementation': '注意力实现',
   'fused projections': '融合投影',
   'Fast mode: each layer\'s q/k/v and gate/up projections as one product each (as qwen-tts-webui). Faster on a GPU, but the audio is no longer identical to the original implementation\'s (the same model, slightly different rounding); outputs list it. Applies when the model next loads.': '快速模式：将每层的 q/k/v 和 gate/up 投影各合并为一次乘法（与 qwen-tts-webui 相同）。在 GPU 上更快，但音频不再与原始实现完全一致（同一模型，舍入略有不同）；输出中会注明。在模型下次加载时生效。',
+  'packed guidance': '合并引导',
+  'Fast mode: the guided and unguided passes in one row instead of two padded rows, so each step computes fewer positions. Faster, but the audio is no longer identical to the original implementation\'s (the same model, slightly different rounding); outputs list it.': '快速模式：把有引导和无引导的两次计算放进同一行，而不是两行补齐的序列，每一步计算的位置更少。更快，但音频不再与原始实现完全相同（同一个模型，舍入略有不同）；输出中会注明。',
 };
 export default catalog;

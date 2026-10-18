@@ -157,6 +157,7 @@ Xiaomi's diffusion language model TTS. Best for: rare languages (over 600), spea
 - **Design attributes**: gender (male, female), age (child … elderly), pitch (very low pitch … very high pitch), style (whisper), accent (ten, such as american accent), dialect (twelve Chinese dialects such as 河南话, 四川话, 东北话). Free-text descriptions are not taken.
 - **Inline tags**: thirteen, such as `[laughter]`, `[sigh]`, `[question-en]`, `[surprise-wa]`.
 - **Reference clips**: 1–20 s, at least 16 kHz. 24 kHz output.
+- **Options**: `packed_guidance` (off) is a fast mode: cloning about a quarter faster on a GPU, where each result is then another take of the request rather than the original implementation's.
 - **Training**: **Fine-tune the model** (`full`) and **Fine-tune with LoRA** (`lora`, merged at export), both exported as a new model. The full fine-tune suits hours of speech for a new language or style and needs 24 GB of GPU memory or more; LoRA is lighter.
 
 ## VoxCPM

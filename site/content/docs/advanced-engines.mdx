@@ -157,6 +157,7 @@ Web UI 中，**模型** › **引擎** 列出每个引擎的可用状态、设�
 - **设计属性**：gender（male、female）、age（child … elderly）、pitch（very low pitch … very high pitch）、style（whisper）、accent（american accent 等 10 种）、dialect（河南话、四川话、东北话等 12 种）。不接受自由描述。
 - **行内标签**：`[laughter]`、`[sigh]`、`[question-en]`、`[surprise-wa]` 等 13 个。
 - **参考音频**：1–20 秒，至少 16 kHz。采样率 24 kHz。
+- **选项**：`packed_guidance`（默认关闭）是快速模式：在 GPU 上克隆约快四分之一，此时每个结果是该请求的另一次生成，而不是原始实现给出的结果。
 - **训练**：**Fine-tune the model**（`full`）和 **Fine-tune with LoRA**（`lora`，导出时合并），都导出为新模型。全量微调适合用数小时语音学习新语言或风格，需要 24 GB 以上显存；LoRA 更轻。
 
 ## VoxCPM

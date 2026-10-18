@@ -15,7 +15,8 @@ so a seeded request on the CPU in fp32 gives the same audio:
 - the audio is decoded, its long silences shortened, levelled back to the reference's RMS (or peak
   normalised to 0.5 without a reference), faded and padded.
 
-FlashInfer and CUDA graphs (v1's load options) are not ported: SDPA serves every platform.
+FlashInfer and CUDA graphs (v1's load options) are not ported: SDPA serves every platform. In FlashInfer's place the
+option ``packed_guidance`` packs each item's two sequences into one row (a fast mode: not bit-identical on a GPU).
 """
 
 from __future__ import annotations
@@ -48,7 +49,17 @@ ATTRIBUTE_ORDER = ("gender", "age", "pitch", "style", "accent", "dialect")
 
 # Mizuoto's common parameter name → GenerationConfig field.
 CONFIG_PARAMS = {"num_steps": "num_step", "guidance_scale": "guidance_scale", "temperature": "class_temperature"}
-CONFIG_OPTIONS = ("t_shift", "layer_penalty_factor", "position_temperature", "denoise", "preprocess_prompt", "postprocess_output", "audio_chunk_duration", "audio_chunk_threshold")
+CONFIG_OPTIONS = (
+    "t_shift",
+    "layer_penalty_factor",
+    "position_temperature",
+    "denoise",
+    "preprocess_prompt",
+    "postprocess_output",
+    "audio_chunk_duration",
+    "audio_chunk_threshold",
+    "packed_guidance",
+)
 
 
 @dataclass
@@ -66,6 +77,8 @@ class GenerationConfig:
     postprocess_output: bool = True
     audio_chunk_duration: float = 15.0
     audio_chunk_threshold: float = 30.0
+    packed_guidance: bool = False
+    """Mizuoto's fast mode: each item's conditional and unconditional sequences in one row (``_layout``)."""
     pad_duration: float = 0.1
     fade_duration: float = 0.1
 
@@ -126,6 +139,7 @@ class OmniVoiceEngine(Engine):
         "postprocess_output": OptionSpec("bool", True),
         "audio_chunk_duration": OptionSpec("float", 15.0, 0.0, 60.0),
         "audio_chunk_threshold": OptionSpec("float", 30.0, 0.0, 600.0),
+        "packed_guidance": OptionSpec("bool", False),
     }
 
     def detect_variant(self, model_dir: Path) -> str | None:
@@ -356,7 +370,54 @@ class LoadedOmniVoice(LoadedEngine):
             done[0] = start  # (progress counted again on a retry)
             return self._iterate(items, config, ctx, done, total_steps)
 
-        return ctx.run("language model", [self.h_model], iterate, self._generation_memory(len(items), longest))
+        if config.packed_guidance:  # one row per item, as long as both sequences
+            memory = self._generation_memory(1, 2 * longest) * len(items) // 2
+        else:
+            memory = self._generation_memory(len(items), longest)
+        return ctx.run("language model", [self.h_model], iterate, memory)
+
+    def _layout(
+        self, inputs: list[tuple[torch.Tensor, torch.Tensor]], targets: list[int], packed: bool
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor | None, list[tuple[tuple[int, int], tuple[int, int]]]]:
+        """The batch for every step: ids, audio mask, attention mask, positions (None: ``0…`` in every row) and, per
+        item, where its target sits in the conditional and the unconditional sequence (row, first position).
+
+        Upstream's layout: the conditional sequences in rows ``0…b−1``, the unconditional ones (the target alone) in
+        rows ``b…2b−1``, each padded to the longest; a padding position attends only to itself. Packed (the
+        ``packed_guidance`` option): an item's conditional and unconditional sequences side by side in one row, a
+        block-diagonal mask between them and each one's positions from 0, so each computes what it computed in its own
+        row, without the padding the unconditional rows carried: the same model, other rounding (the products and
+        attention run over other shapes)."""
+        import torch
+
+        c, mask_id, device = self.model.num_codebooks, self.model.mask_id, self.device
+        b = len(inputs)
+        spans = [((ids.size(2), 0), (t, ids.size(2))) if packed else ((ids.size(2), 0), (t, 0)) for (ids, _), t in zip(inputs, targets, strict=True)]
+        rows = b if packed else 2 * b
+        width = max(u_at + u_len for _, (u_len, u_at) in spans) if packed else max(c_len for (c_len, _), _ in spans)
+        batch_ids = torch.full((rows, c, width), mask_id, dtype=torch.long, device=device)
+        batch_audio = torch.zeros((rows, width), dtype=torch.bool, device=device)
+        batch_attn = torch.zeros((rows, 1, width, width), dtype=torch.bool, device=device)
+        positions = torch.zeros((rows, width), dtype=torch.long, device=device) if packed else None
+        places = []
+        for i, ((ids, audio), ((c_len, _), (u_len, u_at))) in enumerate(zip(inputs, spans, strict=True)):
+            u_row = i if packed else b + i
+            batch_ids[i, :, :c_len] = ids
+            batch_audio[i, :c_len] = audio
+            batch_attn[i, :, :c_len, :c_len] = True
+            batch_ids[u_row, :, u_at : u_at + u_len] = ids[..., -u_len:]
+            batch_audio[u_row, u_at : u_at + u_len] = audio[..., -u_len:]
+            batch_attn[u_row, :, u_at : u_at + u_len, u_at : u_at + u_len] = True
+            if width > u_at + u_len:  # after the unconditional sequence (as upstream: the conditional rows' padding attends nowhere)
+                diag = torch.arange(u_at + u_len, width, device=device)
+                batch_attn[u_row, :, diag, diag] = True
+            if positions is not None:
+                positions[i, :c_len] = torch.arange(c_len, device=device)
+                positions[i, u_at : u_at + u_len] = torch.arange(u_len, device=device)
+                if width > u_at + u_len:
+                    positions[i, u_at + u_len :] = torch.arange(u_at + u_len, width, device=device)
+            places.append(((i, c_len - u_len), (u_row, u_at)))
+        return batch_ids, batch_audio, batch_attn, positions, places
 
     def _iterate(self, items: list[_Item], config: GenerationConfig, ctx: RequestContext, done: list[int], total_steps: int) -> list[torch.Tensor]:
         import torch
@@ -366,22 +427,7 @@ class LoadedOmniVoice(LoadedEngine):
         c, mask_id = model.num_codebooks, model.mask_id
         b = len(items)
         inputs = [self._inputs(item, config.denoise) for item in items]
-        c_lens = [ids.size(2) for ids, _ in inputs]
-        max_len = max(c_lens)
-        batch_ids = torch.full((2 * b, c, max_len), mask_id, dtype=torch.long, device=self.device)
-        batch_audio = torch.zeros((2 * b, max_len), dtype=torch.bool, device=self.device)
-        batch_attn = torch.zeros((2 * b, 1, max_len, max_len), dtype=torch.bool, device=self.device)
-        for i, (ids, audio) in enumerate(inputs):
-            c_len, u_len = c_lens[i], items[i].target_len
-            batch_ids[i, :, :c_len] = ids
-            batch_audio[i, :c_len] = audio
-            batch_attn[i, :, :c_len, :c_len] = True
-            batch_ids[b + i, :, :u_len] = ids[..., -u_len:]
-            batch_audio[b + i, :u_len] = audio[..., -u_len:]
-            batch_attn[b + i, :, :u_len, :u_len] = True
-            if max_len > u_len:
-                diag = torch.arange(u_len, max_len, device=self.device)
-                batch_attn[b + i, :, diag, diag] = True
+        batch_ids, batch_audio, batch_attn, positions, places = self._layout(inputs, [it.target_len for it in items], config.packed_guidance)
         tokens = torch.full((b, c, max(it.target_len for it in items)), mask_id, dtype=torch.long, device=self.device)
         timesteps = time_steps(config.num_step, config.t_shift)
         schedules = [schedule(it.target_len, c, config.num_step, timesteps) for it in items]
@@ -389,14 +435,15 @@ class LoadedOmniVoice(LoadedEngine):
         generator = ctx.generator_for(self.device)
         for step in range(config.num_step):
             ctx.check_cancel()
-            logits = model(batch_ids, batch_audio, batch_attn).to(torch.float32)
+            logits = model(batch_ids, batch_audio, batch_attn, positions).to(torch.float32)
             for i in range(b):
                 k = schedules[i][step]
                 if k <= 0:
                     continue
-                c_len, t_len = c_lens[i], items[i].target_len
-                c_logits = logits[i : i + 1, :, c_len - t_len : c_len, :]
-                u_logits = logits[b + i : b + i + 1, :, :t_len, :]
+                t_len = items[i].target_len
+                (c_row, c_at), (u_row, u_at) = places[i]
+                c_logits = logits[c_row : c_row + 1, :, c_at : c_at + t_len, :]
+                u_logits = logits[u_row : u_row + 1, :, u_at : u_at + t_len, :]
                 if config.guidance_scale != 0:
                     c_lp = F.log_softmax(c_logits, dim=-1)
                     u_lp = F.log_softmax(u_logits, dim=-1)
@@ -422,8 +469,8 @@ class LoadedOmniVoice(LoadedEngine):
                 flat[top_idx] = pred.flatten()[top_idx]
                 sample.copy_(flat.view_as(sample))
                 tokens[i : i + 1, :, :t_len] = sample
-                batch_ids[i : i + 1, :, c_len - t_len : c_len] = sample
-                batch_ids[b + i : b + i + 1, :, :t_len] = sample
+                batch_ids[c_row : c_row + 1, :, c_at : c_at + t_len] = sample
+                batch_ids[u_row : u_row + 1, :, u_at : u_at + t_len] = sample
             done[0] += 1
             ctx.progress("generating", done[0] / total_steps, f"step {done[0]}")
         return [tokens[i, :, : items[i].target_len] for i in range(b)]

@@ -45,12 +45,14 @@ Shared: `runtime/lm/qwen.py`, `nn/codecs/dac.py`, `nn/ssl/hubert.py`, `text/toke
 ## Deviations
 
 - **No free-text design.** The model was trained on a closed attribute vocabulary; free text is refused, as in 0.1.
-- **No FlashInfer or CUDA graphs.** 0.1's load options for them are gone; SDPA serves every platform.
+- **No FlashInfer or CUDA graphs.** 0.1's load options for them are gone; SDPA serves every platform. In FlashInfer's place, the request option `packed_guidance` (below).
 - **Upstream's text normalisation** (`normalize_text`, WeTextProcessing) is not used by Mizuoto's requests and is not ported.
 
-## Memory
+## Memory and speed
 
 Two phases: the audio tokenizer (the voice prompt, then decoding) and the language model. The language model reruns over the whole sequence each step, so it is a `oneshot` model for weight streaming (its largest units stay on the device). Training: gradient checkpointing over the model's layers is identical, LoRA dropout included; `lowest` keeps AdamW's state in RAM (identical on the CPU).
+
+**Fast mode** (request option `packed_guidance`, off): upstream runs each item's conditional sequence and its unconditional one (the target alone) as two rows padded to the same length, so the unconditional row computes the whole prompt's length for nothing. Packed, the two sit side by side in one row under a block-diagonal mask, each with its positions from 0: each computes what it computed in its own row, over fewer positions. On the CPU the parity cases give the same audio; on a GPU the products and attention run over other shapes, the rounding differs, and since each step unmasks the most confident codes, the result is another take of the same request (as another seed would be). Outputs list it (`applied.packed_guidance`). On a 3090: cloning ×1.26–1.27 per request (clone-en 0.77 → 0.61 s), 30 s of speech ×1.12; voices without a reference carry little padding and gain nothing; on the CPU cloning ×1.31.
 
 ## Training
 

@@ -225,3 +225,26 @@ def test_runs_identically_with_its_weights_placed_by_phase_and_streamed(loaded, 
     check_streamed(loaded, lambda m: run(m, voice=voice), monkeypatch)
     long = "One sentence here. Another one follows. And a third, to be sure."
     check_streamed(loaded, lambda m: run(m, text=long, options={**QUIET, "audio_chunk_threshold": 0.5, "audio_chunk_duration": 0.5}), monkeypatch)
+
+
+def test_packed_guidance_computes_each_sequence_as_its_own_row(loaded, reference):
+    """``packed_guidance``: an item's conditional and unconditional sequences side by side in one row, under a
+    block-diagonal mask with each one's positions from 0, give the logits upstream's two padded rows give (to rounding),
+    several items of different lengths together; a request lists the option."""
+    from mizuoto.engines.omnivoice.engine import _Item
+
+    prompt = loaded._prompt(VoiceSpec(references=[Reference(audio_path=str(reference), transcript="Hello.")]), True, RequestContext("p"))
+    items = [_Item("Hello there.", 9, "en", None, prompt, None), _Item("A longer line of text to say.", 14, "en", None, None, None)]
+    inputs = [loaded._inputs(item, True) for item in items]
+    targets = [it.target_len for it in items]
+    with torch.inference_mode():
+        logits = {}
+        for packed in (False, True):
+            ids, audio, attn, positions, places = loaded._layout(inputs, targets, packed)
+            out = loaded.model(ids, audio, attn, positions).float()
+            logits[packed] = [[out[row, :, at : at + t] for row, at in place] for place, t in zip(places, targets, strict=True)]
+    for a, b in zip(logits[False], logits[True], strict=True):
+        for x, y in zip(a, b, strict=True):
+            assert x.shape == y.shape and torch.allclose(x, y, atol=1e-4, rtol=1e-4)
+    (chunk,), ctx = speak(loaded, options={**QUIET, "packed_guidance": True})
+    assert chunk.samples.size and np.isfinite(chunk.samples).all() and ctx.applied["packed_guidance"] is True

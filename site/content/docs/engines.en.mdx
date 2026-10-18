@@ -48,7 +48,7 @@ CPU, fp32 (VoxCPM also bf16, its default), the same seed, the same torch release
 | T2 stage | teacher-forced logits; discrete outputs from captured inputs (speech-tokenizer codes, VQ codes) | argmax agreement 100 %; discrete agreement ≥ 99.9 % with every flip explained |
 | T3 end to end | a whole seeded request through Mizuoto's stack | identical tokens; audio identical, or max abs error ≤ 1e-4 |
 
-Every engine above is identical at T3, with no error at all, except CosyVoice when each side makes its own voice prompt. Two opt-in paths are held to less: `compute.compile` (within 1e-4, except CosyVoice, whose vocoder amplifies float differences) and Qwen3-TTS's `fused_projections` (identical on the CPU, not on a GPU).
+Every engine above is identical at T3, with no error at all, except CosyVoice when each side makes its own voice prompt. Three opt-in paths are held to less: `compute.compile` (within 1e-4, except CosyVoice, whose vocoder amplifies float differences), Qwen3-TTS's `fused_projections` (identical on the CPU, not on a GPU) and OmniVoice's `packed_guidance` (identical on the CPU in the parity cases; another take of the request on a GPU).
 
 Behaviour is compared along with the audio: the parameters applied and the warnings, the voice mode chosen, the segments, the streamed chunks' lengths, the sample rate and the error codes of invalid requests.
 
