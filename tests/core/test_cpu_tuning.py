@@ -21,6 +21,7 @@ def clean(monkeypatch):
         monkeypatch.setenv(name, "x")
         monkeypatch.delenv(name)
     monkeypatch.setattr(cpu, "_mallopt_done", False)
+    monkeypatch.setattr(cpu, "_applied", set())
     return monkeypatch
 
 
@@ -36,6 +37,19 @@ def test_auto_on_linux_tunes_the_allocator_and_binds_the_threads(clean):
     assert cpu.child_env("system", "off", {}) == {}
     assert cpu.child_env("tuned", "off", {}) == {"GLIBC_TUNABLES": OURS, "THP_MEM_ALLOC_ENABLE": "1"}
     assert cpu.child_env("system", "cores", {}) == {"OMP_PLACES": "cores", "OMP_PROC_BIND": "close"}
+
+
+@pytest.mark.skipif(not cpu.is_glibc(), reason="Linux with glibc")
+def test_a_lowest_training_stage_gets_the_allocator_without_huge_pages(clean):
+    """``huge_pages=False`` (a ``training.memory = lowest`` stage) turns torch's huge pages off, also when this process
+    applied them (and so passes them on), but not when the user's environment asks for them."""
+    assert cpu.child_env("auto", "auto", {}, huge_pages=False)["THP_MEM_ALLOC_ENABLE"] == "0"
+    cpu.apply("auto", "auto")
+    assert os.environ["THP_MEM_ALLOC_ENABLE"] == "1"
+    stage = cpu.child_env("auto", "auto", huge_pages=False)
+    assert stage == {"THP_MEM_ALLOC_ENABLE": "0"}
+    assert cpu.child_env("auto", "auto") == {}  # an inference worker inherits this process's
+    assert "THP_MEM_ALLOC_ENABLE" not in cpu.child_env("auto", "auto", {"THP_MEM_ALLOC_ENABLE": "1"}, huge_pages=False)
 
 
 @pytest.mark.skipif(not cpu.is_glibc(), reason="Linux with glibc")

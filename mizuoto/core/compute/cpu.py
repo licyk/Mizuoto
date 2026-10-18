@@ -13,7 +13,11 @@ touch. ``tuned`` (``auto`` on Linux with glibc) fixes the ``mmap`` threshold at 
 512 MB of free heap for the next allocation (``mallopt`` here, ``GLIBC_TUNABLES`` for a new process), and has torch put
 large tensors on transparent huge pages (``THP_MEM_ALLOC_ENABLE``). F5-TTS runs 10–20 % faster on the CPU; the process
 may hold up to 512 MB more than it uses. (Raising only the trim threshold made things slower.) Nothing changes off
-glibc (macOS, Windows, musl).
+glibc (macOS, Windows, musl). Training stages under ``training.memory = lowest`` get the ``malloc`` settings but not
+the huge pages (``child_env(huge_pages=False)``): AdamW stepping in RAM allocates gigabytes at every step, and with the
+page cache filling the memory each huge page stalls in the kernel's compaction (``defrag=madvise`` compacts
+synchronously): Qwen3-TTS 1.7B's fine-tune ran 2.2× slower with them (8× with the optimizer's buffers held across
+steps). Other stages keep them: fine-tunes on a GPU ran 5–15 % faster with them.
 
 **Threads.** torch runs its CPU kernels on an OpenMP team of one thread per physical core. Left to the scheduler, two
 of them sometimes share a core (its two hardware threads) while another core idles; that process then runs a third
@@ -44,6 +48,8 @@ _BINDING_VARIABLES = ("OMP_PLACES", "OMP_PROC_BIND", "GOMP_CPU_AFFINITY", "KMP_A
 
 _lock = threading.Lock()
 _mallopt_done = False
+_applied: set[str] = set()
+"""The variables ``apply`` put in this process's environment (a child may be given others for them)."""
 
 
 def is_glibc() -> bool:
@@ -58,16 +64,20 @@ def tunables(existing: str | None) -> str | None:
     return f"{existing}:{ours}" if existing else ours
 
 
-def child_env(allocator: str, threads: str, environ: dict[str, str] | None = None) -> dict[str, str]:
-    """The variables a new process needs for these settings (what ``environ``, default this process's, lacks)."""
+def child_env(allocator: str, threads: str, environ: dict[str, str] | None = None, huge_pages: bool = True) -> dict[str, str]:
+    """The variables a new process needs for these settings (what ``environ``, default this process's, lacks).
+    ``huge_pages=False`` (a ``lowest`` training stage) turns torch's huge pages off unless the environment's own setting
+    asks for them."""
     env = os.environ if environ is None else environ
     out: dict[str, str] = {}
     if allocator != "system" and is_glibc():
         value = tunables(env.get("GLIBC_TUNABLES"))
         if value is not None:
             out["GLIBC_TUNABLES"] = value
-        if "THP_MEM_ALLOC_ENABLE" not in env:
-            out["THP_MEM_ALLOC_ENABLE"] = "1"
+        ours = "THP_MEM_ALLOC_ENABLE" not in env or (environ is None and "THP_MEM_ALLOC_ENABLE" in _applied)
+        want = "1" if huge_pages else "0"
+        if ours and env.get("THP_MEM_ALLOC_ENABLE") != want:
+            out["THP_MEM_ALLOC_ENABLE"] = want
     if threads != "off" and sys.platform.startswith("linux") and not any(v in env for v in _BINDING_VARIABLES):
         out.update(BINDING)
     return out
@@ -89,4 +99,5 @@ def apply(allocator: str, threads: str) -> dict[str, str]:
         if env and "torch" in sys.modules:
             logger.info("compute.cpu_allocator and compute.cpu_threads reach this process at its next start: torch is already loaded")
         os.environ.update(env)
+        _applied.update(env)
         return env

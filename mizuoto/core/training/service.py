@@ -401,7 +401,9 @@ class TrainingService:
         workdir = folder / "work"
         # A child of this interpreter: the native modules, every device visible under its own name.
         compute = self._settings.settings.compute
-        env = {**cpu.child_env(compute.cpu_allocator, compute.cpu_threads), **allocator_env(compute.cuda_allocator)}
+        # the lowest preset's gigabytes of optimizer state in RAM stall on huge pages (cpu.py); other stages gain from them
+        huge_pages = self._settings.settings.training.memory != "lowest"
+        env = {**cpu.child_env(compute.cpu_allocator, compute.cpu_threads, huge_pages=huge_pages), **allocator_env(compute.cuda_allocator)}
         target = host_target(STAGE_MODULE, cwd=workdir, env=env)
         current = self.fingerprints(exp)
         hyperparams = self._effective(exp, method)

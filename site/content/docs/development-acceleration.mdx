@@ -215,7 +215,7 @@ GPU 上的自回归模型每一步要启动几千个小内核（Qwen3-TTS：每 
 
 | 设置 | Linux 上 `auto` 即 | 作用 |
 | --- | --- | --- |
-| `compute.cpu_allocator` | `tuned` | 把 glibc 的 `mmap` 阈值固定为 32 MB，并保留最多 512 MB 空闲堆内存供复用（本进程用 `mallopt`，子进程用 `GLIBC_TUNABLES`）；torch 的大张量放在透明大页上（`THP_MEM_ALLOC_ENABLE`）。一次前向在每层都要分配和释放几到几十 MB 的张量，按 glibc 默认设置每次都重新映射，并由内核清零页面。`system` 保持默认 |
+| `compute.cpu_allocator` | `tuned` | 把 glibc 的 `mmap` 阈值固定为 32 MB，并保留最多 512 MB 空闲堆内存供复用（本进程用 `mallopt`，子进程用 `GLIBC_TUNABLES`）；torch 的大张量放在透明大页上（`THP_MEM_ALLOC_ENABLE`），但 `training.memory = lowest` 的训练阶段除外：AdamW 在内存中更新，每一步都要分配几 GB，每个大页都会卡在内核的内存整理上（慢 2.2 倍）。一次前向在每层都要分配和释放几到几十 MB 的张量，按 glibc 默认设置每次都重新映射，并由内核清零页面。`system` 保持默认 |
 | `compute.cpu_threads` | `cores` | 把 OpenMP 线程绑定到不同的物理核心（`OMP_PLACES=cores`、`OMP_PROC_BIND=close`）。交给调度器时，偶尔有两个线程共用一个核心，那个进程在整个生命周期里都慢三分之一。`off` 交给调度器（有其他繁忙程序共用这些核心时更好） |
 
 ## 给引擎作者

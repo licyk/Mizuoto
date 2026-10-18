@@ -143,5 +143,5 @@ Two settings make CPU work faster without changing any result (Linux; on other s
 
 | Setting | Default | Meaning |
 | --- | --- | --- |
-| `compute.cpu_allocator` | `auto` | CPU memory: `tuned` (`auto` on Linux) reuses large blocks and puts big tensors on huge pages, 10–20 % faster on the CPU with identical results; `system` keeps the C library's defaults; applies at the next start |
+| `compute.cpu_allocator` | `auto` | CPU memory: `tuned` (`auto` on Linux) reuses large blocks and puts big tensors on huge pages (not in training under `training.memory = lowest`), 10–20 % faster on the CPU with identical results; `system` keeps the C library's defaults; applies at the next start |
 | `compute.cpu_threads` | `auto` | `cores` (`auto` on Linux) binds torch's CPU threads to distinct physical cores; `off` leaves them to the scheduler (better when other busy programs share the CPU); applies at the next start |

@@ -215,7 +215,7 @@ The waits were removed with exact equivalents of upstream's idioms (masked assig
 
 | Setting | `auto` on Linux | What it does |
 | --- | --- | --- |
-| `compute.cpu_allocator` | `tuned` | glibc's `mmap` threshold fixed at 32 MB and up to 512 MB of free heap kept for reuse (`mallopt` here, `GLIBC_TUNABLES` for children); torch's large tensors on transparent huge pages (`THP_MEM_ALLOC_ENABLE`). A forward allocates and frees tensors of a few to tens of megabytes per layer; with glibc's defaults each is mapped fresh and its pages zeroed. `system` keeps the defaults |
+| `compute.cpu_allocator` | `tuned` | glibc's `mmap` threshold fixed at 32 MB and up to 512 MB of free heap kept for reuse (`mallopt` here, `GLIBC_TUNABLES` for children); torch's large tensors on transparent huge pages (`THP_MEM_ALLOC_ENABLE`), except in training stages under `training.memory = lowest`, where AdamW stepping in RAM allocates gigabytes every step and each huge page stalls in the kernel's compaction (2.2× slower). A forward allocates and frees tensors of a few to tens of megabytes per layer; with glibc's defaults each is mapped fresh and its pages zeroed. `system` keeps the defaults |
 | `compute.cpu_threads` | `cores` | OpenMP threads bound to distinct physical cores (`OMP_PLACES=cores`, `OMP_PROC_BIND=close`). Left to the scheduler two threads sometimes share a core, and that process runs a third slower for its whole life. `off` leaves placement to the scheduler (better when other busy programs share the cores) |
 
 ## For engine authors

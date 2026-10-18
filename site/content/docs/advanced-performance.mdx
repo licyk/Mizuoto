@@ -143,5 +143,5 @@ Mizuoto 像 ComfyUI 一样管理显存。一个请求的每一步只放上它需
 
 | 设置 | 默认值 | 说明 |
 | --- | --- | --- |
-| `compute.cpu_allocator` | `auto` | CPU 内存分配：`tuned`（Linux 上 `auto` 即此）复用大块内存并把大张量放在大页上，CPU 上快 10–20%，结果完全相同；`system` 保持 C 库默认；下次启动时生效 |
+| `compute.cpu_allocator` | `auto` | CPU 内存分配：`tuned`（Linux 上 `auto` 即此）复用大块内存并把大张量放在大页上（`training.memory = lowest` 的训练除外），CPU 上快 10–20%，结果完全相同；`system` 保持 C 库默认；下次启动时生效 |
 | `compute.cpu_threads` | `auto` | `cores`（Linux 上 `auto` 即此）把 torch 的 CPU 线程绑定到不同的物理核心；`off` 交给系统调度（有其他繁忙程序共用 CPU 时更好）；下次启动时生效 |
