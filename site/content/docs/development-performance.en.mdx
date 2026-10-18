@@ -258,10 +258,10 @@ Peak MB is the request's peak allocation, every model loaded in the process incl
 
 **VoxCPM's first request.** Snake is a TorchScript function, as upstream's is. On CUDA, TorchScript's profiling executor runs a function's first call for a shape as separate operations (bit-identical to eager code and to the CPU), then runs a fused kernel that differs by up to 4.8·10⁻⁷. A shape it has not seen falls back to the unfused operations until it is profiled. So which calls are fused depends on what the process has already decoded, and a warm-up at load cannot make every request repeat. With the fuser off (an experiment; native code never sets it) the first request agrees with the later ones. The fuser also compiles its kernels on the default device: a process working on `cuda:1` opens a 256 MB context on `cuda:0` (seen in VoxCPM's and GPT-SoVITS's training, whose WaveNet gate is scripted too). The CPU is unaffected (no fusion there).
 
-**Where the time goes** (one extra run under torch's profiler, per phase: the share of wall time the device is busy):
+**Where the time goes** (one extra run under torch's profiler, per phase: the device's busy time against the phase's warm time without the profiler, which slows the host's side):
 
-- Bound by the device's work (83–96 % busy): F5-TTS's DiT, IndexTTS 2's s2mel and BigVGAN, CosyVoice 3's flow, Fish Speech's and Qwen3-TTS 1.7B's language models, VoxCPM's.
-- Bound by launches: GPT-SoVITS's GPT (23–28 %), CosyVoice 2's language model (43 %), IndexTTS 1.5's GPT (49 %), OmniVoice's language model (57 %, no CUDA graphs).
+- Bound by the device's work (about 90 % busy or more): F5-TTS's DiT, IndexTTS's s2mel, BigVGAN and 1.5's GPT, CosyVoice 3's flow, Fish Speech's, Qwen3-TTS 1.7B's, VoxCPM's and OmniVoice's language models. (Capturing OmniVoice's step forward as a CUDA graph, tried in G2, gave 2 %.)
+- Bound by launches: GPT-SoVITS's GPT (about 56 %) and CosyVoice 2's language model (about 69 %).
 - Host waits: about one per generated token in every autoregressive decoder (GPT-SoVITS v2 157 for 157 tokens, Fish Speech 92 for about 87 frames, Qwen3-TTS 82 for about 73 frames), as designed.
 
 **Working memory** against each phase's estimate (the estimate must be at or above what the phase uses): language models use 2–17 % of their estimates (Qwen3-TTS's talker 28 MB of 328, Fish Speech's 128 of 733). Two decoders use more than estimated: IndexTTS 1.5's BigVGAN 326 MB against 279, VoxCPM 1.5's VAE 278 MB against 183; VoxCPM 2's VAE is close (190 against 203). The OOM retry covers these on a tight GPU; the estimates are to be raised.
@@ -358,6 +358,47 @@ The rotary tables, IndexTTS's in-place GELU and Fish Speech's Snake give their r
 | Fish Speech S2 Pro LoRA | 14,105 / 9,978 | 14,105 / 9,978 | 14,105 / 9,978 | its export does not repeat |
 
 Most estimates are under the peak, some far under (GPT-SoVITS 4×), so the warning before a run says nothing when it should: they need calibrating. `lowest` halves Qwen3-TTS's peak but its host optimizer makes the run 15× slower (152 s before the first step, 6.2 s a step against 0.2 s).
+
+## GPU optimisation (G2)
+
+Measured on the free GPUs (2026-10-18) against the exact path of the code after G1 (`aeeba79`, frozen), the G0 set with three runs per case.
+
+**Done, exact.**
+
+- **Prefetch only where it pays** ([memory](/docs/development-memory)): `sequence` handles (autoregressive models; GPT-SoVITS's T2S is one now too) neither prefetch nor reserve room for copies in flight. Partly loaded (G1's caps), interleaved runs on a quiet GPU: Qwen3-TTS base-clone-en 24.6 → 16.2 s, VoxCPM v2-clone-en 29.0 → 13.6 s, CosyVoice v2-clone-en 10.1 → 7.4 s, each equal to no side streams, while F5-TTS and OmniVoice keep their prefetch. The audio is the whole model's.
+- **CosyVoice's flow U-Net under `compute.compile`** recompiled at every request (its per-level attention mask was cached by the mask's identity, which torch.compile guards on): warm requests took 12.8 s instead of 1.0 s. Keyed by the U-Net's level now; compiled, 0.97 s; eager, the same audio as before.
+
+**`compute.compile`** (opt-in, default inductor mode), warm request and first-request cost against eager:
+
+| Engine | Warm | Compile cost | Audio |
+| --- | --- | --- | --- |
+| F5-TTS | ×1.34 | +63 s | 11 dB SNR |
+| GPT-SoVITS v4 | ×1.14 | +69 s | 20 dB |
+| IndexTTS 1.5 / 2, CosyVoice 2 / 3 | ×1.03–1.06 | +55–134 s | 38–53 dB |
+| VoxCPM | ×0.41–0.64 | +20–47 s | its CUDA graphs are off while compiling |
+| Qwen3-TTS, Fish Speech, GPT-SoVITS v2, OmniVoice | — | — | nothing compiled |
+
+**`compute.fast`** (opt-in), against the exact path:
+
+| Switch | Gains | Losses |
+| --- | --- | --- |
+| `sdpa_reduced_precision` | VoxCPM ×1.20–1.28 (its whole-cache attention) | none; every other engine identical |
+| `fp16_accumulation` | F5-TTS ×1.11, IndexTTS 1.5 ×1.21 | GPT-SoVITS ×0.6 |
+| `tf32` | Qwen3-TTS base ×1.13 | GPT-SoVITS ×0.67–0.75 (with identical audio) |
+| `cudnn_benchmark` | none measurable | changes the vocoders' bits |
+| all four | ×1.1–1.3 for VoxCPM, F5-TTS, IndexTTS 1.5, Fish Speech, CosyVoice 3, GPT-SoVITS v4 | |
+
+**Several requests at once** (8 different texts submitted together, no seed): micro-batching (`tts.micro_batch`) runs Qwen3-TTS's 2.6× faster (6.34 → 2.42 s, median latency 3.97 → 2.39 s); for OmniVoice it gains 10 % and doubles the median latency; for GPT-SoVITS it gains 27 %, and two jobs at once without batching did better still (5.32 → 4.00 s: the text front ends overlap the other job's synthesis). `compute.gpu_jobs = 2` alone gains nothing for one engine: one engine on one device runs one call at a time.
+
+**Tried, not kept.**
+
+- **Fused AdamW** for training: 1.5× faster per optimizer step (0.7 B float32 parameters: 69 → 47 ms), but the full fine-tunes' steps barely move (CosyVoice 2 `llm` 0.121 → 0.112 s, VoxCPM `full` 0.311 → 0.296 s, Qwen3-TTS `speaker` none) and the results change: not offered. On CUDA every trainer already gets torch's multi-tensor (`foreach`) Adam by default, as upstream does.
+- **OmniVoice's step forward as a CUDA graph**: identical, 2 % faster. Outside the profiler its language model keeps the GPU about 90 % busy, so there is little launch time to save.
+- **Loading straight to the device**: a load takes 1.6–4.8 s with the page cache warm, of which 0.5–1.7 s is copying tensors on the host, and the first model in a process also pays about 2 s of imports (torch, inflect); loading to the device would drop the host copy that makes offloading free.
+- **Classifier-free guidance in one batch**: already so in F5-TTS, CosyVoice, IndexTTS's s2mel, OmniVoice and VoxCPM (as upstream); GPT-SoVITS v3–v5's CFM calls its estimator twice, and batching it would change the bits.
+- **IndexTTS's beam reorder fused with the cache concatenation**: about 4 % of its GPT's time on the CPU, less on the GPU, where the reorder sits between graphs.
+
+**Training's `low` preset** (gradient checkpointing) against the plan's +35 % per step: F5-TTS +6 %, VoxCPM +51 %, Qwen3-TTS +80 %, OmniVoice +104 % (G0's runs).
 
 ## `torch.compile` on the CPU
 

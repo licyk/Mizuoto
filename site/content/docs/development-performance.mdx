@@ -258,10 +258,10 @@ v4 收益最小：它的 flow 和声码器占主导，而且在拥挤的 GPU 上
 
 **VoxCPM 的第一个请求。** Snake 是 TorchScript 函数，与上游一样。在 CUDA 上，TorchScript 的 profiling executor 对某个形状的第一次调用按单独的运算执行（与即时执行的代码和 CPU 逐位相同），之后改用融合内核，结果最多相差 4.8·10⁻⁷。没见过的形状会退回未融合的运算，直到它被分析过。因此哪些调用被融合取决于进程之前解码过什么，在加载时预热也不能让每个请求都重复。关闭融合器后（仅为实验；原生代码从不设置它），第一个请求与之后的请求一致。融合器还在默认设备上编译内核：在 `cuda:1` 上工作的进程会在 `cuda:0` 上打开一个 256 MB 的上下文（在 VoxCPM 和 GPT-SoVITS 的训练中都观察到，后者的 WaveNet 门控同样是 TorchScript 函数）。CPU 不受影响（那里不做融合）。
 
-**时间花在哪里**（在 torch 的 profiler 下多跑一次，按阶段统计设备忙碌时间占墙钟时间的比例）：
+**时间花在哪里**（在 torch 的 profiler 下多跑一次，按阶段统计设备忙碌时间，对比不开 profiler 时该阶段的预热时间；profiler 会拖慢主机一侧）：
 
-- 受设备计算量限制（忙碌 83–96 %）：F5-TTS 的 DiT、IndexTTS 2 的 s2mel 和 BigVGAN、CosyVoice 3 的 flow、Fish Speech 和 Qwen3-TTS 1.7B 的语言模型、VoxCPM 的语言模型。
-- 受内核发出限制：GPT-SoVITS 的 GPT（23–28 %）、CosyVoice 2 的语言模型（43 %）、IndexTTS 1.5 的 GPT（49 %）、OmniVoice 的语言模型（57 %，没有 CUDA Graph）。
+- 受设备计算量限制（忙碌约 90 % 或更高）：F5-TTS 的 DiT、IndexTTS 的 s2mel、BigVGAN 和 1.5 的 GPT、CosyVoice 3 的 flow、Fish Speech、Qwen3-TTS 1.7B、VoxCPM 和 OmniVoice 的语言模型。（G2 中尝试把 OmniVoice 每步的前向捕获为 CUDA Graph，只快了 2 %。）
+- 受内核发出限制：GPT-SoVITS 的 GPT（约 56 %）和 CosyVoice 2 的语言模型（约 69 %）。
 - 主机等待：每个自回归解码器大约每生成一个 token 等待一次（GPT-SoVITS v2 157 个 token 等待 157 次，Fish Speech 约 87 帧等待 92 次，Qwen3-TTS 约 73 帧等待 82 次），与设计一致。
 
 **工作内存**与各阶段的估计值比较（估计值必须不小于阶段实际用量）：语言模型只用到估计值的 2–17 %（Qwen3-TTS 的 talker 用 28 MB，估计 328 MB；Fish Speech 用 128 MB，估计 733 MB）。两个解码器用量超过估计：IndexTTS 1.5 的 BigVGAN 用 326 MB，估计 279 MB；VoxCPM 1.5 的 VAE 用 278 MB，估计 183 MB；VoxCPM 2 的 VAE 接近（190 MB 对 203 MB）。在显存紧张的 GPU 上由 OOM 重试兜底；这些估计值需要调高。
@@ -358,6 +358,47 @@ v4 收益最小：它的 flow 和声码器占主导，而且在拥挤的 GPU 上
 | Fish Speech S2 Pro LoRA | 14,105 / 9,978 | 14,105 / 9,978 | 14,105 / 9,978 | 其导出不能重复 |
 
 大多数估计值低于峰值，有的低很多（GPT-SoVITS 低 4 倍），所以运行前的警告在该提醒时没有提醒：需要校准。`lowest` 使 Qwen3-TTS 的峰值减半，但其主机端优化器使运行慢 15 倍（第一步之前 152 秒，每步 6.2 秒，原为 0.2 秒）。
+
+## GPU 优化（G2）
+
+在空闲 GPU 上测量（2026-10-18），对比 G1 之后代码（`aeeba79`，冻结）的精确路径，G0 用例集每个用例运行三次。
+
+**已完成，结果不变。**
+
+- **只在有用的地方预取**（[显存](/docs/development-memory)）：`sequence` 组件（自回归模型；GPT-SoVITS 的 T2S 现在也是）既不预取，也不为传输中的副本留空间。部分加载（G1 的上限）时，在空闲 GPU 上交错运行：Qwen3-TTS base-clone-en 24.6 → 16.2 秒，VoxCPM v2-clone-en 29.0 → 13.6 秒，CosyVoice v2-clone-en 10.1 → 7.4 秒，都与没有副流时相同；F5-TTS 和 OmniVoice 保留预取。音频与整体加载时相同。
+- **`compute.compile` 下 CosyVoice 的 flow U-Net** 每个请求都重新编译（每一层的注意力掩码以掩码对象的身份为键缓存，而 torch.compile 会对此设置守卫）：预热请求要 12.8 秒而不是 1.0 秒。现在以 U-Net 的层级为键；编译后 0.97 秒；即时执行的音频与之前相同。
+
+**`compute.compile`**（主动开启，inductor 默认模式），预热请求和首次请求的代价，对比即时执行：
+
+| 引擎 | 预热 | 编译代价 | 音频 |
+| --- | --- | --- | --- |
+| F5-TTS | ×1.34 | +63 秒 | SNR 11 dB |
+| GPT-SoVITS v4 | ×1.14 | +69 秒 | 20 dB |
+| IndexTTS 1.5 / 2、CosyVoice 2 / 3 | ×1.03–1.06 | +55–134 秒 | 38–53 dB |
+| VoxCPM | ×0.41–0.64 | +20–47 秒 | 编译时其 CUDA Graph 关闭 |
+| Qwen3-TTS、Fish Speech、GPT-SoVITS v2、OmniVoice | — | — | 没有编译任何模块 |
+
+**`compute.fast`**（主动开启），对比精确路径：
+
+| 开关 | 收益 | 损失 |
+| --- | --- | --- |
+| `sdpa_reduced_precision` | VoxCPM ×1.20–1.28（其整个缓存上的注意力） | 无；其他引擎都完全相同 |
+| `fp16_accumulation` | F5-TTS ×1.11，IndexTTS 1.5 ×1.21 | GPT-SoVITS ×0.6 |
+| `tf32` | Qwen3-TTS base ×1.13 | GPT-SoVITS ×0.67–0.75（音频相同） |
+| `cudnn_benchmark` | 测不出 | 改变声码器的结果位 |
+| 四个一起 | VoxCPM、F5-TTS、IndexTTS 1.5、Fish Speech、CosyVoice 3、GPT-SoVITS v4 ×1.1–1.3 | |
+
+**同时处理多个请求**（同时提交 8 段不同文本，不带种子）：微批处理（`tts.micro_batch`）使 Qwen3-TTS 快 2.6 倍（6.34 → 2.42 秒，中位延迟 3.97 → 2.39 秒）；对 OmniVoice 只快 10 %，中位延迟翻倍；对 GPT-SoVITS 快 27 %，而不批处理、两个任务同时运行更好（5.32 → 4.00 秒：文本前端与另一个任务的合成重叠）。单独设置 `compute.gpu_jobs = 2` 对单个引擎没有收益：一个引擎在一个设备上一次只运行一次调用。
+
+**尝试过但没有保留。**
+
+- **训练中融合的 AdamW**：每步优化快 1.5 倍（0.7 B 个 float32 参数：69 → 47 毫秒），但全量微调的每步时间几乎不变（CosyVoice 2 `llm` 0.121 → 0.112 秒，VoxCPM `full` 0.311 → 0.296 秒，Qwen3-TTS `speaker` 没有变化），且结果会改变：不提供。在 CUDA 上每个训练器默认已经使用 torch 的多张量（`foreach`）Adam，与上游一样。
+- **把 OmniVoice 每步的前向捕获为 CUDA Graph**：结果相同，快 2 %。不开 profiler 时它的语言模型使 GPU 约 90 % 忙碌，可节省的内核发出时间很少。
+- **直接加载到设备**：页缓存已热时一次加载用时 1.6–4.8 秒，其中 0.5–1.7 秒是在主机上复制张量，进程中的第一个模型还要付出约 2 秒的导入时间（torch、inflect）；直接加载到设备会失去使卸载零开销的主机副本。
+- **无分类器引导合成一批**：F5-TTS、CosyVoice、IndexTTS 的 s2mel、OmniVoice 和 VoxCPM 本来就是这样（与上游一样）；GPT-SoVITS v3–v5 的 CFM 调用两次估计器，合成一批会改变结果位。
+- **IndexTTS 的 beam 重排与缓存拼接合并**：在 CPU 上约占 GPT 时间的 4 %，在 GPU 上更少，因为重排位于各个 CUDA Graph 之间。
+
+**训练的 `low` 预设**（梯度检查点）对比方案的每步 +35 %：F5-TTS +6 %，VoxCPM +51 %，Qwen3-TTS +80 %，OmniVoice +104 %（G0 的运行）。
 
 ## 在 CPU 上的 `torch.compile`
 
