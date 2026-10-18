@@ -83,7 +83,7 @@ out = accel.attention(q, k, v, site=SITE, mask=mask, causal=False, scale=None,
 | 后端 | 来源 | 设备 | 精度 | 掩码 | 反向传播 |
 | --- | --- | --- | --- | --- | --- |
 | `sdpa` | `F.scaled_dot_product_attention` | 全部 | 全部 | 布尔、加性 | 有，支持 dropout |
-| `math` | SDPA 的 math 内核（aten 算子） | 全部 | 全部 | 布尔、加性 | 有，支持 dropout |
+| `math` | SDPA 的 math 内核（aten 算子；布尔掩码先变成加性掩码，与 SDPA 的做法相同） | 全部 | 全部 | 布尔、加性 | 有，支持 dropout |
 | `sdpa_flash` | `aten._scaled_dot_product_flash_attention` | CUDA（sm ≥ 8.0）、ROCm | fp16、bf16 | 仅因果 | 有 |
 | `sdpa_efficient` | `aten._scaled_dot_product_efficient_attention` | CUDA、ROCm | fp16、bf16、fp32 | 转为加性偏置 | 有 |
 | `sdpa_cudnn` | `aten._scaled_dot_product_cudnn_attention` | CUDA（sm ≥ 8.0） | fp16、bf16 | 转为加性偏置 | 有 |

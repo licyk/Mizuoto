@@ -83,7 +83,7 @@ The attentions that add relative positions inside the scores, or need the probab
 | Backend | Source | Devices | dtypes | Masks | Backward |
 | --- | --- | --- | --- | --- | --- |
 | `sdpa` | `F.scaled_dot_product_attention` | all | all | bool, additive | yes, with dropout |
-| `math` | SDPA's math kernel (aten op) | all | all | bool, additive | yes, with dropout |
+| `math` | SDPA's math kernel (aten op; a bool mask made additive first, as SDPA does) | all | all | bool, additive | yes, with dropout |
 | `sdpa_flash` | `aten._scaled_dot_product_flash_attention` | CUDA (sm ≥ 8.0), ROCm | fp16, bf16 | causal only | yes |
 | `sdpa_efficient` | `aten._scaled_dot_product_efficient_attention` | CUDA, ROCm | fp16, bf16, fp32 | as an additive bias | yes |
 | `sdpa_cudnn` | `aten._scaled_dot_product_cudnn_attention` | CUDA (sm ≥ 8.0) | fp16, bf16 | as an additive bias | yes |

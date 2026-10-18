@@ -30,7 +30,7 @@ Fish Audio S2 Pro（[fishaudio/fish-speech](https://github.com/fishaudio/fish-sp
 
 - **提示**是上游的对话，每个文本部分单独分词；每帧的主 token 是 `semantic_begin_id + code`。
 - **采样**按上游的顺序从请求的生成器抽样：主 token 抽两次（先用请求的温度和 top-p，再用 1.0 和 0.9 做重复感知采样），然后是快 transformer 的九次抽样。一次抽样就是 `argmax(probs / -log(u))`。top-k 固定为 30，与上游相同。
-- **数值**：Fish 的 RMSNorm 在 float32 中计算；RoPE 作用于相邻元素对，频率表舍入到 bfloat16；预填充用带布尔因果掩码的 SDPA，解码步骤用 SDPA 的 math 内核（直接调用，不改进程级设置）；快 transformer 用手写的 softmax。权重归一化保留检查点的两种格式，并在每次前向时重新计算，与上游相同。
+- **数值**：Fish 的 RMSNorm 在 float32 中计算；RoPE 作用于相邻元素对，频率表舍入到 bfloat16；预填充用带布尔因果掩码的 SDPA，解码步骤用 SDPA 的 math 内核（直接调用，不改进程级设置；布尔掩码先变成加性掩码，与 `F.scaled_dot_product_attention` 的做法相同：直接给内核布尔掩码时，它会把掩码当作数值相加；在 0.2.6 之前每一步的分数都被加了 1，CPU 上编码相同但数值位不同，GPU 上 bfloat16 下则是另一次生成）；快 transformer 用手写的 softmax。权重归一化保留检查点的两种格式，并在每次前向时重新计算，与上游相同。
 - **参考音频**用 torchaudio 的内核重采样到 44.1 kHz。
 - **WAV 输出。** `codec_decode` 用 `nn.dsp.wav.write_wav` 写 WAV，与 `soundfile.write` 逐字节相同：libsndfile 1.2 存储裁剪后的 `lrint(x × 2³¹) >> 16`，也就是 `floor(x × 32768)`，只有略低于一个台阶的值例外。`codec_encode` 只读 WAV。
 

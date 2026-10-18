@@ -215,3 +215,21 @@ def test_the_fast_chain_skips_what_this_machine_lacks():
     report = run.report()
     assert report["used"] == {"sdpa": 1}
     assert report["fallbacks"]["flash→sdpa"] == {"CUDA and ROCm only": 1}
+
+
+def test_the_math_kernel_masks_with_a_bool_mask_as_sdpa_does():
+    """``math_kernel`` (the ``math`` backend, Fish Speech's step reference) gives what SDPA's math kernel gives through
+    ``F.scaled_dot_product_attention``, bit for bit: called directly, the aten kernel would add a bool mask as numbers."""
+    import torch.nn.functional as F
+    from torch.nn.attention import SDPBackend, sdpa_kernel
+
+    from mizuoto.runtime.accel.dispatch import math_kernel
+
+    g = torch.Generator().manual_seed(0)
+    q, k, v = (torch.randn(1, 4, n, 32, generator=g) for n in (3, 9, 9))
+    partial = torch.ones(1, 1, 3, 9, dtype=torch.bool)
+    partial[..., 6:] = False
+    for mask in (partial, torch.ones(1, 1, 3, 9, dtype=torch.bool)):
+        with sdpa_kernel(SDPBackend.MATH):
+            want = F.scaled_dot_product_attention(q, k, v, attn_mask=mask)
+        assert torch.equal(math_kernel(q, k, v, mask, False, None, False, 0.0), want)

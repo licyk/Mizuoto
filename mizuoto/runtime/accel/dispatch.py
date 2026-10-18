@@ -92,7 +92,11 @@ def sdpa(q: torch.Tensor, k: torch.Tensor, v: torch.Tensor, mask: torch.Tensor |
 def math_kernel(
     q: torch.Tensor, k: torch.Tensor, v: torch.Tensor, mask: torch.Tensor | None, causal: bool, scale: float | None, enable_gqa: bool, dropout_p: float
 ) -> torch.Tensor:
-    """SDPA's math kernel, called directly (``sdpa_kernel(MATH)`` would switch it for the whole process)."""
+    """SDPA's math kernel, called directly (``sdpa_kernel(MATH)`` would switch it for the whole process). A bool mask is
+    made additive first, as ``F.scaled_dot_product_attention`` does before it reaches the kernel: given a bool mask, the
+    kernel adds it as numbers (1 where true) and masks nothing."""
+    if mask is not None and mask.dtype == torch.bool:
+        mask = torch.zeros(mask.shape, dtype=q.dtype, device=mask.device).masked_fill_(mask.logical_not(), float("-inf"))
     if enable_gqa:
         return torch.ops.aten._scaled_dot_product_attention_math(q, k, v, attn_mask=mask, dropout_p=dropout_p, is_causal=causal, scale=scale, enable_gqa=True)[0]
     return torch.ops.aten._scaled_dot_product_attention_math(q, k, v, attn_mask=mask, dropout_p=dropout_p, is_causal=causal, scale=scale)[0]
