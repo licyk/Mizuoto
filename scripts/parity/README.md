@@ -144,3 +144,27 @@ Run each round from a worktree frozen at the code it measures (`PYTHONPATH=<work
 edit in the checkout during a run would mix two versions. The machine's other work slows single runs by up to 10 %;
 `compare` takes each case's fastest warm run, and a change of a few percent needs runs interleaved with the code it is
 compared with.
+
+## Statistical tier (T4)
+
+On a GPU the two implementations cannot be compared sample for sample (their kernels differ, so the first different
+logit sends a draw elsewhere), so the statistical tier compares what they make over a corpus:
+`corpus/t4.json`'s sets (a model and a voice mode each), every voice reading its 20 texts (10 English, 10 Chinese) with
+seeds 1–3, 180 clips a set and side. `quality.py`'s docstring says what is measured and the thresholds; the site's
+testing page records the results.
+
+```bash
+W=~/code_workspace/experiment/kodama-refactor V=~/code_workspace/experiment/voxcpm M=$PWD
+cd /tmp   # the reference host must import kodama, not this checkout's mizuoto from the working directory
+# native (every set) and the references: 0.1's host for the v1 sets (CosyVoice from $W/data-t28), upstream for VoxCPM
+MIZUOTO_PARITY_DATA=~/.local/share/kodama $M/.venv/bin/python $M/scripts/parity/quality.py run --impl native --device cuda:0 --only qwen3tts-base-clone
+env -u PYTHONPATH MIZUOTO_PARITY_DATA=~/.local/share/kodama $W/reference-host/bin/python $M/scripts/parity/quality.py run --impl reference --device cuda:1 --only qwen3tts-base-clone
+PYTHONPATH=$M MIZUOTO_PARITY_DATA=$V/data $V/ref-env/bin/python $M/scripts/parity/quality.py run --impl upstream --device cuda:1 --only voxcpm2-clone
+# the judges (Whisper large-v3-turbo, CAM++, UTMOS22 strong, loudness, F0), then the verdict per set
+MIZUOTO_PARITY_DATA=~/.local/share/kodama $M/.venv/bin/python $M/scripts/parity/quality.py score --device cuda:0
+$M/.venv/bin/python $M/scripts/parity/quality.py compare --a reference --b native --report $W/reports/t4.md
+```
+
+`--texts 1 --seeds 1` makes a quick run (six clips a set). A run resumes where it stopped; `perf/t4/run.sh` in the
+experiment workspace runs one side set by set with a guard for the GPU's other workload; the guard cannot tell this
+machine's processes apart (nvidia-smi gives host PIDs), so score on a GPU nothing is generating on.

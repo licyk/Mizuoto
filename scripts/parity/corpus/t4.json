@@ -1,0 +1,51 @@
+{
+  "about": "T4, the statistical tier (scripts/parity/quality.py): every set's voices read every text, three seeds each. Texts have no digits, so the error rate does not depend on how the ASR writes numbers. reference: v1 = Mizuoto 0.1's engine workers (the reference host), upstream = the engine's upstream package (stack.py's UPSTREAM), none = no reference runs on a GPU.",
+  "texts": {
+    "en01": ["en", "The morning train was late again, so we shared a coffee on the cold platform and watched the fog lift."],
+    "en02": ["en", "Please remember to water the tomatoes before you leave, because the forecast says it will be hot all week."],
+    "en03": ["en", "She opened the old wooden box and found a bundle of letters tied with a faded blue ribbon."],
+    "en04": ["en", "Our neighbour plays the violin every evening, and the whole street seems to slow down to listen."],
+    "en05": ["en", "If the bridge is closed tomorrow, we will take the ferry across the river and walk the rest of the way."],
+    "en06": ["en", "The new exhibition explores how ancient sailors found their way by the stars without any modern instruments."],
+    "en07": ["en", "He laughed so hard at the joke that he nearly dropped his sandwich into the fountain."],
+    "en08": ["en", "Turn left at the bakery, continue past the library, and you will see the green door on your right."],
+    "en09": ["en", "A gentle breeze carried the smell of fresh bread through the narrow streets of the sleepy village."],
+    "en10": ["en", "Thank you for your patience; your call is important to us, and an agent will be with you shortly."],
+    "zh01": ["zh", "今天早上下了一场小雨，空气变得格外清新，路边的树叶闪着亮光。"],
+    "zh02": ["zh", "请在出门之前关好窗户，天气预报说下午可能会有大风。"],
+    "zh03": ["zh", "她打开那只旧木箱，发现里面整整齐齐地放着一叠泛黄的信。"],
+    "zh04": ["zh", "我们沿着河边慢慢地走，一边聊天，一边看远处的山。"],
+    "zh05": ["zh", "如果明天桥还在维修，我们就坐渡船过河，再步行去学校。"],
+    "zh06": ["zh", "这家小店的面条非常有名，每天中午门口都排着长长的队。"],
+    "zh07": ["zh", "博物馆的新展览介绍了古代航海家如何依靠星星辨别方向。"],
+    "zh08": ["zh", "他听完这个笑话，笑得差点把手里的茶洒了出来。"],
+    "zh09": ["zh", "走到面包店往左拐，经过图书馆，就能看到右手边的绿色大门。"],
+    "zh10": ["zh", "感谢您的耐心等待，您的来电对我们非常重要，客服人员马上为您服务。"]
+  },
+  "voices": {
+    "clone": {
+      "narrator": {"references": [{"ref": "en-narrator"}], "consent": "parity corpus clip (model-generated)"},
+      "vivian": {"references": [{"ref": "en-vivian"}], "consent": "parity corpus clip (model-generated)"},
+      "serena": {"references": [{"ref": "zh-serena"}], "consent": "parity corpus clip (model-generated)"}
+    }
+  },
+  "sets": {
+    "qwen3tts-base-clone": {"model": "qwen3tts/1.7b-base", "mode": "clone", "reference": "v1"},
+    "qwen3tts-cv-preset": {"model": "qwen3tts/1.7b-custom-voice", "mode": "preset", "reference": "v1", "voices": {"aiden": {"preset": "aiden"}, "ryan": {"preset": "ryan"}, "serena": {"preset": "serena"}}},
+    "qwen3tts-design": {"model": "qwen3tts/1.7b-voice-design", "mode": "design", "reference": "v1", "voices": {"calm-male": {"description": "A calm, warm male voice with a low pitch."}, "bright-female": {"description": "A bright, cheerful young female voice, speaking quickly."}, "old-narrator": {"description": "An elderly man telling a story slowly, with a slightly husky voice."}}},
+    "cosyvoice2-clone": {"model": "cosyvoice/cosyvoice2-0.5b", "mode": "clone", "reference": "v1", "reference_data": "data-t28"},
+    "cosyvoice3-clone": {"model": "cosyvoice/cosyvoice3-0.5b", "mode": "clone", "reference": "v1", "reference_data": "data-t28"},
+    "cosyvoice-sft-preset": {"model": "cosyvoice/cosyvoice-300m-sft", "mode": "preset", "reference": "v1", "reference_data": "data-t28", "voices": {"zh-female": {"preset": "中文女"}, "zh-male": {"preset": "中文男"}, "en-male": {"preset": "英文男"}}},
+    "f5tts-clone": {"model": "f5tts/v1-base", "mode": "clone", "reference": "v1"},
+    "gptsovits-v2pro-clone": {"model": "gptsovits/v2pro-base", "mode": "clone", "reference": "v1"},
+    "gptsovits-v4-clone": {"model": "gptsovits/v4-base", "mode": "clone", "reference": "v1"},
+    "indextts-v15-clone": {"model": "indextts/v1.5", "mode": "clone", "reference": "v1"},
+    "indextts-v2-clone": {"model": "indextts/v2", "mode": "clone", "reference": "v1"},
+    "omnivoice-clone": {"model": "omnivoice/omnivoice", "mode": "clone", "reference": "v1"},
+    "omnivoice-design": {"model": "omnivoice/omnivoice", "mode": "design", "reference": "v1", "voices": {"low-female": {"attributes": {"gender": "female", "pitch": "low pitch"}}, "young-male": {"attributes": {"gender": "male", "age": "young adult"}}, "elderly-british": {"attributes": {"gender": "male", "age": "elderly", "accent": "british accent"}}}},
+    "voxcpm2-clone": {"model": "voxcpm/2", "mode": "clone", "reference": "upstream"},
+    "voxcpm2-design": {"model": "voxcpm/2", "mode": "design", "reference": "upstream", "voices": {"gentle-female": {"description": "A young woman, gentle and sweet voice"}, "deep-male": {"description": "A middle-aged man with a deep, steady voice"}, "lively-girl": {"description": "A lively girl who speaks fast and happily"}}},
+    "voxcpm15-clone": {"model": "voxcpm/1.5", "mode": "clone", "reference": "upstream"},
+    "fishspeech-clone": {"model": "fishspeech/s2-pro", "mode": "clone", "reference": "none"}
+  }
+}
