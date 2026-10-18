@@ -358,6 +358,11 @@ def _one(
     params = output.get("params") or {}
     if params.get("attention"):
         run["attention"] = params["attention"]  # the acceleration policy's report
+    for key in ("oom_retries", "fallbacks"):  # phases run again after running out of device memory
+        if params.get(key):
+            run[key] = params[key]
+    if meta.get("memory"):
+        run["placement"] = meta["memory"]  # loaded, streamed and partial placements, as the output reports them
     phases = dict(sorted(timer.seconds.items(), key=lambda kv: -kv[1]))
     run["phases"] = {k: round(v, 3) for k, v in phases.items()}
     if run.get("total") is not None:

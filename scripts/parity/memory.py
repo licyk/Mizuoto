@@ -15,7 +15,7 @@ temporary data folder over the real models. The child records:
   reports them).
 
 ``--vram-limit-mb N`` plays a smaller GPU: the child caps torch's allocator (``set_per_process_memory_fraction``, a
-process-wide call allowed here only) and sets ``MIZUOTO_VRAM_LIMIT_MB`` so the runtime plans for the cap. Before any GPU
+process-wide call allowed here only) and sets ``compute.vram_limit_mb`` so the runtime plans for the cap. Before any GPU
 run, check that the device has that much free (the GPUs here may belong to another workload).
 
 Results go to ``<workspace>/memory/<name>/<engine>-<case>.json``; ``report`` (also run at the end of ``run``) writes a Markdown
@@ -63,10 +63,12 @@ def child(case: dict[str, Any], device: str, settings: dict[str, Any], limit_mb:
     tmp = Path(tempfile.mkdtemp(prefix="parity-memory-"))
     engine = case["request"]["model"].split("/", 1)[0]
     record: dict[str, Any] = {"case": f"{engine}/{case['id']}", "device": device, "vram_limit_mb": limit_mb, "settings": settings}
+    if limit_mb:  # the services read no environment here (``build``): the runtime learns the cap as a setting
+        settings = {**settings, "compute": {**settings.get("compute", {}), "vram_limit_mb": limit_mb}}
     s = build(device, tmp, "native", settings)
     try:
         rss_before = _rss_mb()
-        if torch is not None:
+        if torch is not None and torch.cuda.is_initialized():  # else nothing is allocated yet: the peak starts at zero
             torch.cuda.reset_peak_memory_stats(device)
         started = time.perf_counter()
         path, first = run_case(s, case, table)
@@ -129,8 +131,6 @@ def cmd_run(args: argparse.Namespace) -> int:
     for case in cases:
         print(f"[memory {name}] {case['id']} …", flush=True)
         env = dict(os.environ)
-        if args.vram_limit_mb:
-            env["MIZUOTO_VRAM_LIMIT_MB"] = str(args.vram_limit_mb)
         payload = json.dumps({"case": case, "device": args.device, "settings": parse_settings(args.setting or []), "limit": args.vram_limit_mb})
         proc = subprocess.run([sys.executable, str(HERE / "memory.py"), "_child"], input=payload, capture_output=True, text=True, env=env, cwd=HERE)
         engine = case["request"]["model"].split("/", 1)[0]

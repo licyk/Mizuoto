@@ -80,7 +80,7 @@ The warm request before the CPU rounds:
 | Change | Why it is exact |
 | --- | --- |
 | `compute.cpu_allocator` and `compute.cpu_threads` ([Acceleration](/docs/development-acceleration#cpu-settings)) | where memory comes from and where threads run, not what is computed; the same thread count splits the work the same way |
-| VoxCPM attends over the cache up to the next multiple of 256 past the current length, mask kept, instead of all 8192 positions | masked positions add exact zeros, and SDPA gives the same bits for any cut at a multiple of 64 (every length up to 3100, bf16 and fp32, batch 1 and 2) |
+| VoxCPM attends over the cache up to the next multiple of 256 past the current length, mask kept, instead of all 8192 positions (on the CPU only, since G1: see [GPU checks](#gpu-checks-of-the-cpu-rounds-g1)) | masked positions add exact zeros, and the CPU's SDPA gives the same bits for any cut at a multiple of 64 (every length up to 3100, bf16 and fp32, batch 1 and 2) |
 | DiT rotary embedding: cos and sin once per forward, no multiplication by 1, no concatenation of an empty tail (F5-TTS, CosyVoice 3, GPT-SoVITS v4/v5) | the same values |
 | CosyVoice's flow U-Net builds its per-head mask once per forward, not in each of its 56 blocks | the same tensor |
 | IndexTTS: GPT-2's GELU in place; a beam reorder that keeps every row skipped | the same operations in the same order |
@@ -287,6 +287,77 @@ Peak MB is the request's peak allocation, every model loaded in the process incl
 | Fish Speech S2 Pro LoRA, 2 steps | 59.6 → 48.7 | 0.57 → 0.57 | 9,978 → 9,978 | does not repeat on the GPU |
 
 Five trainers repeat run to run and give identical losses and weights under `low`. GPT-SoVITS's SoVITS stage repeats for its first seven steps and then drifts, run to run; with deterministic algorithms in its stages (an experiment) two runs are identical, so the drift comes from operations that have deterministic versions (atomics in backward passes). Fish Speech's losses repeat but its exported weights differ run to run; the cause is open. Peak MB is `memory/peak_mb`, the stage's peak allocation.
+
+## GPU checks of the CPU rounds (G1)
+
+The code and settings proven only on the CPU, checked on the free GPUs of the [GPU baseline](#gpu-baseline-g0) (2026-10-18).
+
+**Every change since before round 1, step by step.** The G0 set ran with the code of each step on one GPU (frozen worktrees, each with its own harness), and each step's audio was compared with the step before:
+
+| From → to | Identical on the GPU |
+| --- | --- |
+| before round 1 → round 1 (`8a021de`) | every engine but VoxCPM (its attention span: below) |
+| round 1 → round 2 (`60776a4`) | every engine but Fish Speech (its in-place Snake: below) |
+| round 2 → the attention dispatcher (`7600f61`) | all |
+| → the memory fixes (`d65c482`) | all |
+| → CUDA graphs for every engine (`0b70d0f`) | all (CosyVoice failed on `cuda:1`: below) |
+| → 0.2.5 (`4e6fe35`) | all; and on `cuda:1` identical to G0's `cuda:0` |
+
+Fixed, so the GPU's audio is again the code before's:
+
+- **VoxCPM's attention span.** On CUDA a step takes SDPA's math path, whose matrix-vector product and softmax split their sums by the key length: a cut at the next multiple of 256 (or 512 … 4096) differs from the whole 8192-position cache at most positions in bf16, fp16 and fp32. The span is now used on the CPU only (`minicpm.attend_span`); on a GPU a step attends over the whole cache, as upstream. Identical to the code before round 1 again, at a cost: warm requests 1.24 → 2.13 s (VoxCPM 2) and 0.68 → 0.96 s (1.5).
+- **Fish Speech's in-place Snake.** On a GPU the codec runs under bf16 autocast, which computes `pow` and `reciprocal` in float32; upstream's Snake therefore ends in float32 while the in-place form, which keeps its buffer's dtype, stayed in bf16 (up to 0.1 apart). The in-place form now runs only without autocast; identical to round 1 again, at the same speed. The unit test covers autocast.
+- **CosyVoice on `cuda:1`** faulted with an illegal memory access: its decoder-step graphs were captured and replayed while `cuda:0` was current, and a replay runs on the current device's stream. Captured and replayed under `torch.cuda.device(graphs.device)` now, as the other engines do ([Acceleration](/docs/development-acceleration#cuda-graphs-computecuda_graphs)).
+
+The rotary tables, IndexTTS's in-place GELU and Fish Speech's Snake give their reference's bits on CUDA in fp32, fp16 and bf16 (the exactness tests now run on CUDA when a GPU is visible); CosyVoice's U-Net mask is the same tensor made once. Fish Speech's GPU training replays upstream's initialisation on the CPU generator, as upstream builds its model on the CPU.
+
+**The memory plan's mechanisms on CUDA** (G0's set, each compared with G0's audio): every model loaded partly under `compute.vram_limit_mb` at about half its size, the rest streaming, with prefetch on 2, 1 and 0 side streams; out-of-memory errors injected into every phase, each phase run again with half its weights streamed and its generators put back; `compute.kv_cache = static`. All 56 runs identical.
+
+| Case (whole: warm s) | Partly loaded, 2 side streams | 1 | 0 |
+| --- | --- | --- | --- |
+| Qwen3-TTS base-clone-en (1.28) | 24.6 s, 171 GB streamed | 20.0 s | 18.6 s, 156 GB |
+| VoxCPM v2-clone-en (1.24) | 29.0 s, 325 GB | 13.9 s | 13.5 s, 124 GB |
+| CosyVoice v2-clone-en (1.40) | 10.1 s | 9.2 s | 7.4 s |
+| F5-TTS clone-en (0.92) | 2.17 s | 2.08 s | 2.67 s |
+| OmniVoice clone-en (0.84) | 2.39 s | 2.41 s | 3.15 s |
+
+- Host-to-device copies run at 13.3 GB/s pinned and 12.3 GB/s pageable: the cards sit in PCIe 4.0 slots at x8.
+- Prefetch helps the models run once per request (F5-TTS, OmniVoice: the slowdown is 0.8× the streamed bytes' transfer time, within the plan's 1.2×) and hurts the autoregressive ones, which also stream more with more side streams: the prefetch buffers come out of the room left for resident weights. Qwen3-TTS's talker: 1.8× the transfer time with 2 streams, 1.3× with none.
+- `compute.kv_cache = static` is identical on CUDA and no faster (Qwen3-TTS 1.28 → 1.30 s, CosyVoice 3 0.95 → 0.95 s), with the same peak: `dynamic` stays the default.
+
+**The plan's targets (§9)**, from `scripts/parity/memory.py` (one case per process; it now runs on a GPU: the cap reaches the runtime as `compute.vram_limit_mb`):
+
+| Case | Whole | 12 GB | 8 GB | 6 GB | 4 GB |
+| --- | --- | --- | --- | --- | --- |
+| Fish Speech clone-en | 8.3 s | 7.2 s | 32.2 s | 49.3 s | 71.2 s |
+| IndexTTS v2-clone-en | 5.7 s | 5.4 s | 5.5 s | 5.9 s | 34.3 s |
+| VoxCPM v2-clone-en | 5.9 s | 5.6 s | 5.7 s | 10.0 s | 22.6 s |
+| Qwen3-TTS base-clone-en | 5.1 s | 4.4 s | 4.1 s | 4.7 s | 15.2 s |
+| the other eight cases | 2.5–5.4 s | | | | at most +1 s |
+
+(first request in a fresh process, load included)
+
+- **Smallest card**: every model runs on a 4 GB card, Fish Speech S2 Pro included (the plan aimed at 8 GB). Once a 6 GB run of Fish Speech under the 0.2.5 code ran out of memory while both GPUs were busy; it did not happen again in two more runs.
+- **Offload with a host copy** takes 0.05–0.12 s, no transfer.
+- **Reload** reaches 5.7–8.3 GB/s, 43–62 % of the pinned bandwidth, short of the plan's 80 %: the host copies are pageable (`pinned_bytes` 0), copied tensor by tensor.
+
+**Settings on a GPU run.** `compute.cpu_allocator` and `compute.cpu_threads` change neither the warm time nor the load beyond the noise (two interleaved rounds, four engines). Of the CUDA allocators, `expandable` gives identical audio and weights with a little less memory reserved; `async` crashed every engine with CUDA graphs (illegal memory access after a capture): graphs are now not captured under it (`graphs.usable`), which runs, identical, without their speed (Fish Speech 3.1 → 7.3 s, Qwen3-TTS 1.3 → 2.0 s). Training stages now get the allocator in their environment whether or not the host has loaded a model.
+
+**Working memory on long texts** (about 30 s of speech, whole models): every language model stays well within its estimate (2–64 %), but the decoders go over, more as the text grows: VoxCPM 1.5's VAE 810 MB against 290 estimated, VoxCPM 2's 440 against 302, Fish Speech's codec 806 against 486, IndexTTS 1.5's BigVGAN 596 against 369, IndexTTS 2's 421 against 358. The calibration raises an estimate after a phase has measured more, and the out-of-memory retry covers the first time; the estimates are to be raised.
+
+**Training memory presets** on the GPU, the estimate (`MethodInfo.memory_mb`) against the measured peak, MB:
+
+| Fine-tune | `standard` | `low` | `lowest` | `lowest` identical to `standard` |
+| --- | --- | --- | --- | --- |
+| F5-TTS full | 7,576 / 8,821 | 5,863 / 7,395 | 3,295 / 5,374 | yes |
+| Qwen3-TTS 1.7B speaker | 17,088 / 18,281 | 15,861 / 18,274 | 8,493 / 9,132 | no (slightly), 294 s instead of 20 s |
+| OmniVoice LoRA | 4,158 / 7,301 | 3,379 / 2,971 | 3,379 / 2,766 | no (slightly) |
+| CosyVoice 2 llm | 7,134 / 10,570 | 6,643 / 9,691 | 6,643 / 9,691 | yes |
+| VoxCPM 0.5B LoRA | 4,967 / 4,343 | 2,616 / 2,747 | 1,216 / 2,747 | yes (the streamed base too) |
+| GPT-SoVITS v2Pro speaker | 921 / 3,881 | 921 / 3,881 | 921 / 3,881 | does not repeat on the GPU |
+| Fish Speech S2 Pro LoRA | 14,105 / 9,978 | 14,105 / 9,978 | 14,105 / 9,978 | its export does not repeat |
+
+Most estimates are under the peak, some far under (GPT-SoVITS 4×), so the warning before a run says nothing when it should: they need calibrating. `lowest` halves Qwen3-TTS's peak but its host optimizer makes the run 15× slower (152 s before the first step, 6.2 s a step against 0.2 s).
 
 ## `torch.compile` on the CPU
 

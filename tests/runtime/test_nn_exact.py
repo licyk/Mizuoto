@@ -23,8 +23,11 @@ def _upstream_rotary(t: torch.Tensor, freqs: torch.Tensor, scale: float = 1.0) -
     return torch.cat((t, t_unrotated), dim=-1).type(orig_dtype)
 
 
+@pytest.mark.parametrize("device", ["cpu", "cuda"])
 @pytest.mark.parametrize("dtype", [torch.float32, torch.float16, torch.bfloat16])
-def test_rotary_with_precomputed_tables_matches_the_original(dtype):
+def test_rotary_with_precomputed_tables_matches_the_original(dtype, device):
+    if device == "cuda" and not torch.cuda.is_available():
+        pytest.skip("no CUDA device")
     g = torch.Generator().manual_seed(0)
     rotary = RotaryEmbedding(64)
     cases = [
@@ -34,8 +37,8 @@ def test_rotary_with_precomputed_tables_matches_the_original(dtype):
         ((3, 2, 5, 64), 5),
     ]
     for shape, table in cases:
-        t = torch.randn(shape, generator=g).to(dtype)
-        freqs = rotary.forward_from_seq_len(table)
+        t = torch.randn(shape, generator=g).to(device, dtype)
+        freqs = rotary.forward_from_seq_len(table).to(device)
         expected = _upstream_rotary(t, freqs)
         assert torch.equal(apply_rotary(t, rope_tables(freqs)), expected), shape
         assert torch.equal(apply_rotary(t, freqs), expected), shape

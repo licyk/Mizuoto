@@ -115,7 +115,7 @@ On a free GPU (check `nvidia-smi --query-gpu=index,memory.used --format=csv` fir
 
 ```bash
 unset CUDA_VISIBLE_DEVICES
-# a smaller card played by a big one: the allocator capped, the runtime told (MIZUOTO_VRAM_LIMIT_MB)
+# a smaller card played by a big one: the allocator capped, the runtime told (compute.vram_limit_mb)
 python scripts/parity/memory.py run scripts/parity/cases/qwen3tts.jsonl --device cuda:0 --vram-limit-mb 4096 --name cuda-4g
 # streamed against whole on the GPU (E1): the same seeds, compute.vram_limit_mb forcing partial loads
 python scripts/parity/stack.py run scripts/parity/cases/qwen3tts.jsonl --impl native --device cuda:0 --name cuda-whole

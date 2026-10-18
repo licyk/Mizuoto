@@ -32,9 +32,12 @@ def test_engine_mirrors_its_manifest():
     check_devices_mirror("indextts")
 
 
-def test_gpt2s_in_place_gelu_matches_the_original():
+@pytest.mark.parametrize("device", ["cpu", "cuda"])
+def test_gpt2s_in_place_gelu_matches_the_original(device):
     torch = pytest.importorskip("torch")
     gpt = pytest.importorskip("mizuoto_indextts.gpt")
+    if device == "cuda" and not torch.cuda.is_available():
+        pytest.skip("no CUDA device")
 
     def upstream(x):
         return 0.5 * x * (1.0 + torch.tanh(math.sqrt(2.0 / math.pi) * (x + 0.044715 * torch.pow(x, 3.0))))
@@ -42,5 +45,5 @@ def test_gpt2s_in_place_gelu_matches_the_original():
     g = torch.Generator().manual_seed(0)
     for dtype in (torch.float32, torch.float16, torch.bfloat16):
         for shape in ((3, 1, 5120), (1, 50, 5120), (7,)):
-            x = (torch.randn(shape, generator=g) * 4).to(dtype)
+            x = (torch.randn(shape, generator=g) * 4).to(device, dtype)
             assert torch.equal(gpt.gelu_new(x), upstream(x)), (dtype, shape)
