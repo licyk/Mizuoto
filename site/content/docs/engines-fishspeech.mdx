@@ -39,6 +39,7 @@ Fish Audio S2 Pro（[fishaudio/fish-speech](https://github.com/fishaudio/fish-sp
 - **没有守护线程，也没有预分配 32 768 个位置的缓存。** 缓存通过拼接增长；经过 `repeat_interleave` 后，键和值就是上游构造的那些张量。注意力掩码按调用生成，而不是上游那 4 GiB 的掩码缓冲。
 - **不构建上游从不运行的编解码器模块。** 上游的编解码器为解码器第一个块构建了一个 transformer，却从不接上它（没有权重，从不运行）。`codec.pth` 里还有旧版上游保存的 RoPE 表和掩码，上游已不再加载，这里也忽略。
 - **接受但无效果**：`normalize` 和 `repetition_penalty` 在上游的推理路径中不起任何作用，所以这里也不起作用。
+- **在 GPU 上编码参考音频。** 上游在 GPU 上以 bf16 加载编解码器，而 `encode_reference` 传给它 float32 的音频，所以在 GPU 上克隆会失败（`Input type (float) and bias type (c10::BFloat16) should be the same`；已用 0.1 在 RTX 3090 上复现）。移植把参考音频转换为编解码器的精度；在 CPU 上（fp32）没有任何变化。
 
 ## 显存与速度
 

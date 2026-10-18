@@ -39,6 +39,7 @@ Shared: `text/tokenize/bpe.py`, `runtime/lm/cache.py`, `runtime/graphs.py`, `nn/
 - **No daemon thread and no 32 768-position preallocated cache.** The cache grows by concatenation; after `repeat_interleave` the keys and values are the tensors upstream builds. Attention masks are made per call instead of upstream's 4 GiB of mask buffers.
 - **A codec module upstream never runs is not built.** Upstream's codec builds a transformer for the decoder's first block but never attaches it (no weights, never run). `codec.pth` also holds RoPE tables and masks an older upstream saved, which upstream no longer loads; they are ignored.
 - **Accepted, with no effect**: `normalize` and `repetition_penalty` reach nothing in upstream's inference path, so they do nothing here either.
+- **References encode on a GPU.** Upstream loads the codec in bf16 on a GPU and `encode_reference` passes it float32 audio, so cloning there fails (`Input type (float) and bias type (c10::BFloat16) should be the same`; reproduced with 0.1 on an RTX 3090). The port casts the reference audio to the codec's precision; on the CPU, in fp32, nothing changes.
 
 ## Memory and speed
 

@@ -10,11 +10,13 @@ Speed work on the inference and training code follows one rule: **the results do
 
 | Tool | What it does |
 | --- | --- |
-| `scripts/parity/perf.py run <cases.jsonl>… --name NAME [--only ID] [--repeat N] [--device D] [--setting k=v] [--reference NAME] [--profile] [--torch-profile]` | Runs parity cases through the whole stack in one process, each `--repeat` times (3): the first loads the model and prepares the voice, the others are warm. Records the wall time, load, first chunk, engine total, real-time factor, and the time inside each phase (`ctx.use` / `ctx.run`, exclusive of nested phases, plus the time outside phases). Compares the audio sample for sample across the runs and with `--reference`: an earlier run of that name, else the case's parity fixture |
-| `perf.py compare --a NAME --b NAME [--report out.md]`, `perf.py show NAME` | The warm runs of two rounds side by side, the speed-up and the phases that changed most |
-| `scripts/parity/train_perf.py run <engine> --fixture F --name NAME [--reference NAME] [--profile]`, `compare` | A fine-tune with a parity fixture's recipe through the whole stack, every stage a child process as in use: each stage's time, the time per step, every metric and the SHA-256 of every weight file the export wrote, compared with an earlier run |
+| `scripts/parity/perf.py run <cases.jsonl>… --name NAME [--only ID] [--repeat N] [--device D] [--setting k=v] [--reference NAME] [--profile] [--torch-profile [--keep-trace]] [--deterministic]` | Runs parity cases through the whole stack in one process, each `--repeat` times (3): the first loads the model and prepares the voice, the others are warm. Records the wall time, load, first chunk, engine total, real-time factor, and the time inside each phase (`ctx.use` / `ctx.run`, exclusive of nested phases, plus the time outside phases). Compares the audio sample for sample across the runs and with `--reference`: an earlier run of that name, else the case's parity fixture |
+| `perf.py compare --a NAME --b NAME [--report out.md]`, `perf.py show NAME` | The warm runs of two rounds side by side, the speed-up, the time to first audio of streamed cases and the phases that changed most |
+| `scripts/parity/train_perf.py run <engine> --fixture F --name NAME [--device D] [--setting k=v] [--reference NAME] [--profile]`, `compare` | A fine-tune with a parity fixture's recipe through the whole stack, every stage a child process as in use: each stage's time, the time per step, every metric and the SHA-256 of every weight file the export wrote, compared with an earlier run |
 
 - `--profile` adds an uncounted run under cProfile (in-process stages for `train_perf.py`); `--torch-profile` lists the operators by their own time.
+- **On a GPU** (`--device cuda:N`, which becomes every engine's device, and training's): the harness waits for the device at each phase boundary, so a phase's time is its work and not only its launches, and records per phase the peak allocation, the working memory above what was allocated once the phase's weights were placed, and the working memory the engine asked for, with the request's peak allocated and reserved memory. `--torch-profile` then also records the device's activity and summarises it per phase (`<case>.gpu.json`): wall and device-busy time, kernels, launches, CUDA graph replays, host waits for the device (`cudaStreamSynchronize`, `cudaEventSynchronize`, synchronous `cudaMemcpy`; the harness's own two `cudaDeviceSynchronize` per phase counted apart) and host↔device copies.
+- `--deterministic` runs with `torch.use_deterministic_algorithms(True, warn_only=True)` and `CUBLAS_WORKSPACE_CONFIG=:4096:8`, set by the harness (native code never sets process-wide state); operations without a deterministic implementation are listed in the record instead of failing the case. `train_perf.py --setting training.memory=low` measures a memory preset.
 - Records go to `MIZUOTO_PERF_DIR` (default `~/code_workspace/experiment/perf`), one JSON file per case and round.
 - A warm time is the fastest warm run: the machine's other work only ever slows a run down. Comparisons that matter are interleaved, the two codes in separate processes, one after the other.
 
@@ -47,6 +49,7 @@ The inference set is thirteen cases: Qwen3-TTS `base-clone-en` and `cv-en-aiden`
 
 - **CPU**: AMD Ryzen 9 5900X (12 cores; torch uses 12 threads), 125 GB RAM, torch 2.8.0 with MKL 2024.2 and oneDNN 3.7.1, Python 3.11; fp32, except VoxCPM in bf16 (its upstream default). Other work on the machine takes about 9 % of its threads; a run whose compute thread is preempted stalls, so single runs vary by up to ±10 %.
 - **GPU**: two RTX 3090 (24 GB), **shared with another workload** that held about 21 GB of each and kept both 100 % busy. Every GPU number below is inflated by that sharing; comparisons were interleaved on the same GPU and torch. Models that did not fit beside the other workload were measured as their decoding loop alone: the real sizes, random weights and a few of their layers, which is labelled where it applies.
+- **GPU, from 2026-10-18** ([GPU baseline](#gpu-baseline-g0)): the same two RTX 3090, **free** (no other workload), driver 595.99.02, torch 2.8.0+cu128 (CUDA 12.8, cuDNN 9.10.2), PCIe 4.0 x16. Inference ran on one card while the fine-tunes ran on the other, so the two shared the CPU.
 
 ## Where the time goes on the CPU
 
@@ -196,7 +199,7 @@ Whole requests (VAE included) on the real weights, 6.4–6.9 s of audio, best of
 | 0.5B | 4.49 s (RTF 0.65) | 4.32 s | **2.36 s (RTF 0.34)** |
 | 1.5 | 3.00 s (RTF 0.47) | 2.95 s | **1.87 s (RTF 0.29)** |
 
-×1.9 and ×1.6. On CUDA the first VoxCPM request in a process decodes its (identical) latents with other bits than later requests do (the VAE); later requests are identical, and the code before does the same, so comparisons start after a throwaway request.
+×1.9 and ×1.6. On CUDA the first VoxCPM request in a process decodes its (identical) latents with other bits than later requests do (the VAE); later requests are identical, and the code before does the same, so comparisons start after a throwaway request. The cause is TorchScript's fuser acting on Snake ([GPU baseline](#gpu-baseline-g0)).
 
 ### GPT-SoVITS
 
@@ -226,6 +229,64 @@ The real models did not fit wholly beside the other workload, so through the sta
 ### On the CPU
 
 The same changes help the CPU a little: Qwen3-TTS `cv-en-aiden` 17.05 → 16.76 s, `base-clone-en` 26.19 → 25.83 s, audio identical.
+
+## GPU baseline (G0)
+
+The first measurement on a free GPU (conditions above), of commit `4e6fe35`, frozen in a worktree. Every engine ran with its GPU defaults (`dtype = auto`, CUDA graphs on), three runs per case in one process per engine, with two streamed cases added. Warm is the faster of the two later runs; the first request includes the model's load.
+
+| Engine, case | Audio s | Warm s | RTF | First request s (load) | Phases, warm (s) | Peak MB |
+| --- | --- | --- | --- | --- | --- | --- |
+| Qwen3-TTS base-clone-en | 5.84 | 1.28 | 0.22 | 17.7 (7.9) | talker 1.22, codec decoder 0.05 | 8,296 |
+| Qwen3-TTS cv-en-aiden | 3.68 | 0.79 | 0.22 | 20.0 (8.8) | talker 0.76, codec decoder 0.03 | 4,004 |
+| F5-TTS clone-en | 4.74 | 0.92 | 0.19 | 6.5 (1.9) | transformer 0.90 | 758 |
+| OmniVoice clone-en | 5.05 | 0.84 | 0.17 | 6.7 (2.3) | language model 0.81 | 1,963 |
+| CosyVoice v2-clone-en | 5.00 | 1.40 | 0.28 | 19.7 (7.0) | language model 0.91, flow 0.47 | 3,107 |
+| CosyVoice v3-clone-en | 3.92 | 0.95 | 0.24 | 14.9 (6.7) | language model 0.50, flow 0.44 | 7,352 |
+| GPT-SoVITS v2-clone-zh | 6.30 | 0.54 | 0.09 | 9.5 (2.4) | gpt 0.43, sovits 0.03 | 1,109 |
+| GPT-SoVITS v4-clone-zh | 3.68 | 1.19 | 0.32 | 14.4 (4.4) | sovits 0.73, gpt 0.38 | 2,860 |
+| GPT-SoVITS v2-stream-zh (streamed) | 7.02 | 0.96, first audio 0.95 | 0.14 | — | sovits+t2s 0.83 | 2,866 |
+| Fish Speech clone-en | 4.04 | 3.05 | 0.76 | 13.6 (4.1) | language model 3.01, codec 0.04 | 9,769 |
+| IndexTTS v15-clone-en | 3.97 | 0.57 | 0.14 | 6.4 (2.2) | gpt 0.49, bigvgan 0.06 | 1,978 |
+| IndexTTS v2-clone-en | 3.97 | 2.03 | 0.51 | 40.2 (18.6) | gpt 1.22, s2mel 0.69, bigvgan 0.10 | 7,982 |
+| VoxCPM v2-clone-en | 5.92 | 1.24 | 0.21 | 12.8 (4.8) | language model 1.21, vae 0.02 | 5,270 |
+| VoxCPM v15-clone-en | 4.80 | 0.68 | 0.14 | 5.1 (2.0) | language model 0.65, vae 0.02 | 7,387 |
+| VoxCPM v2-stream-en (streamed) | 3.68 | 1.02, first audio 0.14 | 0.28 | — | model+vae 1.02 | 5,103 |
+
+Peak MB is the request's peak allocation, every model loaded in the process included. GPT-SoVITS's streamed case decodes the whole text before its first chunk (first audio 0.95 s of 0.96 s); VoxCPM's streams by patch (0.14 s).
+
+**Repeats.** Every case gives the same audio run to run and in a new process, in the default mode, except VoxCPM 2's first request. `--deterministic` changes the bits of CosyVoice 2, IndexTTS 2, OmniVoice and VoxCPM (other cuBLAS and cuDNN algorithms), repeats as well, and lists no operation without a deterministic kernel. So later GPU rounds compare outputs exactly in the default mode, with VoxCPM's first request thrown away.
+
+**VoxCPM's first request.** Snake is a TorchScript function, as upstream's is. On CUDA, TorchScript's profiling executor runs a function's first call for a shape as separate operations (bit-identical to eager code and to the CPU), then runs a fused kernel that differs by up to 4.8·10⁻⁷. A shape it has not seen falls back to the unfused operations until it is profiled. So which calls are fused depends on what the process has already decoded, and a warm-up at load cannot make every request repeat. With the fuser off (an experiment; native code never sets it) the first request agrees with the later ones. The fuser also compiles its kernels on the default device: a process working on `cuda:1` opens a 256 MB context on `cuda:0` (seen in VoxCPM's and GPT-SoVITS's training, whose WaveNet gate is scripted too). The CPU is unaffected (no fusion there).
+
+**Where the time goes** (one extra run under torch's profiler, per phase: the share of wall time the device is busy):
+
+- Bound by the device's work (83–96 % busy): F5-TTS's DiT, IndexTTS 2's s2mel and BigVGAN, CosyVoice 3's flow, Fish Speech's and Qwen3-TTS 1.7B's language models, VoxCPM's.
+- Bound by launches: GPT-SoVITS's GPT (23–28 %), CosyVoice 2's language model (43 %), IndexTTS 1.5's GPT (49 %), OmniVoice's language model (57 %, no CUDA graphs).
+- Host waits: about one per generated token in every autoregressive decoder (GPT-SoVITS v2 157 for 157 tokens, Fish Speech 92 for about 87 frames, Qwen3-TTS 82 for about 73 frames), as designed.
+
+**Working memory** against each phase's estimate (the estimate must be at or above what the phase uses): language models use 2–17 % of their estimates (Qwen3-TTS's talker 28 MB of 328, Fish Speech's 128 of 733). Two decoders use more than estimated: IndexTTS 1.5's BigVGAN 326 MB against 279, VoxCPM 1.5's VAE 278 MB against 183; VoxCPM 2's VAE is close (190 against 203). The OOM retry covers these on a tight GPU; the estimates are to be raised.
+
+**GPU parity with 0.1**, where 0.1 defined GPU behaviour (each side run twice; both repeat themselves exactly):
+
+| Case | 0.1 on the GPU | Native against 0.1 |
+| --- | --- | --- |
+| F5-TTS clone-en, fp16 | runs | **identical**, sample for sample |
+| IndexTTS v15-clone-en, fp16 GPT with a KV cache | runs | same length, 2.3 dB SNR: not identical. CUDA graphs off gives the native audio unchanged, so the difference is in the arithmetic, not the graphs; the cause is open |
+| Fish Speech clone-en, bf16 | **fails**: `Input type (float) and bias type (c10::BFloat16) should be the same` (the codec in bf16, the reference audio in fp32) | native runs ([Fish Speech](/docs/engines-fishspeech#deviations)) |
+
+**Training** on the GPU, `training.memory` `standard` → `low`:
+
+| Engine, recipe | Run s | s per step | Peak MB | `low` identical? |
+| --- | --- | --- | --- | --- |
+| F5-TTS full, 1 epoch | 23.5 → 22.9 | 0.18 → 0.19 | 8,821 → 7,395 | yes |
+| Qwen3-TTS 1.7B speaker, 1 epoch | 20.1 → 22.4 | 0.20 → 0.36 | 18,280 → 18,274 | yes |
+| OmniVoice LoRA, 3 steps | 24.9 → 18.7 | 0.24 → 0.49 | 7,300 → 2,971 | yes |
+| CosyVoice 2 llm, 2 epochs | 39.5 → 34.9 | — | 10,570 → 9,690 | yes |
+| VoxCPM 0.5B LoRA, 3 steps | 21.0 → 22.0 | 0.41 → 0.62 | 4,343 → 2,747 | yes |
+| GPT-SoVITS v2Pro speaker, 1 + 1 epochs | 44.2 → 44.2 | — | 3,881 → 3,881 | does not repeat on the GPU |
+| Fish Speech S2 Pro LoRA, 2 steps | 59.6 → 48.7 | 0.57 → 0.57 | 9,978 → 9,978 | does not repeat on the GPU |
+
+Five trainers repeat run to run and give identical losses and weights under `low`. GPT-SoVITS's SoVITS stage repeats for its first seven steps and then drifts, run to run; with deterministic algorithms in its stages (an experiment) two runs are identical, so the drift comes from operations that have deterministic versions (atomics in backward passes). Fish Speech's losses repeat but its exported weights differ run to run; the cause is open. Peak MB is `memory/peak_mb`, the stage's peak allocation.
 
 ## `torch.compile` on the CPU
 

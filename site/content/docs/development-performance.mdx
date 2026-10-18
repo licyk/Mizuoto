@@ -10,11 +10,13 @@ icon: Timer
 
 | 工具 | 作用 |
 | --- | --- |
-| `scripts/parity/perf.py run <cases.jsonl>… --name NAME [--only ID] [--repeat N] [--device D] [--setting k=v] [--reference NAME] [--profile] [--torch-profile]` | 在一个进程中让一致性用例经过整个系统，每个运行 `--repeat` 次（3 次）：第一次加载模型并准备音色，其余为预热后的运行。记录墙钟时间、加载、首块音频、引擎总时间、实时率，以及每个阶段（`ctx.use` / `ctx.run`，不含嵌套阶段，另有阶段之外的时间）内的时间。逐样本比较各次运行之间的音频，以及与 `--reference` 的音频：该名称的一次早先运行，否则为用例的一致性基准文件 |
-| `perf.py compare --a NAME --b NAME [--report out.md]`、`perf.py show NAME` | 两轮的预热运行对照，加速比，以及变化最大的阶段 |
-| `scripts/parity/train_perf.py run <engine> --fixture F --name NAME [--reference NAME] [--profile]`、`compare` | 按一致性基准的配方经过整个系统做一次微调，每个阶段都像实际使用时一样是子进程：每个阶段的时间、每步时间、每个指标，以及导出写出的每个权重文件的 SHA-256，并与早先的运行比较 |
+| `scripts/parity/perf.py run <cases.jsonl>… --name NAME [--only ID] [--repeat N] [--device D] [--setting k=v] [--reference NAME] [--profile] [--torch-profile [--keep-trace]] [--deterministic]` | 在一个进程中让一致性用例经过整个系统，每个运行 `--repeat` 次（3 次）：第一次加载模型并准备音色，其余为预热后的运行。记录墙钟时间、加载、首块音频、引擎总时间、实时率，以及每个阶段（`ctx.use` / `ctx.run`，不含嵌套阶段，另有阶段之外的时间）内的时间。逐样本比较各次运行之间的音频，以及与 `--reference` 的音频：该名称的一次早先运行，否则为用例的一致性基准文件 |
+| `perf.py compare --a NAME --b NAME [--report out.md]`、`perf.py show NAME` | 两轮的预热运行对照，加速比，流式用例的首段音频时间，以及变化最大的阶段 |
+| `scripts/parity/train_perf.py run <engine> --fixture F --name NAME [--device D] [--setting k=v] [--reference NAME] [--profile]`、`compare` | 按一致性基准的配方经过整个系统做一次微调，每个阶段都像实际使用时一样是子进程：每个阶段的时间、每步时间、每个指标，以及导出写出的每个权重文件的 SHA-256，并与早先的运行比较 |
 
 - `--profile` 在 cProfile 下多跑一次不计入的运行（`train_perf.py` 则在进程内运行各阶段）；`--torch-profile` 按自身耗时列出算子。
+- **在 GPU 上**（`--device cuda:N`，它成为每个引擎的设备，也是训练的设备）：工具在每个阶段边界等待设备，使阶段时间是它的实际工作而不只是内核的发出；并按阶段记录峰值分配、阶段权重放好之后在已分配量之上的工作内存，以及引擎申请的工作内存，另有请求的峰值已分配与已保留内存。此时 `--torch-profile` 还记录设备活动并按阶段汇总（`<case>.gpu.json`）：墙钟时间与设备忙碌时间、内核数、发出次数、CUDA Graph 重放次数、主机等待设备的次数（`cudaStreamSynchronize`、`cudaEventSynchronize`、同步的 `cudaMemcpy`；工具自身每个阶段的两次 `cudaDeviceSynchronize` 单独计数），以及主机与设备之间的拷贝。
+- `--deterministic` 在 `torch.use_deterministic_algorithms(True, warn_only=True)` 与 `CUBLAS_WORKSPACE_CONFIG=:4096:8` 下运行，二者由工具设置（原生代码从不改动进程级状态）；没有确定性实现的运算列在记录里，而不是让用例失败。`train_perf.py --setting training.memory=low` 用来测量某个显存预设。
 - 记录写到 `MIZUOTO_PERF_DIR`（默认 `~/code_workspace/experiment/perf`），每个用例每轮一个 JSON 文件。
 - 预热时间取最快的预热运行：机器上的其他工作只会让运行变慢。重要的比较都交错进行，两份代码在各自的进程里先后运行。
 
@@ -47,6 +49,7 @@ icon: Timer
 
 - **CPU**：AMD Ryzen 9 5900X（12 核；torch 用 12 个线程），125 GB 内存，torch 2.8.0（MKL 2024.2、oneDNN 3.7.1），Python 3.11；fp32，VoxCPM 除外（bf16，其上游默认值）。机器上的其他工作约占 9 % 的线程；计算线程被抢占的运行会停顿，所以单次运行的波动可达 ±10 %。
 - **GPU**：两块 RTX 3090（24 GB），**与另一项工作共用**，它在每块卡上占约 21 GB 显存并让两块卡都保持 100 % 繁忙。下面所有 GPU 数字都因共用而偏大；比较都在同一块 GPU、同一 torch 上交错进行。放不进剩余显存的模型只测量其解码循环：真实尺寸、随机权重、只取少数几层，用到这种方式的地方都会注明。
+- **GPU，2026-10-18 起**（[GPU 基线](#gpu-基线g0)）：同样两块 RTX 3090，**空闲**（没有其他工作），驱动 595.99.02，torch 2.8.0+cu128（CUDA 12.8、cuDNN 9.10.2），PCIe 4.0 x16。推理在一块卡上运行，微调同时在另一块卡上运行，二者共用 CPU。
 
 ## CPU 上时间花在哪里
 
@@ -196,7 +199,7 @@ Fish Speech S2 Pro LoRA（2 步）：CPU 优化前 207.4 秒，第一轮后 172�
 | 0.5B | 4.49 秒（RTF 0.65） | 4.32 秒 | **2.36 秒（RTF 0.34）** |
 | 1.5 | 3.00 秒（RTF 0.47） | 2.95 秒 | **1.87 秒（RTF 0.29）** |
 
-×1.9 和 ×1.6。在 CUDA 上，进程中第一个 VoxCPM 请求解码其（相同的）潜变量时得到的二进制位与之后的请求不同（VAE）；之后的请求完全相同，之前的代码也是如此，所以比较从一次丢弃的请求之后开始。
+×1.9 和 ×1.6。在 CUDA 上，进程中第一个 VoxCPM 请求解码其（相同的）潜变量时得到的二进制位与之后的请求不同（VAE）；之后的请求完全相同，之前的代码也是如此，所以比较从一次丢弃的请求之后开始。原因是 TorchScript 的融合器作用于 Snake（[GPU 基线](#gpu-基线g0)）。
 
 ### GPT-SoVITS
 
@@ -226,6 +229,64 @@ v4 收益最小：它的 flow 和声码器占主导，而且在拥挤的 GPU 上
 ### 在 CPU 上
 
 同样的改动对 CPU 也略有帮助：Qwen3-TTS `cv-en-aiden` 17.05 → 16.76 秒，`base-clone-en` 26.19 → 25.83 秒，音频相同。
+
+## GPU 基线（G0）
+
+第一次在空闲 GPU 上测量（条件见上），测的是冻结在工作树中的提交 `4e6fe35`。每个引擎都用其 GPU 默认值（`dtype = auto`，CUDA Graph 开启），每个用例在每个引擎各自的进程里运行三次，另加两个流式用例。预热时间取后两次中较快的一次；首次请求包含模型加载。
+
+| 引擎、用例 | 音频秒数 | 预热秒数 | 实时率 | 首次请求秒数（加载） | 预热时的阶段（秒） | 峰值 MB |
+| --- | --- | --- | --- | --- | --- | --- |
+| Qwen3-TTS base-clone-en | 5.84 | 1.28 | 0.22 | 17.7（7.9） | talker 1.22、codec decoder 0.05 | 8,296 |
+| Qwen3-TTS cv-en-aiden | 3.68 | 0.79 | 0.22 | 20.0（8.8） | talker 0.76、codec decoder 0.03 | 4,004 |
+| F5-TTS clone-en | 4.74 | 0.92 | 0.19 | 6.5（1.9） | transformer 0.90 | 758 |
+| OmniVoice clone-en | 5.05 | 0.84 | 0.17 | 6.7（2.3） | language model 0.81 | 1,963 |
+| CosyVoice v2-clone-en | 5.00 | 1.40 | 0.28 | 19.7（7.0） | language model 0.91、flow 0.47 | 3,107 |
+| CosyVoice v3-clone-en | 3.92 | 0.95 | 0.24 | 14.9（6.7） | language model 0.50、flow 0.44 | 7,352 |
+| GPT-SoVITS v2-clone-zh | 6.30 | 0.54 | 0.09 | 9.5（2.4） | gpt 0.43、sovits 0.03 | 1,109 |
+| GPT-SoVITS v4-clone-zh | 3.68 | 1.19 | 0.32 | 14.4（4.4） | sovits 0.73、gpt 0.38 | 2,860 |
+| GPT-SoVITS v2-stream-zh（流式） | 7.02 | 0.96，首段音频 0.95 | 0.14 | — | sovits+t2s 0.83 | 2,866 |
+| Fish Speech clone-en | 4.04 | 3.05 | 0.76 | 13.6（4.1） | language model 3.01、codec 0.04 | 9,769 |
+| IndexTTS v15-clone-en | 3.97 | 0.57 | 0.14 | 6.4（2.2） | gpt 0.49、bigvgan 0.06 | 1,978 |
+| IndexTTS v2-clone-en | 3.97 | 2.03 | 0.51 | 40.2（18.6） | gpt 1.22、s2mel 0.69、bigvgan 0.10 | 7,982 |
+| VoxCPM v2-clone-en | 5.92 | 1.24 | 0.21 | 12.8（4.8） | language model 1.21、vae 0.02 | 5,270 |
+| VoxCPM v15-clone-en | 4.80 | 0.68 | 0.14 | 5.1（2.0） | language model 0.65、vae 0.02 | 7,387 |
+| VoxCPM v2-stream-en（流式） | 3.68 | 1.02，首段音频 0.14 | 0.28 | — | model+vae 1.02 | 5,103 |
+
+峰值 MB 是请求的峰值分配量，包括进程里已加载的所有模型。GPT-SoVITS 的流式用例在第一个音频块之前解码完整段文本（首段音频 0.95 秒，共 0.96 秒）；VoxCPM 按块流式输出（0.14 秒）。
+
+**重复性。** 在默认模式下，每个用例在同一进程的多次运行之间、以及在新进程中都给出相同的音频，只有 VoxCPM 2 的第一个请求例外。`--deterministic` 会改变 CosyVoice 2、IndexTTS 2、OmniVoice 和 VoxCPM 的二进制位（cuBLAS 和 cuDNN 选了别的算法），同样可以重复，并且没有列出任何缺少确定性内核的运算。所以之后的 GPU 轮次在默认模式下精确比较输出，丢弃 VoxCPM 的第一个请求。
+
+**VoxCPM 的第一个请求。** Snake 是 TorchScript 函数，与上游一样。在 CUDA 上，TorchScript 的 profiling executor 对某个形状的第一次调用按单独的运算执行（与即时执行的代码和 CPU 逐位相同），之后改用融合内核，结果最多相差 4.8·10⁻⁷。没见过的形状会退回未融合的运算，直到它被分析过。因此哪些调用被融合取决于进程之前解码过什么，在加载时预热也不能让每个请求都重复。关闭融合器后（仅为实验；原生代码从不设置它），第一个请求与之后的请求一致。融合器还在默认设备上编译内核：在 `cuda:1` 上工作的进程会在 `cuda:0` 上打开一个 256 MB 的上下文（在 VoxCPM 和 GPT-SoVITS 的训练中都观察到，后者的 WaveNet 门控同样是 TorchScript 函数）。CPU 不受影响（那里不做融合）。
+
+**时间花在哪里**（在 torch 的 profiler 下多跑一次，按阶段统计设备忙碌时间占墙钟时间的比例）：
+
+- 受设备计算量限制（忙碌 83–96 %）：F5-TTS 的 DiT、IndexTTS 2 的 s2mel 和 BigVGAN、CosyVoice 3 的 flow、Fish Speech 和 Qwen3-TTS 1.7B 的语言模型、VoxCPM 的语言模型。
+- 受内核发出限制：GPT-SoVITS 的 GPT（23–28 %）、CosyVoice 2 的语言模型（43 %）、IndexTTS 1.5 的 GPT（49 %）、OmniVoice 的语言模型（57 %，没有 CUDA Graph）。
+- 主机等待：每个自回归解码器大约每生成一个 token 等待一次（GPT-SoVITS v2 157 个 token 等待 157 次，Fish Speech 约 87 帧等待 92 次，Qwen3-TTS 约 73 帧等待 82 次），与设计一致。
+
+**工作内存**与各阶段的估计值比较（估计值必须不小于阶段实际用量）：语言模型只用到估计值的 2–17 %（Qwen3-TTS 的 talker 用 28 MB，估计 328 MB；Fish Speech 用 128 MB，估计 733 MB）。两个解码器用量超过估计：IndexTTS 1.5 的 BigVGAN 用 326 MB，估计 279 MB；VoxCPM 1.5 的 VAE 用 278 MB，估计 183 MB；VoxCPM 2 的 VAE 接近（190 MB 对 203 MB）。在显存紧张的 GPU 上由 OOM 重试兜底；这些估计值需要调高。
+
+**与 0.1 的 GPU 一致性**，限于 0.1 规定了 GPU 行为的情形（每边各运行两次；两边都能精确重复自身）：
+
+| 用例 | 0.1 在 GPU 上 | 原生与 0.1 比较 |
+| --- | --- | --- |
+| F5-TTS clone-en，fp16 | 正常运行 | **逐样本相同** |
+| IndexTTS v15-clone-en，fp16 GPT 带 KV 缓存 | 正常运行 | 长度相同，SNR 2.3 dB：不相同。关闭 CUDA Graph 后原生音频不变，所以差异出在运算上而不是 Graph；原因待查 |
+| Fish Speech clone-en，bf16 | **失败**：`Input type (float) and bias type (c10::BFloat16) should be the same`（编解码器是 bf16，参考音频是 fp32） | 原生正常运行（[Fish Speech](/docs/engines-fishspeech#有意的差异)） |
+
+**GPU 上的训练**，`training.memory` 从 `standard` 到 `low`：
+
+| 引擎、配方 | 运行秒数 | 每步秒数 | 峰值 MB | `low` 是否相同 |
+| --- | --- | --- | --- | --- |
+| F5-TTS full，1 个 epoch | 23.5 → 22.9 | 0.18 → 0.19 | 8,821 → 7,395 | 是 |
+| Qwen3-TTS 1.7B speaker，1 个 epoch | 20.1 → 22.4 | 0.20 → 0.36 | 18,280 → 18,274 | 是 |
+| OmniVoice LoRA，3 步 | 24.9 → 18.7 | 0.24 → 0.49 | 7,300 → 2,971 | 是 |
+| CosyVoice 2 llm，2 个 epoch | 39.5 → 34.9 | — | 10,570 → 9,690 | 是 |
+| VoxCPM 0.5B LoRA，3 步 | 21.0 → 22.0 | 0.41 → 0.62 | 4,343 → 2,747 | 是 |
+| GPT-SoVITS v2Pro speaker，1 + 1 个 epoch | 44.2 → 44.2 | — | 3,881 → 3,881 | 在 GPU 上不能重复 |
+| Fish Speech S2 Pro LoRA，2 步 | 59.6 → 48.7 | 0.57 → 0.57 | 9,978 → 9,978 | 在 GPU 上不能重复 |
+
+五个训练器在多次运行之间可以重复，并在 `low` 下给出相同的损失和权重。GPT-SoVITS 的 SoVITS 阶段前七步可以重复，之后在多次运行之间逐渐偏离；在其阶段中启用确定性算法后（仅为实验）两次运行完全相同，所以偏离来自有确定性版本的运算（反向传播中的原子操作）。Fish Speech 的损失可以重复，但导出的权重每次运行都不同；原因待查。峰值 MB 是 `memory/peak_mb`，即阶段的峰值分配量。
 
 ## 在 CPU 上的 `torch.compile`
 

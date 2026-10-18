@@ -1,7 +1,7 @@
 """Where a fine-tune's time goes, and whether an optimisation kept what it trains (the performance work's harness).
 
     <python> scripts/parity/train_perf.py run <engine> --fixture NAME --name NAME [--model ID] [--method M] [--hp k=v]...
-        [--profile] [--no-previews] [--reference NAME]
+        [--device cuda:0] [--setting training.memory=low] [--profile] [--no-previews] [--reference NAME]
     <python> scripts/parity/train_perf.py compare --a NAME --b NAME [--report out.md]
 
 ``run`` trains as ``train.py`` does (a temporary data folder over the real models, the workspace's ``narrator`` dataset,
@@ -10,7 +10,9 @@ every stage as a child process), with the base model, method, hyperparameters an
 wall time and, from the metric events as they arrive, the time between training steps; then every metric point and a
 SHA-256 of the tensors of every weight file the export wrote (its other values apart). ``--reference NAME`` compares them with an earlier run of this harness
 (identical metrics and weights). ``--profile`` runs the stages in this process instead, under cProfile
-(``<engine>-<fixture>-<stage>.prof`` and ``.profile.txt``).
+(``<engine>-<fixture>-<stage>.prof`` and ``.profile.txt``). ``--device`` is the engine's device, which training uses
+(``training.devices`` is left empty); ``--setting key=value`` overrides a setting for the run, e.g.
+``training.memory=low``.
 
 Results go to ``<perf workspace>/train/<name>/<engine>-<fixture>.json`` (``MIZUOTO_PERF_DIR``, default
 ``~/code_workspace/experiment/perf``).
@@ -33,7 +35,7 @@ from pathlib import Path
 from typing import Any
 
 from perf import PERF
-from stack import WORKSPACE, build
+from stack import WORKSPACE, build, parse_settings
 
 DATASET = WORKSPACE / "train-data" / "datasets" / "narrator"
 WEIGHTS = {".safetensors", ".pth", ".pt", ".ckpt", ".bin"}
@@ -176,7 +178,8 @@ def cmd_run(args: argparse.Namespace) -> int:
     timing = _Timing()
     _install(timing, folder if args.profile else None, prefix)
     tmp = Path(tempfile.mkdtemp(prefix="train-perf-"))
-    s = build(args.device, tmp, "native")
+    settings = parse_settings(args.setting or [])
+    s = build(args.device, tmp, "native", settings)
     try:
         s.settings.update({"training": {"previews": not args.no_previews}})
         shutil.copytree(DATASET, s.datasets.root / DATASET.name)
@@ -209,6 +212,8 @@ def cmd_run(args: argparse.Namespace) -> int:
             "model": model,
             "method": method,
             "hyperparams": hyperparams,
+            "device": args.device,
+            "settings": settings,
             "profiled": bool(args.profile),
             "state": job.state,
             "error": job.error.model_dump() if job.error else None,
@@ -283,6 +288,7 @@ def main(argv: list[str]) -> int:
     r.add_argument("--hp", action="append")
     r.add_argument("--language")
     r.add_argument("--device", default="cpu")
+    r.add_argument("--setting", action="append", help="A setting for the run, key=value (the value as JSON, else a string); repeatable")
     r.add_argument("--profile", action="store_true")
     r.add_argument("--no-previews", action="store_true")
     r.add_argument("--reference")
