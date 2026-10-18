@@ -243,15 +243,15 @@ class ConditionalDecoder(nn.Module):
             m = add_optional_chunk_mask(x, mask.bool(), 0).repeat(1, x.size(1), 1)
         return mask_to_bias(m, x.dtype)
 
-    def _transformers(self, blocks: nn.ModuleList, x: torch.Tensor, mask: torch.Tensor, streaming: bool, biases: dict[tuple[int, int], torch.Tensor]) -> torch.Tensor:
+    def _transformers(self, blocks: nn.ModuleList, x: torch.Tensor, mask: torch.Tensor, streaming: bool, biases: dict[int, torch.Tensor], level: int) -> torch.Tensor:
         """``blocks`` on ``x``. Every block of a step attends under the same mask at a resolution: it is made once per
-        forward (``biases``, by the mask's identity and length), as each block would make it."""
+        forward (``biases``, by the U-Net's level, whose down, middle and up blocks share one mask and length), as each
+        block would make it. Keyed by the level, a Python int, so that torch.compile does not guard on a tensor."""
         x = x.transpose(1, 2).contiguous()  # einops' rearrange "b c t -> b t c", then .contiguous()
-        key = (id(mask), x.shape[1])
-        bias = biases.get(key)
+        bias = biases.get(level)
         if bias is None:
             first: Attention = blocks[0].attn1  # ty: ignore[invalid-assignment]
-            bias = biases[key] = first.head_mask(self._attn_mask(x, mask, streaming), x.shape[0], x.shape[1])
+            bias = biases[level] = first.head_mask(self._attn_mask(x, mask, streaming), x.shape[0], x.shape[1])
         for block in blocks:
             x = block(x, bias)
         return x.transpose(1, 2).contiguous()
@@ -266,24 +266,24 @@ class ConditionalDecoder(nn.Module):
         if cond is not None:
             x = torch.cat([x, cond], dim=1)
         hiddens = []
-        biases: dict[tuple[int, int], torch.Tensor] = {}
+        biases: dict[int, torch.Tensor] = {}
         masks = [mask]
-        for resnet, blocks, downsample in self.down_blocks:  # ty: ignore[not-iterable]
+        for level, (resnet, blocks, downsample) in enumerate(self.down_blocks):  # ty: ignore[not-iterable]
             mask_down = masks[-1]
-            x = self._transformers(blocks, resnet(x, mask_down, t), mask_down, streaming, biases)
+            x = self._transformers(blocks, resnet(x, mask_down, t), mask_down, streaming, biases, level)
             hiddens.append(x)
             x = downsample(x * mask_down)
             masks.append(mask_down[:, :, ::2])
         masks = masks[:-1]
         mask_mid = masks[-1]
         for resnet, blocks in self.mid_blocks:  # ty: ignore[not-iterable]
-            x = self._transformers(blocks, resnet(x, mask_mid, t), mask_mid, streaming, biases)
+            x = self._transformers(blocks, resnet(x, mask_mid, t), mask_mid, streaming, biases, len(masks) - 1)
         mask_up = mask
         for resnet, blocks, upsample in self.up_blocks:  # ty: ignore[not-iterable]
             mask_up = masks.pop()
             skip = hiddens.pop()
             x = torch.cat([x[:, :, : skip.shape[-1]], skip], dim=1)
-            x = self._transformers(blocks, resnet(x, mask_up, t), mask_up, streaming, biases)
+            x = self._transformers(blocks, resnet(x, mask_up, t), mask_up, streaming, biases, len(masks))
             x = upsample(x * mask_up)
         x = self.final_block(x, mask_up)
         return self.final_proj(x * mask_up) * mask
