@@ -25,7 +25,7 @@ from mizuoto.engines.voxcpm.config import LmConfig
 from mizuoto.runtime import ops
 from mizuoto.runtime.accel import MaskInfo, Site, attention
 
-SITE = Site("voxcpm.minicpm")
+SITE = Site("voxcpm.minicpm", approx_ok=False)  # autoregressive: quantised attention derails its sampling
 
 ATTEND_BLOCK = 256
 """On the CPU a step attends over the cache up to the next multiple of this past the current length (``attend_span``)."""

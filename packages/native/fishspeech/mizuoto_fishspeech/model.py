@@ -359,11 +359,11 @@ def eq_attention(q: torch.Tensor, k: torch.Tensor, v: torch.Tensor, mask: torch.
     return torch.softmax(weight, dim=-1) @ v
 
 
-SLOW = Site("fishspeech.slow")
+SLOW = Site("fishspeech.slow", approx_ok=False)  # autoregressive: quantised attention derails its sampling
 """The slow transformer's prefill and training: SDPA with a boolean mask."""
-STEP = Site("fishspeech.step", reference=sdpa_math)
+STEP = Site("fishspeech.step", reference=sdpa_math, approx_ok=False)
 """Its decoding steps: SDPA's math kernel, as upstream pins it (``sdpa_kernel(MATH)``)."""
-FAST = Site("fishspeech.fast", reference=lambda q, k, v, mask, causal, scale, gqa, dropout: eq_attention(q, k, v, mask))
+FAST = Site("fishspeech.fast", reference=lambda q, k, v, mask, causal, scale, gqa, dropout: eq_attention(q, k, v, mask), approx_ok=False)
 """The fast transformer: upstream's hand-written softmax over ten positions."""
 
 

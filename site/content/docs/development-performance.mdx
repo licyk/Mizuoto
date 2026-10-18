@@ -444,6 +444,31 @@ v4 收益最小：它的 flow 和声码器占主导，而且在拥挤的 GPU 上
 
 原来的经验公式几乎都低于这些峰值（GPT-SoVITS 低 5 倍，VoxCPM 的 `lowest` LoRA 低至 3.4 倍），对 Fish Speech 的 LoRA 估算为 14.1 GB，而它在默认批量下会超出 24 GB 显卡。现在的估算是这些峰值按基础模型大小缩放，再加一成和 512 MB，峰值随批量变化的地方也随批量调整；没有预设放得下时，警告会给出放得下的批量。
 
+## GPU 上的注意力后端
+
+在 RTX 3090 上测量（2026-10-18），torch 2.8.0+cu128、flash-attn 2.8.3（torch 2.8 唯一的 wheel）、xFormers 0.0.32.post2（单独一个环境：它与 flash-attn 2.8.3 不能同时导入）和 SageAttention 1.0.6（Triton；2.x 需要 `nvcc`，SageAttention 3 需要 Blackwell GPU）。从 G0 用例集的请求中记录了每个调用点的调用（17 个调用点，36 种调用），每个能接受某次调用的后端都在它上面运行，并与 `auto` 的结果比较。
+
+**内核。** FlashAttention 和 xFormers 与 `auto` 的差别处处都在 bf16/fp16 的舍入以内（余弦 1.000000）；SageAttention 会量化：在 BERT 上余弦 0.98，在 VoxCPM 的双向 DiT 注意力上 0.78（最大误差 12）。在这些尺寸下，这些包每次调用都比 SDPA 慢（单查询步骤 0.13–0.5 倍，提示 0.15–0.9 倍），只有 FlashAttention 能跳过填充键的地方例外：VoxCPM 在预分配缓存上的步骤，4.4 倍（head dim 128）和 2.3 倍（64）。
+
+**请求**，预热时间对比 `auto`，音频对比 `auto` 的音频（G0 用例集，一块 GPU，空闲，每个用例三次；"另一次生成"：同一请求的另一种结果，如同换了一个种子）：
+
+| 用例 | `sdpa` | `flash` | `xformers` | `sage`（设置 `approx_ok` 之前） | `fast`（现在） |
+| --- | --- | --- | --- | --- | --- |
+| Qwen3-TTS base / 自定义音色 | 1.00 相同 | 1.02 / 0.99 另一次生成 | 0.98 / 0.94 另一次生成 | 无休止：112 倍 / 6 倍的音频 | 1.00 相同 |
+| CosyVoice 2 / 3（fp32 调用点） | 1.07 相同 | 1.07 相同 | 1.00 / 0.97 相同 | 1.07 相同 | 1.07 相同 |
+| F5-TTS | 1.00 相同 | 1.00，37 dB | 1.01，26 dB | 0.99，21 dB | 1.00，37 dB |
+| OmniVoice | 1.01 相同（下面的修复之前 0.71） | 1.01 相同 | 0.98 相同 | 1.01 相同 | 1.01 相同 |
+| GPT-SoVITS v2 / v4 | 0.93 / 0.99 相同 | 0.91 / 0.96 另一次生成 | 0.62 / 0.73 | 0.87 / 0.96 | 0.91 相同 / 0.98，34 dB |
+| Fish Speech | 1.05 另一次生成 | 1.08 | 1.13 | （拒绝：布尔掩码） | 1.05 另一次生成 |
+| IndexTTS 1.5 / 2 | 1.06 / 1.01 | 0.82 / 1.00 | 0.97 / 0.97 | 无休止：6 倍 / 1.00 | 1.01 / 1.00 |
+| VoxCPM 1.5 / 2 | 1.00 相同 | **1.39 / 1.65** 另一次生成 | 0.76 / 0.98 | 无休止：3–4 倍的音频 | **1.41 / 1.57** 另一次生成 |
+
+**训练**（每个训练器的测试夹具，`training.attention`）：在调用点的参照就是普通 SDPA 的地方（F5-TTS、Qwen3-TTS、VoxCPM），`sdpa` 给出与 `auto` 相同的损失和权重；FlashAttention 和 xFormers 的损失相差不超过 1e-3，Qwen3-TTS 第一步相差 0.25 %，之后它的 bf16 训练轨迹逐渐偏离（任何舍入变化都会如此）；峰值显存和每步时间变化不到 7 %。**回退**在真实内核上（布尔掩码交给 flash、head dim 80 或需要梯度的调用交给 SageAttention、fp32 交给任一个、无法导入的 xFormers）都带着原因回退，给出参照的结果；严格模式拒绝它们。
+
+**发现并修复：** 直接调用 SDPA 的 math 内核时，它把布尔掩码当作数值相加（`math` 后端和 Fish Speech 的解码步骤；见 [Fish Speech](/docs/engines-fishspeech)）；SageAttention 在当前设备以外的 GPU 上出错；Qwen 的注意力在策略下把带掩码的分组头交给 SDPA 的 math 内核（任何策略下 OmniVoice 慢到 0.71 倍且数值不同），现在按参照的做法先重复头。
+
+**决定：** NVIDIA 上的 `fast` 对键有填充的 fp16/bf16 调用使用 FlashAttention，其余使用 SDPA（`PADDED_CHAIN`）；SageAttention 和 xFormers 移出它的链，仍可按名称选用；自回归调用点拒绝量化后端（`approx_ok=False`）；`auto` 仍是默认值（D-A6：参照为普通 SDPA 的地方 `sdpa` 给出相同音频，并不更快）。doctor 给出的 flash-attn 安装命令会说明 torch 2.8 下它与 xFormers 互斥。
+
 ## 在 CPU 上的 `torch.compile`
 
 `compute.compile`，fp32，8 线程；被编译模块预热后的耗时：

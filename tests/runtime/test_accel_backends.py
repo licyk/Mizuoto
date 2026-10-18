@@ -233,3 +233,19 @@ def test_the_math_kernel_masks_with_a_bool_mask_as_sdpa_does():
         with sdpa_kernel(SDPBackend.MATH):
             want = F.scaled_dot_product_attention(q, k, v, attn_mask=mask)
         assert torch.equal(math_kernel(q, k, v, mask, False, None, False, 0.0), want)
+
+
+def test_qwen_repeats_grouped_heads_under_a_policy_when_a_mask_is_given():
+    """Qwen's attention under an SDPA policy with grouped heads and a mask computes its reference's call (the heads
+    repeated): the same bits; SDPA's ``enable_gqa`` with a mask would run its math kernel."""
+    from mizuoto.runtime.accel.policy import AccelPolicy, bind
+    from mizuoto.runtime.lm.qwen import hf_sdpa
+
+    g = torch.Generator().manual_seed(0)
+    q = torch.randn(1, 8, 5, 16, generator=g)
+    k, v = (torch.randn(1, 2, 5, 16, generator=g) for _ in range(2))
+    mask = torch.ones(1, 1, 5, 5, dtype=torch.bool)
+    mask[..., -1] = False
+    reference = hf_sdpa(q, k, v, mask, 0.25, 4)
+    with bind(AccelPolicy("sdpa").run()):
+        assert torch.equal(hf_sdpa(q, k, v, mask, 0.25, 4), reference)

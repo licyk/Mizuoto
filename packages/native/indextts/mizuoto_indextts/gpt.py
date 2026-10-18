@@ -29,7 +29,7 @@ from mizuoto.runtime.accel import Site, attention
 from mizuoto.runtime.sampling import multinomial_draws, repetition_penalty, top_k, top_p
 from mizuoto_indextts.conditioning import ConformerEncoder, PerceiverResampler
 
-SITE = Site("indextts.gpt")
+SITE = Site("indextts.gpt", approx_ok=False)  # autoregressive: quantised attention derails its sampling
 
 # -- GPT-2 ----------------------------------------------------------------------------------------------
 

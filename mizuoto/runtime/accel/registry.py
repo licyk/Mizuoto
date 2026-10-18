@@ -145,6 +145,9 @@ class Backend:
     constraints: Constraints
     exact: bool = False
     """Identical to SDPA's result for the same call (only ``sdpa`` and ``math``: they are SDPA)."""
+    approximate: bool = False
+    """Quantises its inputs (SageAttention): its results move further than rounding does, and sites with
+    ``approx_ok=False`` refuse it."""
     backward: bool = True
     dropout: bool = False
     deterministic: bool = True

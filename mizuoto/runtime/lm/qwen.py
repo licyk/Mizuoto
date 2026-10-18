@@ -29,7 +29,7 @@ from mizuoto.runtime.accel import Masked, MaskInfo, Site, attention
 from mizuoto.runtime.accel.dispatch import active
 from mizuoto.runtime.lm.cache import DynamicCache
 
-SITE = Site("qwen")
+SITE = Site("qwen", approx_ok=False)  # autoregressive: quantised attention derails its sampling
 
 
 @dataclass
@@ -143,13 +143,18 @@ def repeat_kv(x: torch.Tensor, n_rep: int) -> torch.Tensor:
 
 def hf_sdpa(q: torch.Tensor, k: torch.Tensor, v: torch.Tensor, mask: torch.Tensor | Masked | None, scale: float, n_rep: int, gqa: bool = True) -> torch.Tensor:
     """transformers' ``sdpa_attention_forward``; returns (batch, length, heads, head_dim). ``gqa=False``: 4.51's.
-    Under an acceleration policy the key/value heads are not repeated (backends take grouped queries)."""
+    Under an acceleration policy the key/value heads are not repeated (backends take grouped queries), but with a mask
+    they are, as the reference does: SDPA computes grouped heads with a mask only in its math kernel (OmniVoice 0.71×
+    and other bits under any policy ending in SDPA)."""
     info = None
     if isinstance(mask, Masked):
         mask, info = mask
     if active(SITE):
         m = mask[:, :, :, : k.shape[-2]] if mask is not None else None
-        out = attention(q, k, v, site=SITE, mask=m, scale=scale, causal=q.shape[2] > 1 and m is None, enable_gqa=True, mask_info=info)
+        grouped = m is None or n_rep == 1
+        if not grouped:
+            k, v = repeat_kv(k, n_rep), repeat_kv(v, n_rep)
+        out = attention(q, k, v, site=SITE, mask=m, scale=scale, causal=q.shape[2] > 1 and m is None, enable_gqa=grouped, mask_info=info)
     elif not gqa:
         k, v = repeat_kv(k, n_rep), repeat_kv(v, n_rep)
         m = mask[:, :, :, : k.shape[-2]] if mask is not None else None

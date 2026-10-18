@@ -98,7 +98,8 @@ out = accel.attention(q, k, v, site=SITE, mask=mask, causal=False, scale=None,
 
 | 调用 | `fast` 的后端链 |
 | --- | --- |
-| CUDA，fp16/bf16 | `sage3`、`sage`、`flash`、`xformers`、`sdpa` |
+| CUDA，fp16/bf16，键有填充（`mask_info` 的 `keys` 只在一侧填充：预分配的缓存、填充的批） | `flash`、`sdpa` |
+| CUDA，fp16/bf16，其他 | `sdpa` |
 | ROCm，fp16/bf16 | `flash`、`xformers`、`sdpa` |
 | fp32，或 XPU、MPS、CPU | `sdpa` |
 
@@ -106,7 +107,7 @@ out = accel.attention(q, k, v, site=SITE, mask=mask, causal=False, scale=None,
 
 - 探测表明它不能在该设备上运行（未安装、版本不对、没有内核、自检失败）；
 - 调用需要它缺少的反向传播或 dropout；
-- 调用点需要精确的注意力而该后端不精确；
+- 调用点拒绝量化的注意力（`approx_ok=False`：所有自回归模型的调用点，即 Qwen 解码器、IndexTTS 的 GPT、VoxCPM 的 MiniCPM、GPT-SoVITS 的 T2S、Fish Speech 的三个、Whisper 的），而该后端是近似的（SageAttention 2 和 3）；
 - 它的约束拒绝该调用（设备、计算能力、精度、头维度、掩码、长度不等时的因果、缩放）。
 
 内核抛出异常（显存不足和取消除外）时，该后端对这种调用被标为损坏，由下一个后端接手。显存不足会向上传递给[精确重试](/docs/development-memory#显存不足)。每种回退按（调用点，后端，原因）只记录一次日志。请求的 `Run` 统计用了什么，有回退时输出会记录下来并带一条警告：
@@ -137,7 +138,7 @@ out = accel.attention(q, k, v, site=SITE, mask=mask, causal=False, scale=None,
 
 <Callout type="info" title="验证范围">
 
-注册表、策略、回退、严格模式和绑定都在 CPU 上测试过：真实模型经过每个调用点（`auto` 下音频、指标和权重完全相同），可选后端的衔接代码则用计算相同数学的假包测试。可选内核本身、它们的速度和质量尚未测量。
+注册表、策略、回退、严格模式和绑定都在 CPU 上测试过：真实模型经过每个调用点（`auto` 下音频、指标和权重完全相同），可选后端的衔接代码则用计算相同数学的假包测试。在 NVIDIA 上（RTX 3090，torch 2.8，flash-attn 2.8.3，xFormers 0.0.32.post2，SageAttention 1.0.6），每个后端都在每个调用点记录下来的调用上、在每个引擎和每个训练器中检查过：[结果及其决定](/docs/development-performance#gpu-上的注意力后端)。SageAttention 3（Blackwell）未检查。
 
 </Callout>
 

@@ -91,7 +91,8 @@ def install_command(backend: str, torch_build: dict[str, str | None] | None, pyt
     if build.get("hip") and backend != "flash":
         return None
     if backend == "flash":
-        return f"{exe} -m pip install flash-attn --no-build-isolation --no-deps  # compiles for a long time (needs nvcc), unless a wheel for this torch exists"
+        note = "; xFormers for torch 2.8 does not import beside flash-attn 2.8.3 (the only wheel for it): install one of the two" if version.startswith("2.8.") else ""
+        return f"{exe} -m pip install flash-attn --no-build-isolation --no-deps  # compiles for a long time (needs nvcc), unless a wheel for this torch exists{note}"
     if backend == "sage":
         return f"{exe} -m pip install sageattention==2.2.0 --no-build-isolation --no-deps  # needs nvcc; or sageattention==1.0.6 (Triton) without a compiler"
     if backend == "sage3":

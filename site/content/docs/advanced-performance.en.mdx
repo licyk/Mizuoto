@@ -105,11 +105,11 @@ Every attention computation of every engine and trainer goes through one switch,
 | Value | What computes attention |
 | --- | --- |
 | `auto` (default) | each model as its original implementation did, so results stay identical to it |
-| `fast` | the fastest backend this device offers: on NVIDIA GPUs with fp16/bf16 models SageAttention, FlashAttention, xFormers when installed, else PyTorch's SDPA; elsewhere SDPA |
+| `fast` | what measured fastest: on NVIDIA GPUs FlashAttention, when installed, for fp16/bf16 attention over padded keys (VoxCPM's decoding: 1.4–1.6× faster), PyTorch's SDPA for everything else; elsewhere SDPA |
 | `sdpa`, `math`, `sdpa_flash`, `sdpa_efficient`, `sdpa_cudnn` | PyTorch's SDPA (its own choice of kernel), its exact math kernel, or one of its fused kernels |
 | `flash`, `xformers`, `sage`, `sage3` | FlashAttention, xFormers, SageAttention 2 (or 1), SageAttention 3 (Blackwell) |
 
-- Anything but `auto` changes results slightly (SageAttention quantises the attention scores). Outputs list the backend that computed each part (`params.attention`: the calls per backend and why any fell back), and `mizuoto runtime` shows each loaded model's backend.
+- Anything but `auto` changes results slightly (SageAttention quantises the attention scores). `sdpa` gives the same audio as `auto` for most models, and no faster. SageAttention is never used for the models that generate token by token (they ran on without end with it), and was no faster elsewhere; xFormers was slower where it differed: both stay available by name. Outputs list the backend that computed each part (`params.attention`: the calls per backend and why any fell back), and `mizuoto runtime` shows each loaded model's backend.
 - A backend that cannot take a call falls back to the next one, ending with the model's own computation. Reasons include: not installed, the wrong GPU, a mask it does not support, a head size, fp32, a backward pass it lacks, or a kernel error. Each reason is logged once. Running out of memory is not a fallback: the memory retry handles it. With `compute.attention_strict` the request fails instead.
 - Some attention keeps its own computation whatever the setting, because no fused kernel computes it: relative positions inside the scores (wenet's, w2v-BERT's, GPT-SoVITS's VITS) and a few hand-written encoders.
 - `engines.<id>.attention` (**Attention for this engine** on the engine's card) sets it per engine.
@@ -117,7 +117,7 @@ Every attention computation of every engine and trainer goes through one switch,
 - The setting applies to models loaded after the change.
 - How backends are chosen and checked: [Acceleration](/docs/development-acceleration#attention).
 
-The packages are not dependencies. Each is tied to a torch version, a CUDA or ROCm runtime and a GPU generation, so you install them yourself, without letting them replace your torch. `mizuoto doctor` lists which are installed and whether each runs on each GPU (a tiny self-test), and gives the command for this machine. For example: `pip install "xformers==0.0.32.post2" --no-deps` for torch 2.8.0, `pip install flash-attn --no-build-isolation --no-deps` (it compiles), `pip install sageattention==2.2.0 --no-build-isolation --no-deps` (it needs `nvcc`).
+The packages are not dependencies. Each is tied to a torch version, a CUDA or ROCm runtime and a GPU generation, so you install them yourself, without letting them replace your torch. `mizuoto doctor` lists which are installed and whether each runs on each GPU (a tiny self-test), and gives the command for this machine. For example: `pip install "xformers==0.0.32.post2" --no-deps` for torch 2.8.0, `pip install flash-attn --no-build-isolation --no-deps` (it compiles), `pip install sageattention==2.2.0 --no-build-isolation --no-deps` (it needs `nvcc`). With torch 2.8 install FlashAttention or xFormers, not both: the only flash-attn wheel for torch 2.8 (2.8.3) is newer than xFormers 0.0.32 accepts, and xFormers then does not load. For `fast`, FlashAttention is the one that matters.
 
 `compute.fast` (**Settings** › **Compute** › **Acceleration**) turns on GPU speed switches for the whole process, after ComfyUI's `--fast`: `tf32`, `fp16_accumulation`, `cudnn_benchmark` and `sdpa_reduced_precision`. Each changes results slightly. They take effect when Mizuoto next starts, and outputs list them (`params.fast`).
 

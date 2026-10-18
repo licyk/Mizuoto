@@ -105,11 +105,11 @@ Mizuoto 像 ComfyUI 一样管理显存。一个请求的每一步只放上它需
 | 取值 | 由谁计算注意力 |
 | --- | --- |
 | `auto`（默认） | 按各模型原本实现的方式，结果与之完全相同 |
-| `fast` | 本设备上最快的后端：NVIDIA GPU 上的 fp16/bf16 模型依次使用已安装的 SageAttention、FlashAttention、xFormers，否则使用 PyTorch 的 SDPA；其他设备使用 SDPA |
+| `fast` | 实测最快的后端：NVIDIA GPU 上，已安装时由 FlashAttention 计算键有填充的 fp16/bf16 注意力（VoxCPM 的解码：快 1.4–1.6 倍），其余用 PyTorch 的 SDPA；其他设备使用 SDPA |
 | `sdpa`、`math`、`sdpa_flash`、`sdpa_efficient`、`sdpa_cudnn` | PyTorch 的 SDPA（由它自己选择内核）、它的精确 math 内核，或它的某个融合内核 |
 | `flash`、`xformers`、`sage`、`sage3` | FlashAttention、xFormers、SageAttention 2（或 1）、SageAttention 3（Blackwell） |
 
-- 除 `auto` 以外的取值都会使结果略有不同（SageAttention 会量化注意力分数）。输出会记录计算各部分所用的后端（`params.attention`：各后端的调用次数以及回退的原因），`mizuoto runtime` 会显示每个已加载模型的后端。
+- 除 `auto` 以外的取值都会使结果略有不同（SageAttention 会量化注意力分数）。对大多数模型，`sdpa` 给出的音频与 `auto` 相同，也不更快。逐个 token 生成的模型从不使用 SageAttention（用它时会无休止地生成下去），在其他地方它也不更快；xFormers 在结果不同的地方更慢：两者仍可按名称选用。输出会记录计算各部分所用的后端（`params.attention`：各后端的调用次数以及回退的原因），`mizuoto runtime` 会显示每个已加载模型的后端。
 - 某个后端无法处理的调用会回退到下一个后端，最后回退到模型自己的计算方式。原因包括：未安装、GPU 不匹配、不支持的掩码、头维度、fp32、缺少反向传播，或内核出错。每种原因只记录一次日志。显存不足不算回退，由显存重试机制处理。开启 `compute.attention_strict` 时，请求会直接失败。
 - 有些注意力无论如何设置都保持自己的计算方式，因为没有融合内核能计算它们：在分数中加入相对位置的注意力（wenet、w2v-BERT、GPT-SoVITS 的 VITS），以及少数手写的编码器。
 - `engines.<id>.attention`（引擎卡片上的 **此引擎的注意力**）可以按引擎设置。
@@ -117,7 +117,7 @@ Mizuoto 像 ComfyUI 一样管理显存。一个请求的每一步只放上它需
 - 修改对之后加载的模型生效。
 - 后端怎样选择和检查：见[加速](/docs/development-acceleration#注意力)。
 
-这些包都不是依赖。每个包都绑定特定的 torch 版本、CUDA 或 ROCm 运行时和 GPU 架构，需要自行安装，并且不能让它们替换已装好的 torch。`mizuoto doctor` 会列出已安装的包、每个包能否在每块 GPU 上运行（一次小的自检），并给出适合本机的安装命令。例如：torch 2.8.0 用 `pip install "xformers==0.0.32.post2" --no-deps`；`pip install flash-attn --no-build-isolation --no-deps`（需要编译）；`pip install sageattention==2.2.0 --no-build-isolation --no-deps`（需要 `nvcc`）。
+这些包都不是依赖。每个包都绑定特定的 torch 版本、CUDA 或 ROCm 运行时和 GPU 架构，需要自行安装，并且不能让它们替换已装好的 torch。`mizuoto doctor` 会列出已安装的包、每个包能否在每块 GPU 上运行（一次小的自检），并给出适合本机的安装命令。例如：torch 2.8.0 用 `pip install "xformers==0.0.32.post2" --no-deps`；`pip install flash-attn --no-build-isolation --no-deps`（需要编译）；`pip install sageattention==2.2.0 --no-build-isolation --no-deps`（需要 `nvcc`）。torch 2.8 下 FlashAttention 和 xFormers 只装其一：torch 2.8 唯一的 flash-attn wheel（2.8.3）比 xFormers 0.0.32 接受的版本新，装上后 xFormers 无法加载。对 `fast` 来说，起作用的是 FlashAttention。
 
 `compute.fast`（**设置** › **计算** › **加速**）为整个进程开启 GPU 提速开关，参照 ComfyUI 的 `--fast`：`tf32`、`fp16_accumulation`、`cudnn_benchmark` 和 `sdpa_reduced_precision`。每一项都会使结果略有不同。它们在下次启动 Mizuoto 时生效，输出会记录它们（`params.fast`）。
 

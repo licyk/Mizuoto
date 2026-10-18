@@ -26,7 +26,7 @@ from torch.nn import functional as F
 from mizuoto.runtime import ops as default_ops
 from mizuoto.runtime.accel import Site, attention
 
-SITE = Site("gptsovits.t2s")
+SITE = Site("gptsovits.t2s", approx_ok=False)  # autoregressive: quantised attention derails its sampling
 
 MAX_STEPS = 1500
 

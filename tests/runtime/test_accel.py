@@ -175,9 +175,9 @@ def test_a_structured_mask_lets_a_maskless_kernel_take_the_call():
     assert fake.calls == 1
 
 
-def test_sites_that_must_stay_exact_or_unswappable_keep_their_reference():
+def test_sites_that_refuse_quantised_attention_or_are_unswappable_keep_their_reference():
     fake = Fake()
-    p = policy("fake", Backend("fake", fake, Constraints(devices=ALL)), chain=("fake",))
+    p = policy("fake", Backend("fake", fake, Constraints(devices=ALL), approximate=True), chain=("fake",))
     q, k, v = qkv()
     exact = accel.Site("test.exact", approx_ok=False)
     fixed = accel.Site("test.fixed", reference=accel.softmax_attention, swappable=False)
@@ -312,3 +312,32 @@ def test_torch_kernels_pinned_off_cuda_say_so():
     report = REGISTRY.report("cpu")
     assert report["sdpa"] is None and report["math"] is None
     assert report["sdpa_flash"] == "CUDA and ROCm only"
+
+
+def test_a_site_refusing_quantised_attention_still_takes_other_kernels():
+    """``approx_ok=False`` keeps quantised (approximate) backends away, not every non-exact one: FlashAttention or
+    xFormers still compute an autoregressive model's attention (A6: SageAttention made them run on without end)."""
+    lm = accel.Site("test.lm", approx_ok=False)
+    q, k, v = qkv()
+    for approximate, used in ((True, "reference"), (False, "fake")):
+        fake = Fake()
+        p = policy("fake", Backend("fake", fake, Constraints(devices=ALL), approximate=approximate), chain=("fake",))
+        run = p.run()
+        with bind(run):
+            accel.attention(q, k, v, site=lm)
+        assert run.report()["used"] == {used: 1}
+
+
+def test_fast_on_nvidia_uses_flash_only_where_keys_are_padded():
+    """A7: ``fast`` on CUDA sends fp16/bf16 calls with padded keys to FlashAttention (it skips them) and every other
+    call to SDPA; SageAttention and xFormers only by name; fp32 SDPA."""
+    from mizuoto.runtime.accel.registry import Call
+
+    p = AccelPolicy(FAST)
+
+    def call(structured, dtype=torch.float16):
+        return Call("cuda", 0, dtype, 64, 64, False, True, False, False, "bool" if structured else "none", structured, False, False, False, False)
+
+    assert p.chain(call("prefix")) == ("flash", "sdpa") == p.chain(call("causal+suffix"))
+    assert p.chain(call("")) == ("sdpa",) == p.chain(call("causal")) == p.chain(call("prefix", torch.float32))
+    assert AccelPolicy("xformers").chain(call("")) == ("xformers", "sdpa")

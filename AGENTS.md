@@ -114,7 +114,8 @@ Enforced by `tests/test_architecture.py`; the reasons are on `development-archit
   the host and the training stage. The contract suite checks requests leave the process state alone
   (`mizuoto.snapshot`).
 - Every attention computation in native code goes through `mizuoto.runtime.accel.attention(…, site=…)`; SDPA and its
-  aten kernels are forbidden elsewhere.
+  aten kernels are forbidden elsewhere. An autoregressive model's site sets `approx_ok=False`: quantised kernels
+  (SageAttention) made them generate without end on a GPU.
 - `pyproject.toml` is one distribution: no `mizuoto-*` dependency, torch a dependency.
 
 ## 4. The runtime in one page

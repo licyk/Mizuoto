@@ -98,7 +98,8 @@ The pinned SDPA kernels are called through their aten operators and ask torch's 
 
 | Call | `fast`'s chain |
 | --- | --- |
-| CUDA, fp16/bf16 | `sage3`, `sage`, `flash`, `xformers`, `sdpa` |
+| CUDA, fp16/bf16, keys padded (`mask_info` with `keys` padded on one side: a preallocated cache, a padded batch) | `flash`, `sdpa` |
+| CUDA, fp16/bf16, otherwise | `sdpa` |
 | ROCm, fp16/bf16 | `flash`, `xformers`, `sdpa` |
 | fp32, or XPU, MPS, CPU | `sdpa` |
 
@@ -106,7 +107,7 @@ The pinned SDPA kernels are called through their aten operators and ask torch's 
 
 - its probe says it cannot run on the device (not installed, wrong version, no kernels, self-test failed);
 - the call needs a backward pass or dropout it lacks;
-- the site needs exact attention and the backend is not exact;
+- the site refuses quantised attention (`approx_ok=False`: every autoregressive model's, the Qwen decoder's, IndexTTS's GPT, VoxCPM's MiniCPM, GPT-SoVITS's T2S, Fish Speech's three, Whisper's) and the backend is approximate (SageAttention 2 and 3);
 - its constraints refuse the call (device, capability, dtype, head dim, mask, causal over unequal lengths, scale).
 
 A kernel that raises (anything but running out of memory or a cancel) is marked broken for that call, and the next backend takes it. Running out of memory propagates to the [exact retry](/docs/development-memory#running-out-of-memory). Each fallback is logged once per (site, backend, reason). The request's `Run` counts what it used, and the output records it with a warning when anything fell back:
@@ -137,7 +138,7 @@ Results are cached per process and device. `mizuoto doctor` has an `acceleration
 
 <Callout type="info" title="What is checked">
 
-The registry, policies, fallbacks, strict mode and binding are tested on the CPU, with real models through every site (identical audio, metrics and weights with `auto`) and the optional backends' glue against fake packages computing the same maths. The optional kernels themselves, their speed and their quality are not measured yet.
+The registry, policies, fallbacks, strict mode and binding are tested on the CPU, with real models through every site (identical audio, metrics and weights with `auto`) and the optional backends' glue against fake packages computing the same maths. On NVIDIA (RTX 3090, torch 2.8, flash-attn 2.8.3, xFormers 0.0.32.post2, SageAttention 1.0.6) every backend was checked on every site's recorded calls, through every engine and every trainer: [the results and what they decided](/docs/development-performance#attention-backends-on-a-gpu). SageAttention 3 (Blackwell) is not checked.
 
 </Callout>
 

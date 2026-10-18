@@ -28,7 +28,7 @@ from torch.nn import functional as F
 from mizuoto.runtime import ops as default_ops
 from mizuoto.runtime.accel import Site, attention
 
-SITE = Site("asr.whisper")
+SITE = Site("asr.whisper", approx_ok=False)  # autoregressive: quantised attention derails its sampling
 
 
 @dataclass(frozen=True)

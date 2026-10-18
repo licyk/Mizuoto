@@ -128,7 +128,7 @@ def causal_mask(q: torch.Tensor, k: torch.Tensor, mask: torch.Tensor | None) -> 
 @dataclass(frozen=True, eq=False)
 class Site:
     """One attention computation in native code. ``swappable=False``: only the reference may compute it.
-    ``approx_ok=False``: no backend that is not exact (quantised kernels) may."""
+    ``approx_ok=False``: no approximate (quantised) backend may: autoregressive models, whose sampling derails on them."""
 
     name: str
     reference: Reference = sdpa

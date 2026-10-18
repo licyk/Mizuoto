@@ -4,7 +4,7 @@
 then ``fast``'s chain); every chain ends with the site's reference. ``auto`` is no policy at all: nothing is bound and
 every site computes its reference. A policy resolves each call once per ``(site, Call)``:
 
-- a site that is not swappable, or whose reference must stay exact, keeps its reference;
+- a site that is not swappable keeps its reference; one with ``approx_ok=False`` refuses approximate (quantised) backends;
 - each backend in the chain is skipped when it cannot run on the device (``Registry.unavailable``), lacks a backward
   pass the call needs, lacks dropout, or its constraints refuse the call; the first that takes it computes it;
 - a backend that raises (anything but running out of memory or a cancel) is marked broken for that call and the next
@@ -36,9 +36,16 @@ log = logging.getLogger("mizuoto.runtime.accel")
 AUTO = "auto"
 FAST = "fast"
 
-HALF_CHAINS = {"cuda": ("sage3", "sage", "flash", "xformers", "sdpa"), "rocm": ("flash", "xformers", "sdpa")}
-"""``fast`` for fp16/bf16 calls, by device kind; fp32 calls and other devices use SDPA (its kernels are torch's best
-there). Sage first: quantised, the fastest where it applies; flash and xFormers after it for what it refuses."""
+HALF_CHAINS = {"rocm": ("flash", "xformers", "sdpa")}
+"""``fast`` for fp16/bf16 calls, by device kind (NVIDIA: ``PADDED_CHAIN``); fp32 calls and other devices use SDPA
+(its kernels are torch's best there)."""
+PADDED_CHAIN = ("flash", "sdpa")
+"""``fast`` on NVIDIA GPUs for fp16/bf16 calls whose keys are padded (a cache preallocated to its longest, a padded
+batch: ``MaskInfo`` with ``keys`` padded on one side), which FlashAttention skips; every other call keeps SDPA.
+Measured on RTX 3090s (2026-10-18, every engine): FlashAttention made VoxCPM's decoding 1.39–1.65× faster, and was
+slower than SDPA for calls with nothing to skip (single-query steps 0.13–0.5×, IndexTTS 1.5 0.82× overall); xFormers
+was slower where it differed (GPT-SoVITS 0.62×, VoxCPM 0.76×); SageAttention made autoregressive models run on
+without end (Qwen3-TTS 112× the audio) and sped nothing else up. Each stays available by name."""
 
 _warned: set[tuple[str, str, str]] = set()
 _warned_lock = threading.Lock()
@@ -78,7 +85,12 @@ class AccelPolicy:
         return f"AccelPolicy({self.name!r}, strict={self.strict})"
 
     def chain(self, call: Call) -> tuple[str, ...]:
-        fast = HALF_CHAINS.get(call.device, ("sdpa",)) if call.dtype in (torch.float16, torch.bfloat16) else ("sdpa",)
+        half = call.dtype in (torch.float16, torch.bfloat16)
+        if half and call.device == "cuda":
+            padded = {"prefix", "suffix"} & set(call.structured.split("+"))
+            fast: tuple[str, ...] = PADDED_CHAIN if padded else ("sdpa",)
+        else:
+            fast = HALF_CHAINS.get(call.device, ("sdpa",)) if half else ("sdpa",)
         if self.name == FAST:
             return fast
         return (self.name, *(n for n in fast if n != self.name))
@@ -104,8 +116,8 @@ class AccelPolicy:
             return "no backward"
         if call.dropout and not backend.dropout:
             return "dropout"
-        if not site.approx_ok and not backend.exact:
-            return "the site needs exact attention"
+        if not site.approx_ok and backend.approximate:
+            return "the site refuses quantised attention"
         reason = backend.constraints.check(call, self.registry.capability(tensors[0].device))
         if reason is None and backend.accepts is not None:
             reason = backend.accepts(call, tensors)

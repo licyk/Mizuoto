@@ -307,6 +307,7 @@ def register(registry: Registry = REGISTRY) -> None:
                 causal_unequal=False,
             ),
             backward=False,
+            approximate=True,
             probe=_sage_probe,
         )
     )
@@ -326,6 +327,7 @@ def register(registry: Registry = REGISTRY) -> None:
                 default_scale=True,
             ),
             backward=False,
+            approximate=True,
             probe=_sage3_probe,
         )
     )

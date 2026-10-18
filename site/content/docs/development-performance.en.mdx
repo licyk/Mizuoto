@@ -444,6 +444,31 @@ Measured on the RTX 3090s (2026-10-18), the harness now recording each phase's w
 
 The old rule of thumb was under nearly all of them (GPT-SoVITS 5×, VoxCPM's `lowest` LoRA up to 3.4×), and said 14.1 GB for Fish Speech's LoRA, which runs out of a 24 GB card at its default batch. Estimates are now these peaks scaled by the base model's size, plus a tenth and 512 MB, and follow the batch where the peak does; the warning names a batch that fits when no preset does.
 
+## Attention backends on a GPU
+
+Measured on the RTX 3090s (2026-10-18) with torch 2.8.0+cu128, flash-attn 2.8.3 (the only wheel for torch 2.8), xFormers 0.0.32.post2 (in an environment of its own: it does not import beside flash-attn 2.8.3) and SageAttention 1.0.6 (Triton; 2.x needs `nvcc`, SageAttention 3 a Blackwell GPU). Every site's calls were recorded from the G0 set's requests (17 sites, 36 kinds of call) and each backend that takes a call was run on it against what `auto` computes.
+
+**Kernels.** FlashAttention and xFormers agree with `auto` to bf16/fp16 rounding everywhere (cosine 1.000000); SageAttention quantises: cosine 0.98 on BERT, 0.78 (max error 12) on VoxCPM's bidirectional DiT attention. At these sizes the packages are slower than SDPA per call (single-query steps 0.13–0.5×, prompts 0.15–0.9×), except where FlashAttention skips padded keys: VoxCPM's steps over its preallocated cache, 4.4× (head dim 128) and 2.3× (64).
+
+**Requests**, warm time against `auto` and the audio against `auto`'s (the G0 set, one GPU, quiet, three runs a case; "other take": a different realisation of the request, as another seed would give):
+
+| Case | `sdpa` | `flash` | `xformers` | `sage` (before `approx_ok`) | `fast` (now) |
+| --- | --- | --- | --- | --- | --- |
+| Qwen3-TTS base / custom voice | 1.00 identical | 1.02 / 0.99 other take | 0.98 / 0.94 other take | ran on: 112× / 6× the audio | 1.00 identical |
+| CosyVoice 2 / 3 (fp32 sites) | 1.07 identical | 1.07 identical | 1.00 / 0.97 identical | 1.07 identical | 1.07 identical |
+| F5-TTS | 1.00 identical | 1.00, 37 dB | 1.01, 26 dB | 0.99, 21 dB | 1.00, 37 dB |
+| OmniVoice | 1.01 identical (0.71 before the fix below) | 1.01 identical | 0.98 identical | 1.01 identical | 1.01 identical |
+| GPT-SoVITS v2 / v4 | 0.93 / 0.99 identical | 0.91 / 0.96 other take | 0.62 / 0.73 | 0.87 / 0.96 | 0.91 identical / 0.98, 34 dB |
+| Fish Speech | 1.05 other take | 1.08 | 1.13 | (refused: bool masks) | 1.05 other take |
+| IndexTTS 1.5 / 2 | 1.06 / 1.01 | 0.82 / 1.00 | 0.97 / 0.97 | ran on: 6× / 1.00 | 1.01 / 1.00 |
+| VoxCPM 1.5 / 2 | 1.00 identical | **1.39 / 1.65** other take | 0.76 / 0.98 | ran on: 3–4× the audio | **1.41 / 1.57** other take |
+
+**Training** (each trainer's fixture, `training.attention`): `sdpa` gives `auto`'s losses and weights where the sites' references are plain SDPA (F5-TTS, Qwen3-TTS, VoxCPM); FlashAttention and xFormers stay within 1e-3 of the losses, Qwen3-TTS within 0.25 % at the first step before its bf16 trajectory wanders (as any change of rounding makes it); peaks and step times move by under 7 %. **Fallbacks** on the real kernels (a bool mask into flash, head dim 80 or a gradient into SageAttention, fp32 into either, xFormers that does not import) fall back with their reason and give the reference's result; strict mode refuses them.
+
+**Found and fixed:** SDPA's math kernel called directly adds a bool mask as numbers (the `math` backend and Fish Speech's decoding steps; see [Fish Speech](/docs/engines-fishspeech)); SageAttention faulted on any GPU but the current one; Qwen's attention under a policy left grouped heads with a mask to SDPA's math kernel (OmniVoice 0.71× and other bits under every policy), now repeated as its reference does.
+
+**Decided:** `fast` on NVIDIA is FlashAttention for fp16/bf16 calls over padded keys and SDPA for everything else (`PADDED_CHAIN`); SageAttention and xFormers leave its chain and stay available by name; autoregressive sites refuse quantised backends (`approx_ok=False`); `auto` stays the default (D-A6: `sdpa` gives the same audio where the reference is plain SDPA, no faster). The doctor's flash-attn command says that on torch 2.8 it and xFormers exclude each other.
+
 ## `torch.compile` on the CPU
 
 `compute.compile`, fp32, 8 threads; time of the compiled module, warm:
