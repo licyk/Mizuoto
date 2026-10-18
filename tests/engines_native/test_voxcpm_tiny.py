@@ -411,7 +411,7 @@ def test_a_phase_that_runs_out_of_memory_runs_again_identically(loaded, monkeypa
 
 @pytest.mark.parametrize("dtype", [torch.float32, torch.bfloat16])
 def test_steps_attend_over_the_filled_blocks_of_the_cache_as_over_all_of_it(dtype, monkeypatch):
-    """A step reads the static cache only up to the next ``ATTEND_BLOCK`` multiple past the
+    """On the CPU a step reads the static cache only up to the next ``ATTEND_BLOCK`` multiple past the
     current length (mask kept). Every step's output equals upstream's attention over the whole cache, across blocks."""
     from mizuoto.engines.voxcpm import minicpm
     from mizuoto.engines.voxcpm.config import LmConfig, RopeScaling
@@ -448,15 +448,22 @@ def test_steps_attend_over_the_filled_blocks_of_the_cache_as_over_all_of_it(dtyp
     assert set(lengths) >= {64, 128, 192, 256, 320} and 1024 not in lengths  # five blocks crossed, never the whole cache
 
 
+def test_steps_attend_over_the_whole_cache_off_the_cpu():
+    """Elsewhere a step attends over the whole cache, as upstream: on CUDA no shorter cut gives the same bits."""
+    from mizuoto.engines.voxcpm.minicpm import ATTEND_BLOCK, attend_span
+
+    assert attend_span(5, 8192, torch.device("cpu")) == ATTEND_BLOCK
+    assert attend_span(ATTEND_BLOCK + 1, 8192, torch.device("cpu")) == 2 * ATTEND_BLOCK
+    assert attend_span(8100, 8192, torch.device("cpu")) == 8192
+    for device in ("cuda", "cuda:1", "mps", "xpu"):
+        assert attend_span(5, 8192, torch.device(device)) == 8192
+
+
 @pytest.mark.skipif(not torch.cuda.is_available() or torch.version.hip is not None, reason="CUDA graphs need an NVIDIA GPU")
 def test_cuda_graphs_decode_exactly_as_eagerly_on_a_gpu(folder, reference, monkeypatch):
     """compute.cuda_graphs (mizuoto.runtime.graphs): a patch (the DiT's Euler steps with their noise, the encoder, the
-    stop head, both language models' steps) as one graph per attention span replays the eager kernels: the same audio
-    for fresh loads, later requests, streaming and spans that change (the block made small so they do)."""
-    from mizuoto.engines.voxcpm import minicpm, model
-
-    monkeypatch.setattr(minicpm, "ATTEND_BLOCK", 8)
-    monkeypatch.setattr(model, "ATTEND_BLOCK", 8)
+    stop head, both language models' steps) as one graph (on CUDA a step attends over the whole cache, so one span)
+    replays the eager kernels: the same audio for fresh loads, later requests and streaming."""
 
     def gpu(graphs: bool):
         engine = VoxCpmEngine()

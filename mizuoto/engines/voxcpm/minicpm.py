@@ -7,9 +7,10 @@ Kept as upstream computes it, for identical output:
   them (upstream's bf16 model rotates with bf16-rounded tables, in float32).
 - Attention is SDPA with ``enable_gqa``, on contiguous q, k, v: causal for the prefill, bidirectional for the local
   modules, and one step against the static cache with an explicit ``(1, 1, 1, L)`` boolean mask (``StaticKVCache``:
-  zeros past the current length). Upstream attends over the whole cache (8192 positions); here only over its first
-  ``ATTEND_BLOCK`` multiple past the current length, mask kept: the masked positions add exact zeros, and SDPA gives
-  the same bits for any cut at a multiple of 64 (checked at every position up to 3100, bf16 and fp32, on the CPU).
+  zeros past the current length). Upstream attends over the whole cache (8192 positions); on the CPU only over its
+  first ``ATTEND_BLOCK`` multiple past the current length, mask kept: the masked positions add exact zeros, and SDPA
+  gives the same bits for any cut at a multiple of 64 (checked at every position up to 3100, bf16 and fp32). Elsewhere
+  over the whole cache (``attend_span``).
 - muP scales the residual branches only when the config says ``use_mup``.
 """
 
@@ -27,7 +28,17 @@ from mizuoto.runtime.accel import MaskInfo, Site, attention
 SITE = Site("voxcpm.minicpm")
 
 ATTEND_BLOCK = 256
-"""A step attends over the cache up to the next multiple of this past the current length (see the module's notes)."""
+"""On the CPU a step attends over the cache up to the next multiple of this past the current length (``attend_span``)."""
+
+
+def attend_span(length: int, max_length: int, device: torch.device) -> int:
+    """How much of a ``max_length`` static cache holding ``length`` positions a step attends over: on the CPU the next
+    ``ATTEND_BLOCK`` multiple, which gives the same bits as the whole cache there; elsewhere the whole cache, as upstream.
+    On CUDA the step takes SDPA's math path, whose matrix-vector product and softmax split their sums by the key length,
+    so no cut short of the whole cache gives the same bits (checked at every position up to 3100, bf16, fp16 and fp32)."""
+    if device.type != "cpu":
+        return max_length
+    return min(max_length, -(-length // ATTEND_BLOCK) * ATTEND_BLOCK)
 
 
 def rms_layernorm(hidden: torch.Tensor, weight: torch.Tensor, eps: float) -> torch.Tensor:
@@ -262,8 +273,8 @@ class MiniCPMModel(nn.Module):
     def forward_step(self, inputs_embeds: torch.Tensor, position_id: torch.Tensor) -> torch.Tensor:
         assert self.kv_cache is not None, "the KV cache is not set up"
         position_emb = self.rope_emb(position_id) if self.rope_emb is not None else None
-        # the positions written so far (``step()`` counted this one), rounded up to a whole block
-        span = -(-self.kv_cache.current_length // ATTEND_BLOCK) * ATTEND_BLOCK
+        # the positions written so far (``step()`` counted this one): a whole block of them on the CPU
+        span = attend_span(self.kv_cache.current_length, self.kv_cache.max_length, inputs_embeds.device)
         hidden_states = inputs_embeds
         for i, layer in enumerate(self.layers):
             hidden_states = layer.forward_step(hidden_states, position_emb, position_id, self.kv_cache.get_layer_cache(i), span)  # ty: ignore[call-non-callable]

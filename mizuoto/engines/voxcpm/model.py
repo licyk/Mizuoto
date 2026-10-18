@@ -29,7 +29,7 @@ import torch
 from torch import nn
 
 from mizuoto.engines.voxcpm.config import LmConfig, VoxCpmConfig
-from mizuoto.engines.voxcpm.minicpm import ATTEND_BLOCK, MiniCPMModel
+from mizuoto.engines.voxcpm.minicpm import MiniCPMModel, attend_span
 from mizuoto.engines.voxcpm.vae import AudioVAE
 from mizuoto.runtime import ops
 
@@ -395,8 +395,9 @@ class PatchDecoder:
     encoder on the new patch, the stop head on the language model's last state, and both language models' step against
     their static caches. The language models step before the stop flag is read (upstream reads it first and stops
     before stepping): they draw nothing, and their caches are dropped when generation ends, so the patches are the same,
-    and a patch costs one wait (the flag) instead of three. Captured, a patch is one graph per attention span (a multiple
-    of ``ATTEND_BLOCK``) and setting; the caches are then kept with the model, since the graphs hold their addresses.
+    and a patch costs one wait (the flag) instead of three. Captured, a patch is one graph per attention span
+    (``attend_span``: the whole cache on CUDA, so one) and setting; the caches are then kept with the model, since the
+    graphs hold their addresses.
     """
 
     def __init__(self, model: VoxCpmModel, graphs: Callable[[], Any] | None = None) -> None:
@@ -464,7 +465,8 @@ class PatchDecoder:
             self.generator = generator
             self._patch(timesteps, cfg_value, estimator, lm)
             return lm
-        key = (-(-base.current_length // ATTEND_BLOCK), -(-residual.current_length // ATTEND_BLOCK), timesteps, cfg_value)
+        device = self._ports["base_pos"].device
+        key = (attend_span(base.current_length, base.max_length, device), attend_span(residual.current_length, residual.max_length, device), timesteps, cfg_value)
         with torch.cuda.device(graphs.device), graphs.drawing(generator) as own:
             self.generator = own
             graph = self._captured.get(key)
