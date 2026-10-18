@@ -193,7 +193,7 @@ Training stages run in their own process and own their device: before a GPU stag
 
 The host optimizer keeps the float32 copies and the gradients in one buffer each and moves a step's gradients and parameters through one page-locked buffer per device dtype, with one wait; most of its step is AdamW's own arithmetic on the CPU (Qwen3-TTS 1.7B: about 4.5 s of its 5.5 s step), which only a fused optimizer, with other results, would shorten. A `lowest` stage runs without torch's huge pages (`compute.cpu_allocator`): with them its per-step allocations stalled in the kernel's compaction and the run took 2.2× as long.
 
-Always: a GPU stage reports `memory/peak_mb`; `MethodInfo.memory_mb` estimates a run's peak per preset from the model's size, and a GPU run warns in its log, naming the preset that would fit, when the estimate exceeds the free memory. Trainers themselves are in [Trainers](/docs/development-training).
+Always: a GPU stage reports `memory/peak_mb`; `MethodInfo.memory_mb` estimates a run's peak per preset (`core/training/estimate.py`): every method was measured on an RTX 3090 with its recipe's default batch, each installed base model and each preset; an estimate is the nearest measured model's peak scaled by size, a tenth more and 512 MB for the CUDA context, and for Fish Speech, GPT-SoVITS and VoxCPM, whose peaks follow the batch, the run's `batch_size` against the measured one. A GPU run warns in its log when the estimate exceeds the free memory, naming the preset that would fit or, where none does, the largest batch that would. Trainers themselves are in [Trainers](/docs/development-training).
 
 ## Writing an engine for it
 

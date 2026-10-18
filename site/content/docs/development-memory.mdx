@@ -193,7 +193,7 @@ audio = ctx.run("codec decoder", [self.h_decoder], decode, self._decoder_memory(
 
 主机端优化器把 float32 副本和梯度各放在一个缓冲区中，每一步的梯度和参数经过每种设备 dtype 一个的锁页缓冲区传输，只等待一次；它每一步的大部分时间是 AdamW 本身在 CPU 上的运算（Qwen3-TTS 1.7B：每步 5.5 秒中约 4.5 秒），只有融合的优化器才能缩短，但结果会不同。`lowest` 阶段运行时不使用 torch 的大页（`compute.cpu_allocator`）：使用大页时，每一步的分配都卡在内核的内存整理上，运行时间是 2.2 倍。
 
-始终如此：GPU 阶段报告 `memory/peak_mb`；`MethodInfo.memory_mb` 根据模型大小估算每个预设下的峰值，GPU 上运行时若估算超过空闲显存，会在日志中警告并给出放得下的预设。训练器本身见[训练器](/docs/development-training)。
+始终如此：GPU 阶段报告 `memory/peak_mb`；`MethodInfo.memory_mb` 估算每个预设下的峰值（`core/training/estimate.py`）：每种方法都在 RTX 3090 上以配方的默认批量测量过，覆盖每个已安装的基础模型和每个预设；估算值取大小最接近的已测模型的峰值，按大小缩放，再加一成和 CUDA 上下文的 512 MB；Fish Speech、GPT-SoVITS 和 VoxCPM 的峰值随批量变化，按运行的 `batch_size` 与测量时的批量调整。GPU 上运行时若估算超过空闲显存，会在日志中警告，给出放得下的预设；没有预设放得下时，给出放得下的最大批量。训练器本身见[训练器](/docs/development-training)。
 
 ## 编写配合显存管理的引擎
 

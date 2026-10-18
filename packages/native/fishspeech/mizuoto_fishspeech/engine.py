@@ -188,8 +188,13 @@ class LoadedFishSpeech(LoadedEngine):
         return 512 * 2**20 + peak_bytes(2 * c.n_local_heads * c.head_dim * element, c.n_layer, positions) + positions * 2 * c.n_head * c.head_dim * element
 
     def _codec_memory(self, samples: int) -> int:
-        """The codec's activations for ``samples`` of 44.1 kHz audio (~96 float32 channels a sample at its widest)."""
+        """The codec's activations encoding ``samples`` of 44.1 kHz audio (~96 float32 channels a sample at its widest)."""
         return samples * 4 * 96 + 256 * 2**20
+
+    def _decode_memory(self, samples: int) -> int:
+        """The codec's activations decoding ``samples`` of 44.1 kHz audio: measured on an RTX 3090 from about 4 to 30 s of
+        speech, 1,922 bytes a sample (bf16 under autocast, the Snake out of place), with a fifth more."""
+        return samples * 2304 + 256 * 2**20
 
     # -- references -------------------------------------------------------------------
 
@@ -254,7 +259,7 @@ class LoadedFishSpeech(LoadedEngine):
                 return self.codec.from_indices(frames[None])[0].squeeze()
 
         with torch.inference_mode():
-            audio = ctx.run("codec", [self.h_codec], decode, self._codec_memory(frames.shape[-1] * 2048))
+            audio = ctx.run("codec", [self.h_codec], decode, self._decode_memory(frames.shape[-1] * 2048))
         return audio.float().cpu().numpy().reshape(-1)
 
     def synthesize(self, task: SynthesisTask, ctx: RequestContext) -> Iterator[AudioChunk]:

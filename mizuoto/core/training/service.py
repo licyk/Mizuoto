@@ -34,7 +34,7 @@ from mizuoto.core.jobs.models import Job, JobStep
 from mizuoto.core.jobs.service import JobContext, JobService, JobSpec
 from mizuoto.core.process import host_target
 from mizuoto.core.settings import SettingsService
-from mizuoto.core.training.estimate import PRESETS, estimate_mb
+from mizuoto.core.training.estimate import BATCH, PRESETS, estimate_mb
 from mizuoto.core.training.models import Artifact, Experiment, ExperimentInput, ExperimentPatch, MethodInfo, MetricPoint, RunRequest, StageState
 
 if TYPE_CHECKING:
@@ -164,16 +164,26 @@ class TrainingService:
             info = self._models.get(exp.base_model)
             devices = self._runtime.compute.info(refresh=True).devices
             free = next((d.memory_total_mb - (d.memory_used_mb or 0) for d in devices if d.id == device and d.memory_total_mb), None)
+            hp = self._effective(exp, self.method(exp, exp.engine)[1])
         except Exception:  # a check, never a reason to fail the run
             return
         if free is None or not info.size_mb:
             return
-        estimate = estimate_mb(exp.engine, exp.method, info.size_mb, "lora" in exp.method)
+        estimate = estimate_mb(exp.engine, exp.method, info.size_mb, "lora" in exp.method, hp)
         preset = self._settings.settings.training.memory
         if estimate[preset] <= free:
             return
         better = next((p for p in PRESETS if PRESETS.index(p) > PRESETS.index(preset) and estimate[p] <= free), None)
         hint = f"set Settings › Training › Memory to {better} (mizuoto config set training.memory {better})" if better else "use a bigger GPU or the CPU"
+        if better is None and exp.engine in BATCH:  # a smaller batch may fit where no preset does
+            name, default, _ = BATCH[exp.engine]
+            current = hp.get(name) or default  # 0: the recipe's own (VoxCPM's 16)
+            if isinstance(current, (int, float)) and current > 1:
+                fits = next(
+                    (b for b in range(int(current) - 1, 0, -1) if estimate_mb(exp.engine, exp.method, info.size_mb, "lora" in exp.method, {**hp, name: b})[preset] <= free), None
+                )
+                if fits is not None:
+                    hint = f"lower the {name} hyperparameter to {fits}"
         ctx.log(f"Warning: this run may need about {estimate[preset] / 1024:.1f} GB of {device}, which has {free / 1024:.1f} GB free: {hint}")
 
     def trainer(self, engine: str) -> str | None:

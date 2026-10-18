@@ -15,7 +15,7 @@ Speed work on the inference and training code follows one rule: **the results do
 | `scripts/parity/train_perf.py run <engine> --fixture F --name NAME [--device D] [--setting k=v] [--reference NAME] [--profile]`, `compare` | A fine-tune with a parity fixture's recipe through the whole stack, every stage a child process as in use: each stage's time, the time per step, every metric and the SHA-256 of every weight file the export wrote, compared with an earlier run |
 
 - `--profile` adds an uncounted run under cProfile (in-process stages for `train_perf.py`); `--torch-profile` lists the operators by their own time.
-- **On a GPU** (`--device cuda:N`, which becomes every engine's device, and training's): the harness waits for the device at each phase boundary, so a phase's time is its work and not only its launches, and records per phase the peak allocation, the working memory above what was allocated once the phase's weights were placed, and the working memory the engine asked for, with the request's peak allocated and reserved memory. `--torch-profile` then also records the device's activity and summarises it per phase (`<case>.gpu.json`): wall and device-busy time, kernels, launches, CUDA graph replays, host waits for the device (`cudaStreamSynchronize`, `cudaEventSynchronize`, synchronous `cudaMemcpy`; the harness's own two `cudaDeviceSynchronize` per phase counted apart) and host↔device copies.
+- **On a GPU** (`--device cuda:N`, which becomes every engine's device, and training's): the harness waits for the device at each phase boundary, so a phase's time is its work and not only its launches, and records per phase the peak allocation, the working memory above what was allocated once the phase's weights were placed, and the working memory the engine asked for (with the call that came closest to its own estimate: a phase's largest use and largest estimate can come from different calls), with the request's peak allocated and reserved memory. `--torch-profile` then also records the device's activity and summarises it per phase (`<case>.gpu.json`): wall and device-busy time, kernels, launches, CUDA graph replays, host waits for the device (`cudaStreamSynchronize`, `cudaEventSynchronize`, synchronous `cudaMemcpy`; the harness's own two `cudaDeviceSynchronize` per phase counted apart) and host↔device copies.
 - `--deterministic` runs with `torch.use_deterministic_algorithms(True, warn_only=True)` and `CUBLAS_WORKSPACE_CONFIG=:4096:8`, set by the harness (native code never sets process-wide state); operations without a deterministic implementation are listed in the record instead of failing the case. `train_perf.py --setting training.memory=low` measures a memory preset.
 - Records go to `MIZUOTO_PERF_DIR` (default `~/code_workspace/experiment/perf`), one JSON file per case and round.
 - A warm time is the fastest warm run: the machine's other work only ever slows a run down. Comparisons that matter are interleaved, the two codes in separate processes, one after the other.
@@ -343,7 +343,7 @@ The rotary tables, IndexTTS's in-place GELU and Fish Speech's Snake give their r
 
 **Settings on a GPU run.** `compute.cpu_allocator` and `compute.cpu_threads` change neither the warm time nor the load beyond the noise (two interleaved rounds, four engines). Of the CUDA allocators, `expandable` gives identical audio and weights with a little less memory reserved; `async` crashed every engine with CUDA graphs (illegal memory access after a capture): graphs are now not captured under it (`graphs.usable`), which runs, identical, without their speed (Fish Speech 3.1 → 7.3 s, Qwen3-TTS 1.3 → 2.0 s). Training stages now get the allocator in their environment whether or not the host has loaded a model.
 
-**Working memory on long texts** (about 30 s of speech, whole models): every language model stays well within its estimate (2–64 %), but the decoders go over, more as the text grows: VoxCPM 1.5's VAE 810 MB against 290 estimated, VoxCPM 2's 440 against 302, Fish Speech's codec 806 against 486, IndexTTS 1.5's BigVGAN 596 against 369, IndexTTS 2's 421 against 358. The calibration raises an estimate after a phase has measured more, and the out-of-memory retry covers the first time; the estimates are to be raised.
+**Working memory on long texts** (about 30 s of speech, whole models): every language model stays well within its estimate (2–64 %), but the decoders go over, more as the text grows: VoxCPM 1.5's VAE 810 MB against 290 estimated, VoxCPM 2's 440 against 302, Fish Speech's codec 806 against 486, IndexTTS 1.5's BigVGAN 596 against 369, IndexTTS 2's 421 against 358. The calibration raises an estimate after a phase has measured more, and the out-of-memory retry covers the first time; the estimates are to be raised (done: [memory estimates](#memory-estimates-calibrated)).
 
 **Training memory presets** on the GPU, the estimate (`MethodInfo.memory_mb`) against the measured peak, MB:
 
@@ -357,7 +357,7 @@ The rotary tables, IndexTTS's in-place GELU and Fish Speech's Snake give their r
 | GPT-SoVITS v2Pro speaker | 921 / 3,881 | 921 / 3,881 | 921 / 3,881 | does not repeat on the GPU |
 | Fish Speech S2 Pro LoRA | 14,105 / 9,978 | 14,105 / 9,978 | 14,105 / 9,978 | its export does not repeat |
 
-Most estimates are under the peak, some far under (GPT-SoVITS 4×), so the warning before a run says nothing when it should: they need calibrating. `lowest` halves Qwen3-TTS's peak but its host optimizer makes the run 15× slower (152 s before the first step, 6.2 s a step against 0.2 s); most of that was transparent huge pages, now off for such stages (G2, below).
+(Since calibrated: [memory estimates](#memory-estimates-calibrated).) Most estimates are under the peak, some far under (GPT-SoVITS 4×), so the warning before a run says nothing when it should: they need calibrating. `lowest` halves Qwen3-TTS's peak but its host optimizer makes the run 15× slower (152 s before the first step, 6.2 s a step against 0.2 s); most of that was transparent huge pages, now off for such stages (G2, below).
 
 ## GPU optimisation (G2)
 
@@ -422,6 +422,27 @@ Measured on the free GPUs (2026-10-18) against the exact path of the code after 
 Native is at least as fast in every case, warm and first; each native case gave the same audio in its three runs. A first pass beside the capped contract suite below (with 10 GB of the host swapped) had OmniVoice 12 % slower and two native loads over 100 s: measure such comparisons on a quiet machine. Not compared: time to first audio, peak memory, and 0.1's optional accelerators (vLLM, TensorRT).
 
 **The contract suite on the GPU** ([testing](/docs/development-testing)), every installed model, the licence-gated ones included: **144 passed** on the whole `cuda:0` (126 in 52 minutes, and VoxCPM's 18 from its own data folder), and **144 passed** on `cuda:1` capped at 4 GB (`MIZUOTO_TEST_SETTINGS='{"compute": {"vram_limit_mb": 4096}}'`, less than the large models (Fish Speech S2 Pro, IndexTTS 2, Qwen3-TTS 1.7B) need, so they stream and load partly through the whole stack; 2 h 6 min). The slowest capped test is a long Qwen3-TTS request (the narrator fine-tune's seed test: 2,778 s alone against 322 s whole): an autoregressive model that streams copies its streamed layers once per token.
+
+## Memory estimates calibrated
+
+Measured on the RTX 3090s (2026-10-18), the harness now recording each phase's worst single call (work against its own estimate; a phase's largest work and largest estimate can come from different calls, such as a reference's encoding and a decoding).
+
+**Decoders**, bytes per position of output (measured on short and about 30 s texts, then a fifth more): VoxCPM's VAE decoding 1,277 (1.5) and 643 (2) a position against the 256 estimated, its reference encoding 1,395 and 3,100 a sample against 256; Fish Speech's codec 1,922 a sample (the out-of-place Snake since G1 uses more) against 384; IndexTTS's BigVGAN 1,057 (2) and 771 plus 256 MB (1.5) against 256. Since raised, every decoder call, cold or warm, short, long or a batch of 8 (OmniVoice, GPT-SoVITS), stays at or under 82 % of its estimate (IndexTTS 1.5's BigVGAN; Fish's codec 73 %, VoxCPM's VAE 74 %); the closest phase of all is IndexTTS 2's GPT on a long text, 90 %, unchanged and within. Qwen3-TTS 1.7B under an 8 GB cap loads whole; under 4 GB its talker loads partly, and `meta.memory.partial` and the log line say which component, why and with what budget.
+
+**Training**, each method with its recipe's default batch (G1 had used the fixtures' smaller ones), peak MB by preset:
+
+| Fine-tune | `standard` | `low` | `lowest` |
+| --- | --- | --- | --- |
+| CosyVoice 2 / 3 `llm` (and 2's `llm_flow`) | 10,319 / 10,398 | 9,691 / 9,693 | 9,691 / 9,693 |
+| F5-TTS `full` | 8,821 | 7,395 | 5,374 |
+| Fish Speech S2 Pro LoRA, batch 1 / 2 / 4 | 12,267 / 15,641 / out of memory | the same | the same |
+| GPT-SoVITS `speaker` (batch 4; 2: 3,881) | 4,676 | 4,676 | 4,670 |
+| OmniVoice `full` / LoRA | 11,724 / 7,301 | 11,714 / 2,971 | 4,713 / 2,766 |
+| Qwen3-TTS 1.7B `speaker` | 18,276 | 18,267 | 7,356 |
+| VoxCPM 0.5B `full` | 16,733 | 12,719 | 12,719 |
+| VoxCPM 0.5B / 1.5 / 2 LoRA (batch 16; 0.5B at 2: 4,343) | 8,661 / 10,222 / 14,498 | 3,116 / 3,301 / 9,094 | 2,970 / 3,301 / 9,094 |
+
+The old rule of thumb was under nearly all of them (GPT-SoVITS 5×, VoxCPM's `lowest` LoRA up to 3.4×), and said 14.1 GB for Fish Speech's LoRA, which runs out of a 24 GB card at its default batch. Estimates are now these peaks scaled by the base model's size, plus a tenth and 512 MB, and follow the batch where the peak does; the warning names a batch that fits when no preset does.
 
 ## `torch.compile` on the CPU
 

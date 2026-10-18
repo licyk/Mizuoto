@@ -255,6 +255,22 @@ class LoadedVoxCpm(LoadedEngine):
         """The VAE's activations for ``samples`` of audio (its widest stages hold ~64 float32 channels per sample)."""
         return samples * 4 * 64 + 128 * 2**20
 
+    ENCODE_BYTES = {1: 1680, 2: 3712}
+    """Bytes an input sample takes while the VAE encodes a reference (at the rate it encodes: VoxCPM 2 at 16 kHz):
+    measured on an RTX 3090 with a 7 s reference, 1,395 for VoxCPM 1.5's VAE and 3,100 for VoxCPM 2's, with a fifth
+    more (0.5B's counted as 1.5's)."""
+
+    def _encode_memory(self, samples: int) -> int:
+        return samples * self.ENCODE_BYTES.get(self.config.version, 1680) + 128 * 2**20
+
+    DECODE_BYTES = {1: 1536, 2: 768}
+    """Bytes a decoded position (latent frames × ``decode_chunk_size``) takes while the VAE decodes a whole utterance:
+    measured on an RTX 3090 from about 5 to 30 s of speech, 1,277 for VoxCPM 1.5's VAE and 643 for VoxCPM 2's, with
+    a fifth more (VoxCPM 0.5B's VAE counted as 1.5's)."""
+
+    def _decode_memory(self, positions: int) -> int:
+        return positions * self.DECODE_BYTES.get(self.config.version, 1536) + 128 * 2**20
+
     def _element_size(self) -> int:
         import torch
 
@@ -301,7 +317,7 @@ class LoadedVoxCpm(LoadedEngine):
                 out["prompt"] = latent_patches(self.vae, audio, self.config.patch_size, "left", self.device)
             return out
 
-        return ctx.run("vae", [self.h_vae], encode, self._vae_memory(audio.shape[-1]))
+        return ctx.run("vae", [self.h_vae], encode, self._encode_memory(audio.shape[-1]))
 
     def prepare_voice(self, voice: VoiceSpec, cache_dir: Path, ctx: RequestContext) -> VoiceCache | None:
         if not voice.references:
@@ -464,7 +480,7 @@ class LoadedVoxCpm(LoadedEngine):
         from mizuoto.nn.dsp.tiles import tiled_1d
 
         tiled = ("in tiles of 256 latent frames", lambda: tiled_1d(self.vae.decode, latent.to(torch.float32), self.vae.decode_chunk_size))
-        audio = ctx.run("vae", [self.h_vae], lambda: self.vae.decode(latent.to(torch.float32)), self._vae_memory(latent.shape[-1] * self.vae.decode_chunk_size), fallback=tiled)
+        audio = ctx.run("vae", [self.h_vae], lambda: self.vae.decode(latent.to(torch.float32)), self._decode_memory(latent.shape[-1] * self.vae.decode_chunk_size), fallback=tiled)
         if cfgv.version == 2:
             if context_len > 0:
                 audio = audio[..., cfgv.patch_size * self.vae.decode_chunk_size * context_len :]

@@ -172,8 +172,44 @@ def test_memory_estimates_shrink_with_the_presets():
     full = estimate_mb("voxcpm", "full", 4580, lora=False)
     lora = estimate_mb("voxcpm", "lora", 4580, lora=True)
     assert full["standard"] > full["low"] >= full["lowest"] > 0
-    assert lora["standard"] > lora["low"] > lora["lowest"]
+    assert lora["standard"] > lora["low"] >= lora["lowest"]
     assert lora["standard"] < full["standard"]
     f5 = estimate_mb("f5tts", "full", 1286, lora=False)
     assert f5["standard"] - f5["low"] > 1286 * 0.9  # the averaged copy leaves the device
     assert estimate_mb("unknown", "full", 100, lora=False)["standard"] > 100
+
+
+def test_memory_estimates_cover_the_measured_peaks_and_follow_the_batch():
+    """The calibration: every measured peak is under its estimate; Fish Speech's default batch (4) does not fit a
+    24 GB card, batch 2 does (measured: 15,641 MB); GPT-SoVITS's estimate follows its batch."""
+    from mizuoto.core.training.estimate import MEASURED, estimate_mb
+
+    for (engine, method), found in MEASURED.items():
+        for m in found:
+            est = estimate_mb(engine, method, m.model_mb, "lora" in method)
+            assert all(est[p] >= m.peaks[p] for p in m.peaks), (engine, method)
+    fish = estimate_mb("fishspeech", "lora", 10498, lora=True)
+    assert fish["standard"] > 24 * 1024 > estimate_mb("fishspeech", "lora", 10498, lora=True, hyperparams={"batch_size": 2})["standard"] > 15641
+    small = estimate_mb("gptsovits", "speaker", 303, lora=False, hyperparams={"batch_size": 2})["standard"]
+    assert 3881 < small < estimate_mb("gptsovits", "speaker", 303, lora=False)["standard"]
+    assert estimate_mb("voxcpm", "lora", 1535, lora=True, hyperparams={"batch_size": 0}) == estimate_mb("voxcpm", "lora", 1535, lora=True)
+
+
+def test_the_warning_before_a_run_names_a_batch_that_fits(services, monkeypatch):
+    """No preset helps Fish Speech's LoRA at its recipe's batch (4) on a 24 GB card: the warning names the largest
+    batch the estimate fits (3: 2 measured 15.6 GB, 4 ran out of memory)."""
+    from types import SimpleNamespace
+
+    tr = services.training
+    method = SimpleNamespace(hyperparams={"batch_size": SimpleNamespace(default=4)})
+    monkeypatch.setattr(tr._models, "get", lambda _id: SimpleNamespace(size_mb=10498))
+    device = SimpleNamespace(id="cuda:0", memory_total_mb=24576, memory_used_mb=1100)
+    monkeypatch.setattr(tr._runtime.compute, "info", lambda refresh=False: SimpleNamespace(devices=[device]))
+    monkeypatch.setattr(tr, "method", lambda exp, engine: (None, method))
+    lines: list[str] = []
+    exp = SimpleNamespace(engine="fishspeech", method="lora", base_model="fishspeech/s2-pro", hyperparams={})
+    tr._preflight(exp, "cuda:0", SimpleNamespace(log=lines.append))
+    assert len(lines) == 1 and "lower the batch_size hyperparameter to 3" in lines[0]
+    lines.clear()
+    tr._preflight(SimpleNamespace(**{**vars(exp), "hyperparams": {"batch_size": 2}}), "cuda:0", SimpleNamespace(log=lines.append))
+    assert lines == []

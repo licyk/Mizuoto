@@ -159,6 +159,13 @@ def load_audio(path: str, sr: int | None, max_seconds: float = MAX_REFERENCE_SEC
     return (audio[:, :limit] if audio.shape[1] > limit else audio), target
 
 
+def bigvgan_memory(samples: int, per_sample: int, fixed_mb: int = 256) -> int:
+    """BigVGAN's activations for ``samples`` of output: ``per_sample`` bytes each and ``fixed_mb``, measured on an RTX
+    3090 from about 4 to 30 s of speech (IndexTTS 2: 1,057 bytes; 1.5: 771 bytes and 256 MB, each segment decoded
+    alone), with a fifth more."""
+    return samples * per_sample + fixed_mb * 2**20
+
+
 def gpt_memory(gpt: Any, beams: int, text_tokens: int, max_new_tokens: int, half: bool, codes: int | None = None) -> int:
     """The GPT's beam caches (each beam's keys and values per layer, twice: ``BeamCaches`` copies them into its other
     buffer each step) for the prompt and ``codes`` codes, else those its text is likely to need (``CODES_PER_TOKEN`` a
@@ -521,7 +528,7 @@ class LoadedIndexTts2(LoadedEngine):
 
         vocoder = self.compiled_bigvgan or self.bigvgan
         tiled = ("in tiles of 256 frames", lambda: tiled_1d(vocoder, mel.float(), int(self.mel_args["hop_size"])).squeeze().unsqueeze(0).squeeze(1))
-        wav = ctx.run("bigvgan", [self.h_bigvgan], lambda: vocoder(mel.float()).squeeze().unsqueeze(0).squeeze(1), mel.shape[-1] * 256 * 4 * 64 + 256 * 2**20, fallback=tiled)
+        wav = ctx.run("bigvgan", [self.h_bigvgan], lambda: vocoder(mel.float()).squeeze().unsqueeze(0).squeeze(1), bigvgan_memory(mel.shape[-1] * 256, 1272), fallback=tiled)
         return torch.clamp(32767 * wav, -32767.0, 32767.0).cpu()
 
     def _texts(self, task: SynthesisTask, max_tokens: int, lang: str | None) -> list[torch.Tensor]:
@@ -832,7 +839,7 @@ class LoadedIndexTts15(LoadedEngine):
                         return (self.compiled_bigvgan or self.bigvgan)(latent, cond_mel.transpose(1, 2)).squeeze(1)
 
                 latent = ctx.run("gpt", [self.h_gpt], latents, gpt_memory(self.gpt, beams, tokens, int(sampling.max_new_tokens), bool(self.half), int(codes_t.shape[-1])))
-                wav = ctx.run("bigvgan", [self.h_bigvgan], lambda latent=latent: vocode(latent), latent.shape[1] * 1024 * 4 * 64 + 256 * 2**20)
+                wav = ctx.run("bigvgan", [self.h_bigvgan], lambda latent=latent: vocode(latent), bigvgan_memory(latent.shape[1] * 1024, 928, 320))
                 wavs.append(torch.clamp(32767 * wav.float(), -32767.0, 32767.0).cpu())
         ctx.check_cancel()
         out_wav = fade_out_tail(torch.cat(wavs, dim=1), RATES["v1_5"])

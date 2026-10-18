@@ -18,8 +18,8 @@
 On a CUDA device (``--device cuda:N``, which every engine's ``engines.<id>.device`` is set to) the harness waits for the
 device at each phase boundary, so a phase's time is its work rather than its launches, and records per phase the peak
 allocation (``torch.cuda.max_memory_allocated``), the working memory over what was allocated once the phase's weights
-were placed, and the working memory the engine asked for (``ctx.use``'s ``memory``), with the request's peak allocated
-and reserved memory. The two waits per phase are the harness's own; the engines' code is unchanged.
+were placed, and the working memory the engine asked for (``ctx.use``'s ``memory``), the call that came closest to its own
+estimate (``worst_work_mb``, ``worst_estimate_mb``), with the request's peak allocated and reserved memory. The two waits per phase are the harness's own; the engines' code is unchanged.
 
 ``--profile`` runs the case once more, uncounted, under cProfile (``<case>.prof``, and the top functions by own and
 cumulative time in ``<case>.profile.txt``); ``--torch-profile`` under torch's profiler (the operators by their own CPU
@@ -79,6 +79,7 @@ class _Frame:
         self.children = 0.0
         self.placed = 0  # bytes allocated on the device once the phase's weights were placed
         self.peak = 0  # the device's peak allocation during the phase after placement, nested phases included
+        self.estimate = 0  # the working memory this call set aside
 
 
 class PhaseTimer:
@@ -148,6 +149,7 @@ class PhaseTimer:
             return
         self.fold(torch, device)  # the placement's own peak counts for the request, not for the phase's working memory
         frame.peak = frame.placed = torch.cuda.memory_allocated(device)
+        frame.estimate = estimate
         m = self.memory.setdefault(frame.name, {"peak_mb": 0.0, "work_mb": 0.0, "estimate_mb": 0.0, "placed_mb": 0.0})
         m["estimate_mb"] = max(m["estimate_mb"], round(estimate / MB, 1))
         m["placed_mb"] = max(m["placed_mb"], round(frame.placed / MB, 1))
@@ -161,6 +163,12 @@ class PhaseTimer:
         m = self.memory[frame.name]
         m["peak_mb"] = max(m["peak_mb"], round(frame.peak / MB, 1))
         m["work_mb"] = max(m["work_mb"], round((frame.peak - frame.placed) / MB, 1))
+        # the maxima above may come from different calls (a reference's encoding, a decoding): the call that came
+        # closest to its own estimate, with both its numbers
+        work = (frame.peak - frame.placed) / MB
+        if frame.estimate and work / (frame.estimate / MB) > m.get("worst_ratio", 0.0):
+            m["worst_ratio"] = round(work / (frame.estimate / MB), 3)
+            m["worst_work_mb"], m["worst_estimate_mb"] = round(work, 1), round(frame.estimate / MB, 1)
 
     def install(self) -> None:
         from mizuoto.runtime.context import RequestContext

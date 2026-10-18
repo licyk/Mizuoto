@@ -146,7 +146,7 @@ InvokeAI 的前后端结构是这个骨架的出发点。采用的部分：
 | 只有线性层和卷积层的权重流式加载，嵌入从不 | 码本嵌入常通过 `.weight` 直接读取（余弦搜索、`F.embedding`）；ComfyUI 同样只流式加载它的 ops 层 |
 | GPT-SoVITS 的 T2S 整体常驻设备 | 它的块经 `prompt` / `step` 直接读取融合的投影权重；模型只有 150 MB |
 | 只为部分解码器提供分块回退（ASR、GPT-SoVITS、F5-TTS 的 Vocos、IndexTTS 2 的 BigVGAN、VoxCPM 的 VAE） | Qwen3-TTS 的编解码器本来就分块解码；CosyVoice 的 HiFT 带有贯穿全句的相位，分块会破坏它；其余都很短 |
-| 训练前估算显存超出时只在日志里警告并给出能放下的预设，不拒绝 | 估算来自文件大小，未在 GPU 上校准 |
+| 训练前估算显存超出时只在日志里警告并给出能放下的预设，不拒绝 | 估算按方法和预设在一块 GPU（RTX 3090）上以配方默认批量校准；数据和其他 GPU 会使它偏离 |
 | 训练显存工具只提供保持结果的手段和少数轻微改变结果的手段；不提供 Adafactor 或内存不足时拆分 micro-batch | 后者改变训练配方，超出预设的承诺 |
 | `compute.max_resident_models` 全局限制常驻模型数（默认 3），最久未用的空闲模型先卸载 | 所有引擎的模型共用一个进程和它的内存 |
 | 主机探测设备时不导入 torch：先问 nvidia-smi、rocm-smi / amd-smi 和平台信息，只在 torch 的构建可能看到工具漏掉的 GPU 时才用子进程 | 列出设备、提供界面不应付出导入 torch 的一两秒 |
