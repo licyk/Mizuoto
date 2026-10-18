@@ -79,12 +79,59 @@ class GPT2Attention(nn.Module):
 
     def attend(self, q: torch.Tensor, k: torch.Tensor, v: torch.Tensor, cache: list[torch.Tensor] | None) -> tuple[torch.Tensor, list[torch.Tensor]]:
         """The cache and attention, before ``c_proj``: (rows, length, dim), and the keys and values so far."""
-        if cache is not None:
+        if isinstance(cache, _Grown):  # a BeamCaches layer: the last position is this step's
+            cache[0][:, :, -1:].copy_(k)
+            cache[1][:, :, -1:].copy_(v)
+            k, v = cache
+        elif cache is not None:
             k, v = torch.cat([cache[0], k], dim=-2), torch.cat([cache[1], v], dim=-2)
         is_causal = q.shape[-2] > 1
         out = attention(q.contiguous(), k.contiguous(), v.contiguous(), site=SITE, causal=is_causal)
         out = out.transpose(1, 2).contiguous()
         return out.reshape(*out.shape[:-2], -1).contiguous(), [k, v]
+
+
+class _Grown(list):
+    """One layer's ``[keys, values]`` from ``BeamCaches``, one position longer than the step's input: ``attend`` writes
+    the new key and value there instead of concatenating."""
+
+
+class BeamCaches(list):
+    """The beams' keys and values for every layer, ``(layers, 2, beams, heads, length, head_dim)`` in one buffer.
+
+    ``advance`` grows them by a position with the beams' rows reordered: one copy of the whole cache (one per beam, or
+    one when no beam moved) instead of an ``index_select`` and a ``torch.cat`` for each layer's keys and values, each
+    copying the whole tensor. Two buffers with room to grow take turns, so most steps allocate nothing. Each layer's
+    keys and values stay contiguous, as ``torch.cat`` made them, and hold the same values: attention computes the same.
+    """
+
+    ROOM = 128
+    """Positions a buffer grows by when the cache outgrows it (up to ``limit``)."""
+
+    def __init__(self, caches: list[list[torch.Tensor]], limit: int) -> None:
+        self.buffer = torch.stack([torch.stack(kv) for kv in caches])
+        self.limit = limit
+        """The longest the cache gets: the decoding's ``max_length``."""
+        self._pool, self._spare = self.buffer.view(-1), self.buffer.new_empty(0)
+        super().__init__([list(layer.unbind(0)) for layer in self.buffer.unbind(0)])
+
+    def advance(self, kept: list[int]) -> None:
+        """Make room for the next step's keys and values, beam ``i`` continuing beam ``kept[i]``."""
+        old, length = self.buffer, self.buffer.shape[4]
+        shape = (*old.shape[:4], length + 1, old.shape[5])
+        need = math.prod(shape)
+        if self._spare.numel() < need:
+            room = max(min(self.ROOM, self.limit - length - 1), 0)
+            self._spare = old.new_empty(need + math.prod(shape[:4]) * room * shape[5])
+        new = self._spare[:need].view(shape)
+        if kept == list(range(len(kept))):
+            new[:, :, :, :, :length].copy_(old)
+        else:
+            for i, j in enumerate(kept):
+                new[:, :, i, :, :length].copy_(old[:, :, j])
+        self._pool, self._spare = self._spare, self._pool
+        self.buffer = new
+        self[:] = [_Grown(layer.unbind(0)) for layer in new.unbind(0)]
 
 
 class GPT2MLP(nn.Module):
@@ -416,7 +463,7 @@ def beam_sample(
     beam_scores = beam_scores.view((n,))
     hyps = _Hypotheses(n, s.length_penalty)
     done = False
-    caches: list[list[torch.Tensor]] | None = None
+    caches: BeamCaches | None = None
     keep = 2 * n
     next_tokens = next_indices = None
     if s.kv_cache:
@@ -428,7 +475,7 @@ def beam_sample(
             start = model.mel_embedding(ids[:, mel_len:]) + model.mel_pos_embedding(ids[:, mel_len:])
             emb = torch.cat([prompt.repeat_interleave(n, 0), start], dim=1)
             hidden, new_caches = model.gpt(emb, caches)
-            caches = new_caches if s.kv_cache else None
+            caches = BeamCaches(new_caches, max_length) if s.kv_cache else None
             logits = model.logits(hidden)[:, -1, :].clone().float()
         else:
             emb = model.mel_embedding(ids[:, -1:]) + model.mel_pos_embedding.fixed(ids.shape[1] - mel_len, device)
@@ -480,10 +527,10 @@ def beam_sample(
         moves = torch.stack([new_indices.view(-1), new_tokens.view(-1)]).to(device, non_blocking=True)
         beam_idx = moves[0]
         ids = torch.cat([ids[beam_idx, :], moves[1].unsqueeze(-1)], dim=-1)
-        if caches is not None and kept != list(range(n)):  # the beams kept their rows: nothing to move
-            caches = [[t.index_select(0, beam_idx) for t in layer] for layer in caches]
         if done or ids.shape[-1] >= max_length or all_stopped:
             break
+        if caches is not None:
+            caches.advance(kept)
     # BeamSearchScorer.finalize
     if not done:
         for i in range(n):

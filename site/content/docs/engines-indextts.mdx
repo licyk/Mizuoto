@@ -65,7 +65,7 @@ IndexTTS-2 对每个文本分段：
 
 阶段：音色未缓存时依次是 w2v-BERT、CAM++、语义编解码器和长度调节器（情感音频只用 w2v-BERT）；有情感文本时是情感模型；然后是 GPT（`kind="sequence"`；它的 GPT-2 `Conv1D` 层像线性层一样流式加载）、s2mel 和 BigVGAN。克隆已缓存的音色时从不放置 w2v-BERT 或 CAM++。开启 `compute.oom_fallback` 时，若 BigVGAN 显存不足，就分块解码（IndexTTS 2/2.5）。GPT 的工作内存按每个分段估算：其文本 token 数和每个 token 24 个编码（实际语速约为 5），不超过 `max_mel_tokens`，计入每一束，按它实际计算所用的 dtype。
 
-束采样原来每一步约等待设备十次（`torch.multinomial` 的检查、评分器用 `.item()` 读取每个候选、停止判断、束重排、位置嵌入的下标张量）。现在只等一次：抽样用 `multinomial` 自己的 `topk(p / Exp(1), 2 × beams)`（`runtime.sampling.multinomial_draws`，在 CPU 和 CUDA 上 id 和生成器状态都相同）；候选的分数、token 和所属束一次读回，评分器在主机上根据这些值做决定；位置嵌入直接取表中的一行。开启 `compute.cuda_graphs`（NVIDIA，GPT 完整位于设备上并使用 KV 缓存：IndexTTS 2/2.5，以及 fp16 下的 1.5）时，所有束的 GPT-2 单 token 步骤以 CUDA 图运行在每层注意力的两侧；缓存、它的束重排和采样仍以 eager 方式进行。音频相同，按 1.5 的尺寸每步快 2.6–3.2 倍。
+束采样原来每一步约等待设备十次（`torch.multinomial` 的检查、评分器用 `.item()` 读取每个候选、停止判断、束重排、位置嵌入的下标张量）。现在只等一次：抽样用 `multinomial` 自己的 `topk(p / Exp(1), 2 × beams)`（`runtime.sampling.multinomial_draws`，在 CPU 和 CUDA 上 id 和生成器状态都相同）；候选的分数、token 和所属束一次读回，评分器在主机上根据这些值做决定；位置嵌入直接取表中的一行。开启 `compute.cuda_graphs`（NVIDIA，GPT 完整位于设备上并使用 KV 缓存：IndexTTS 2/2.5，以及 fp16 下的 1.5）时，所有束的 GPT-2 单 token 步骤以 CUDA 图运行在每层注意力的两侧；缓存、它的束重排和采样仍以 eager 方式进行。音频相同，按 1.5 的尺寸每步快 2.6–3.2 倍。所有层各束的键和值共用一个缓冲区（`BeamCaches`）：每一步把它加长一个位置，各束的行按重排顺序每束复制一次，然后每层在原处写入新的键和值；每层的键和值仍是原来 `index_select` 和 `torch.cat` 得到的连续张量，复制量减半（30 秒语音快 ×1.11）。
 
 CPU 上以 fp32 运行 `compute.compile`：s2mel DiT 的热启动时间减少 7 %，BigVGAN 减少 20 %；音频与 eager 相差不超过 6.1e-5（87.7 dB）。
 

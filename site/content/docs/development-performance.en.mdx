@@ -367,6 +367,7 @@ Measured on the free GPUs (2026-10-18) against the exact path of the code after 
 
 - **Prefetch only where it pays** ([memory](/docs/development-memory)): `sequence` handles (autoregressive models; GPT-SoVITS's T2S is one now too) neither prefetch nor reserve room for copies in flight. Partly loaded (G1's caps), interleaved runs on a quiet GPU: Qwen3-TTS base-clone-en 24.6 → 16.2 s, VoxCPM v2-clone-en 29.0 → 13.6 s, CosyVoice v2-clone-en 10.1 → 7.4 s, each equal to no side streams, while F5-TTS and OmniVoice keep their prefetch. The audio is the whole model's.
 - **CosyVoice's flow U-Net under `compute.compile`** recompiled at every request (its per-level attention mask was cached by the mask's identity, which torch.compile guards on): warm requests took 12.8 s instead of 1.0 s. Keyed by the U-Net's level now; compiled, 0.97 s; eager, the same audio as before.
+- **IndexTTS's beam caches in one buffer** (done after the round, measured against `fc4b6b3`, two interleaved rounds): every layer's keys and values sit in one buffer, so a step's beam reorder is one copy per beam (one when no beam moved) and each layer writes its new key and value in place, instead of an `index_select` and a `torch.cat` per tensor, each copying it whole. Two buffers with room to grow take turns. Identical on the GPU and the CPU. Warm: v15-clone-en 0.58 → 0.54 s, v2-clone-en 2.02 → 1.93 s, v25-clone-zh 1.73 → 1.67 s; about 30 s of speech ×1.11–1.12 (1.5 4.79 → 4.29 s, 2 17.57 → 15.81 s); on the CPU ×1.02–1.05.
 
 **`compute.compile`** (opt-in, default inductor mode), warm request and first-request cost against eager:
 
@@ -396,7 +397,6 @@ Measured on the free GPUs (2026-10-18) against the exact path of the code after 
 - **OmniVoice's step forward as a CUDA graph**: identical, 2 % faster. Outside the profiler its language model keeps the GPU about 90 % busy, so there is little launch time to save.
 - **Loading straight to the device**: a load takes 1.6–4.8 s with the page cache warm, of which 0.5–1.7 s is copying tensors on the host, and the first model in a process also pays about 2 s of imports (torch, inflect); loading to the device would drop the host copy that makes offloading free.
 - **Classifier-free guidance in one batch**: already so in F5-TTS, CosyVoice, IndexTTS's s2mel, OmniVoice and VoxCPM (as upstream); GPT-SoVITS v3–v5's CFM calls its estimator twice, and batching it would change the bits.
-- **IndexTTS's beam reorder fused with the cache concatenation**: about 4 % of its GPT's time on the CPU, less on the GPU, where the reorder sits between graphs.
 
 **Training's `low` preset** (gradient checkpointing) against the plan's +35 % per step: F5-TTS +6 %, VoxCPM +51 %, Qwen3-TTS +80 %, OmniVoice +104 % (G0's runs).
 

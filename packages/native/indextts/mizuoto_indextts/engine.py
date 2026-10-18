@@ -160,9 +160,11 @@ def load_audio(path: str, sr: int | None, max_seconds: float = MAX_REFERENCE_SEC
 
 
 def gpt_memory(gpt: Any, beams: int, text_tokens: int, max_new_tokens: int, half: bool, codes: int | None = None) -> int:
-    """The GPT's beam caches (each beam's keys and values per layer, copied whole when the beams are reordered) for the
-    prompt and ``codes`` codes, else those its text is likely to need (``CODES_PER_TOKEN`` a token, within
-    ``max_new_tokens``), in the dtype it computes in (fp16 under autocast), and working memory. A generation that runs
+    """The GPT's beam caches (each beam's keys and values per layer, twice: ``BeamCaches`` copies them into its other
+    buffer each step) for the prompt and ``codes`` codes, else those its text is likely to need (``CODES_PER_TOKEN`` a
+    token, within ``max_new_tokens``), in the dtype it computes in (fp16 under autocast), and working memory, which also
+    covers the buffers' room to grow (``BeamCaches.ROOM`` positions each: about 190 MB for IndexTTS 2 in float32 with
+    three beams). A generation that runs
     longer still runs: if its caches then outgrow the device, the phase runs again with more weights streamed."""
     layers, width = len(gpt.gpt.h), gpt.gpt.h[0].attn.dim
     new = codes if codes is not None else min(max_new_tokens, CODES_PER_TOKEN * text_tokens + 64)

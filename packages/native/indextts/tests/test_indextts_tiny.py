@@ -494,3 +494,26 @@ def test_the_gpt_estimate_follows_the_text_and_the_dtype(models):
     assert gpt_memory(gpt, 3, 100, 1500, True) == cache(PROMPT_POSITIONS + 100 + 1500) + base  # capped
     assert gpt_memory(gpt, 3, 10, 1500, False) == cache(PROMPT_POSITIONS + 10 + CODES_PER_TOKEN * 10 + 64, element=4) + base
     assert gpt_memory(gpt, 1, 10, 1500, True, codes=7) == cache(PROMPT_POSITIONS + 17, beams=1) + base
+
+
+def test_the_beam_caches_hold_what_reordering_and_concatenating_would():
+    """``BeamCaches``: a step's reorder and growth in one buffer give each layer the keys and values ``index_select`` and
+    ``torch.cat`` give (contiguous, the same values), past a buffer's room and up to its limit."""
+    from mizuoto_indextts.gpt import BeamCaches, GPT2Attention
+
+    g = torch.Generator().manual_seed(0)
+    beams, heads, length, steps = 3, 2, 5, BeamCaches.ROOM + 10
+    attn = GPT2Attention(8, heads)
+    plain = [[torch.randn(beams, heads, length, 4, generator=g) for _ in range(2)] for _ in range(3)]
+    caches = BeamCaches([list(kv) for kv in plain], limit=length + steps)
+    for step in range(steps):
+        kept = [0, 1, 2] if step % 3 == 0 else torch.randint(0, beams, (beams,), generator=g).tolist()
+        caches.advance(kept)
+        order = torch.tensor(kept)
+        for i in range(len(plain)):
+            q, k, v = (torch.randn(beams, heads, 1, 4, generator=g) for _ in range(3))
+            want_out, plain[i] = attn.attend(q, k, v, [t.index_select(0, order) for t in plain[i]])
+            out, caches[i] = attn.attend(q, k, v, caches[i])
+            assert torch.equal(out, want_out)
+            assert all(a.is_contiguous() and torch.equal(a, b) for a, b in zip(caches[i], plain[i]))
+    assert caches.buffer.shape[4] == length + steps
