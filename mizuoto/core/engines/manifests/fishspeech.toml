@@ -56,6 +56,8 @@ min = 0.9
 max = 2.0
 step = 0.01
 default = 1.1
+hidden = true
+help = "No effect: S2 Pro's sampler does not use it (upstream's neither); accepted so that requests sending it keep working."
 
 [params.max_new_tokens]
 target = "max_new_tokens"
@@ -84,7 +86,8 @@ help = "How long, in text bytes, the text segments upstream generates one after 
 [options.normalize]
 type = "bool"
 default = true
-help = "Normalise numbers and symbols in English and Chinese text."
+group = "hidden"
+help = "No effect: upstream's inference never reads it (it promised to normalise numbers and symbols); accepted so that requests sending it keep working."
 
 # -- models ---------------------------------------------------------------------------
 

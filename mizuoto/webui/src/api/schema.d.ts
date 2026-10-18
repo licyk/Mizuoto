@@ -4015,6 +4015,11 @@ export interface components {
              * @default true
              */
             streaming: boolean;
+            /**
+             * Hidden
+             * @default false
+             */
+            hidden: boolean;
         };
         /** PathRequest */
         PathRequest: {

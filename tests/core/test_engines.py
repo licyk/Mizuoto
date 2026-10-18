@@ -242,3 +242,20 @@ def test_load_options_are_replaced_and_checked(services):
     assert services.settings.settings.engines["indextts"].load_options == {}
     with pytest.raises(ParameterError):  # v1's accelerators are gone
         services.engines.configure("cosyvoice", {"load_options": {"load_trt": True}})
+
+
+def test_parameters_without_effect_are_accepted_but_not_offered():
+    """Fish Speech's ``repetition_penalty`` and ``normalize`` reach nothing (upstream's neither): requests that send them
+    still validate, and the UI's form leaves them out."""
+    from pathlib import Path
+
+    import mizuoto.core.engines as engines_pkg
+    from mizuoto.core.engines.params import check_options, check_params, param_fields
+    from mizuoto.core.engines.registry import load_manifest
+
+    manifest = load_manifest(Path(engines_pkg.__file__).parent / "manifests" / "fishspeech.toml")
+    names = {f.name for f in param_fields(manifest, "s2_pro")}
+    assert "temperature" in names and not {"repetition_penalty", "normalize"} & names
+    params, _ = check_params(manifest, "s2_pro", {"repetition_penalty": 1.2}, strict=True)
+    assert params["repetition_penalty"] == 1.2
+    assert check_options(manifest, "s2_pro", {"normalize": False}) == {"normalize": False}

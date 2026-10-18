@@ -12,7 +12,7 @@ commit = "074ca6dc9e80a2f424f1f74b48bdd7d3fea531cc"
 [licence]
 id = "apache-2.0"
 name = "Apache License 2.0"
-url = "https://github.com/FunAudioLLM/CosyVoice/blob/main/LICENSE"
+url = "https://github.com/QwenAudio/CosyVoice/blob/main/LICENSE"
 
 # Upstream splits long text itself (text_normalize). CosyVoice 3 does not when its system prompt
 # leads the text, so Mizuoto splits for it.

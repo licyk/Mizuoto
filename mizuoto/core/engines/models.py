@@ -115,6 +115,8 @@ class ParamSpec(Record):
     """Only these variants take it; None: all."""
     streaming: bool = True
     """False: not available while streaming."""
+    hidden: bool = False
+    """Accepted (requests that send it keep working) but left out of the UI's form: the engine has no use for it."""
 
 
 class OptionSpec(Record):

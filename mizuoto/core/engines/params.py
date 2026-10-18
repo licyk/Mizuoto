@@ -106,7 +106,7 @@ def param_fields(manifest: EngineManifest, variant: str) -> list[ParamField]:
     """The common parameters, then the options, of one variant, for the UI's form."""
     fields: list[ParamField] = []
     for name, spec in manifest.params.items():
-        if _in_variant(spec, variant):
+        if _in_variant(spec, variant) and not spec.hidden:
             fields.append(
                 ParamField(
                     name=name,
