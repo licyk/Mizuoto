@@ -221,6 +221,6 @@ GPU 上的自回归模型每一步要启动几千个小内核（Qwen3-TTS：每 
 
 - 所有注意力都经 `accel.attention`，每个调用点一个 `Site`；上游手写的注意力作为调用点的 `reference`；掩码由结构构造时传 `mask_info`。
 - 用 `multinomial1` / `multinomial_draws` 抽样，解码步骤中除每步一次之外不等待设备（不用 `.item()`、`tolist()`、写入张量的 Python 标量、掩码赋值）。
-- CUDA Graph：在固定张量上运行一步，仅当 `graphs.usable(device, runtime.options.cuda_graphs)` 且模型整个在设备上时用 `Graphs` / `LayerSteps` 捕获，图随已加载模型保留，`signature` 变化时丢弃；在 `drawing(ctx.generator_for(device))` 中抽样。
+- CUDA Graph：在固定张量上运行一步，仅当 `graphs.usable(device, runtime.options.cuda_graphs)` 且模型整个在设备上时用 `Graphs` / `LayerSteps` 捕获，图随已加载模型保留，`signature` 变化时丢弃；在 `drawing(ctx.generator_for(device))` 中抽样。捕获和重放都要在 `torch.cuda.device(graphs.device)` 下进行：重放在当前设备的流上运行，所以模型在 `cuda:1` 上而当前设备是 `cuda:0` 时重放会因非法内存访问而出错（CosyVoice 在 2026-10-18 之前就是如此）。
 - 对耗时且反复调用的模块用 `compile_module(module, runtime.options.compile, name)` 包装，调用 `compiled or module`。
 - 验证：小型引擎在 CUDA 上开关图、故意让捕获失败、以及 `MIZUOTO_TEST_ACCEL=count` 下的音频都完全相同。见[接入引擎](/docs/development-engine)和[测试](/docs/development-testing)。

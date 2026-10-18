@@ -327,11 +327,14 @@ class _Steps:
         assert self.x is not None and self.positions is not None and self.logp is not None
         self.x.copy_(lm_input)
         self.positions.fill_(cache.length)
-        if self._steps is None:
-            self._steps = self._capture(self._decoder_steps)
+        # Captured and replayed with the graphs' device current: a replay runs on the current device's stream, so a
+        # model on cuda:1 replayed while cuda:0 is current faults (an illegal memory access).
+        with torch.cuda.device(self.graphs.device):
             if self._steps is None:
-                return self.step(lm_input, cache)
-        self._steps(None, cache)
+                self._steps = self._capture(self._decoder_steps)
+                if self._steps is None:
+                    return self.step(lm_input, cache)
+            self._steps(None, cache)
         return self.logp, cache
 
     def _decoder_steps(self) -> Any:
