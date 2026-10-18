@@ -10,6 +10,7 @@ pass and is never used under autograd.
 
 from __future__ import annotations
 
+import contextlib
 import importlib
 import importlib.metadata
 import inspect
@@ -199,6 +200,11 @@ def _xformers_probe(device: torch.device) -> str | None:
 # -- SageAttention -------------------------------------------------------------------------------------------
 
 
+def _current(q: torch.Tensor) -> Any:
+    """``q``'s CUDA device made current while a kernel launches (nothing elsewhere)."""
+    return torch.cuda.device(q.device) if q.is_cuda else contextlib.nullcontext()
+
+
 def sage(
     q: torch.Tensor, k: torch.Tensor, v: torch.Tensor, mask: Any, causal: bool, scale: float | None, enable_gqa: bool, dropout_p: float, info: MaskInfo | None
 ) -> torch.Tensor:
@@ -207,7 +213,8 @@ def sage(
     if mask is not None:  # only a causal mask over equal lengths gets here (the constraints)
         causal = True
     k, v = repeat_heads(q, k, v)
-    return sageattn(q.contiguous(), k.contiguous(), v.contiguous(), tensor_layout="HND", is_causal=causal, sm_scale=scale)
+    with _current(q):  # its Triton kernels launch on the current device: on another, they fault
+        return sageattn(q.contiguous(), k.contiguous(), v.contiguous(), tensor_layout="HND", is_causal=causal, sm_scale=scale)
 
 
 def _sage_probe(device: torch.device) -> str | None:
@@ -229,7 +236,8 @@ def sage3(
     from sageattn3 import sageattn3_blackwell  # ty: ignore[unresolved-import]
 
     k, v = repeat_heads(q, k, v)
-    return sageattn3_blackwell(q.contiguous(), k.contiguous(), v.contiguous(), is_causal=causal)
+    with _current(q):  # as ``sage``
+        return sageattn3_blackwell(q.contiguous(), k.contiguous(), v.contiguous(), is_causal=causal)
 
 
 def _sage3_probe(device: torch.device) -> str | None:
