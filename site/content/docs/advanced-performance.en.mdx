@@ -55,7 +55,7 @@ Mizuoto manages GPU memory as ComfyUI does. A request places only the parts of a
 | `compute.ram_reserve_mb` | empty | RAM left free (MB; empty: the larger of 2 GB and a tenth of the RAM): below it, copies kept in RAM are dropped and idle models unloaded |
 | `compute.host_copies` | `auto` | keep a copy in RAM of the weights of models on a GPU, so moving them off it costs nothing (`auto`: while RAM allows) |
 | `compute.max_pinned_mb` | `0` | page-locked RAM for weights that stream to a GPU (faster copies; `0`: up to 40 % of RAM on Windows, more on Linux) |
-| `compute.async_offload` | `-1` | copy streams that move streamed weights while the GPU computes (`-1`: two on NVIDIA and AMD, none elsewhere) |
+| `compute.async_offload` | `-1` | copy streams that move streamed weights while the GPU computes (`-1`: two on NVIDIA and AMD, none elsewhere); used for models that run once per input, not for autoregressive ones, where they only cost memory |
 | `compute.oom_retry` | on | when a step runs out of GPU memory, run it again with more of its weights in RAM: the same result, slower |
 | `compute.oom_fallback` | off | after that, allow a cheaper way for the step (tiled decoding, smaller batches): it fits in less memory, and its output differs slightly and says so |
 | `compute.kv_cache` | `dynamic` | `static`: Qwen3-TTS's and CosyVoice's language models write their caches into preallocated buffers (less copying and fragmentation). Identical on a CPU; opt-in because on a GPU it may change results in the last bits |

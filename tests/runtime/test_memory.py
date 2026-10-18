@@ -349,7 +349,7 @@ def test_the_streamer_learns_the_order_and_prefetches():
     model = Blocks(6)
     x = torch.randn(2, WIDTH, generator=torch.Generator().manual_seed(3))
     expected = run(model, x)
-    h = ModelHandle(model, name="m", load_device="cpu", kind="sequence")
+    h = ModelHandle(model, name="m", load_device="cpu", kind="oneshot")
     h.simulated = h.strict = h.keep_host = True
     streamer = Streamer("cpu", streams=2)
     h.load(h.minimum_bytes(streamer.copies), streamer)
@@ -364,6 +364,26 @@ def test_the_streamer_learns_the_order_and_prefetches():
     assert copied[0] == 6 and copied[2:] == [6, 6]
     assert hits[0] == 0 and hits[2:] == [6, 6]
     assert streamer._next == {(id(h), i): (id(h), i + 1) for i in range(5)} | {(id(h), 5): (id(h), 0)}
+    h.settle()
+    assert streamer.cached_bytes == 0
+
+
+def test_a_sequence_handle_streams_one_unit_at_a_time_without_prefetching():
+    """An autoregressive model's layers are not prefetched (a token's work hides none of a copy) and hold one copy, so
+    its placement sets aside one unit's room instead of ``streams + 1``; the result is the resident one's."""
+    model = Blocks(6)
+    x = torch.randn(2, WIDTH, generator=torch.Generator().manual_seed(3))
+    expected = run(model, x)
+    h = ModelHandle(model, name="m", load_device="cpu", kind="sequence")
+    h.simulated = h.strict = h.keep_host = True
+    streamer = Streamer("cpu", streams=2)
+    assert streamer.copies_for(h) == 1 and h.minimum_bytes(streamer.copies_for(h)) == h.fixed_bytes + unit_bytes()
+    h.load(h.minimum_bytes(1), streamer)
+    assert not any(u.resident for u in h.units)
+    for _ in range(3):
+        assert torch.equal(run(model, x), expected)
+        assert streamer.peak_bytes <= unit_bytes()  # never more than the running unit's copy
+    assert streamer.hits == 0
     h.settle()
     assert streamer.cached_bytes == 0
 

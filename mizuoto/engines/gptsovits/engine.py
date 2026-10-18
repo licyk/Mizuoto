@@ -227,8 +227,9 @@ class LoadedGptSovits(LoadedEngine):
             self.vocoder = load_vocoder(folder / VOCODERS[spec.variant], "cpu", self.precision)
         self._handles: dict[str, ModelHandle] = {}
         for name, module in (("hubert", self.hubert), ("bert", self.bert), ("sv", self.sv), ("t2s", self.t2s), ("sovits", self.sovits), ("vocoder", self.vocoder)):
-            if module is not None:
-                self._handles[name] = ModelHandle(module, name=f"{spec.model_id}:{name}", load_device=spec.device)
+            if module is not None:  # the T2S generates a token at a time: a fixed prefix of its layers stays resident
+                kind = "sequence" if name == "t2s" else "oneshot"
+                self._handles[name] = ModelHandle(module, name=f"{spec.model_id}:{name}", load_device=spec.device, kind=kind)
         self.handles = list(self._handles.values())
         self._reference: _Reference | None = None
         self._prompt: _Prompt | None = None

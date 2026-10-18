@@ -9,7 +9,10 @@ device copies of a unit's weights when the unit is entered and gives them back w
   **prefetches** the next ``streams`` units on them while the current one computes. The compute stream waits on a
   copy's event before it uses it, and each copy is recorded on the compute stream, so the caching allocator does not
   reuse its memory early. A unit entered out of the learnt order is copied there and then; correctness never depends
-  on the order;
+  on the order. Units of ``sequence`` handles (autoregressive models) are not prefetched and hold one copy
+  (``copies_for``): a layer's work for one token hides none of its copy, so prefetching only costs the room two more
+  copies take from resident weights (measured on an RTX 3090: Qwen3-TTS's talker partly loaded ran 24.6 s with two
+  side streams, 18.6 s with none);
 - **pins** the host copies of streamed weights (page-locked memory makes the copies asynchronous and about twice as
   fast) within the policy's budget; beyond it they stay pageable and copy synchronously.
 
@@ -59,7 +62,7 @@ class Streamer:
         self.device = device
         self.streams = streams
         self.copies = streams + 1
-        """Copies held at once: the running unit and the ``streams`` prefetched."""
+        """Copies held at once: the running unit and the ``streams`` prefetched (one for ``sequence`` handles)."""
         self._pin = pin
         self._cache: OrderedDict[Key, tuple[list[Any], Any]] = OrderedDict()
         self._busy: set[Key] = set()
@@ -82,6 +85,10 @@ class Streamer:
             import torch
 
             self._side = [torch.cuda.Stream(device=torch.device(device)) for _ in range(streams)]
+
+    def copies_for(self, handle: ModelHandle) -> int:
+        """The copies ``handle``'s streamed units hold at once: one for a ``sequence`` handle (never prefetched)."""
+        return 1 if handle.kind == "sequence" else self.copies
 
     # -- handles ----------------------------------------------------------------------
 
@@ -140,6 +147,8 @@ class Streamer:
             self._last = key
             entry = self._cache.pop(key, None)
             if entry is None:
+                if handle.kind == "sequence":  # the copy it replaces goes first: one copy at a time, as placed
+                    self._trim(self.copies_for(handle) - 1)
                 tensors = [self._copy(h) for h in hosts]
                 self.copied_bytes += _nbytes(tensors)
                 self._grow(_nbytes(tensors))
@@ -155,8 +164,9 @@ class Streamer:
                         t.record_stream(current)
             self._cache[key] = (tensors, None)
             self._busy.add(key)
-            self._prefetch(key)
-            self._trim()
+            if handle.kind != "sequence":
+                self._prefetch(key)
+            self._trim(self.copies_for(handle))
             return tensors
 
     def done(self, handle: ModelHandle, unit: Unit) -> None:
@@ -212,7 +222,7 @@ class Streamer:
             if found is None:
                 return
             handle, unit = found
-            if unit.resident:
+            if unit.resident or handle.kind == "sequence":
                 continue
             found_hosts = [handle._host.get((id(m), n)) for m, n in unit.slots]
             hosts: list[Any] = [h for h in found_hosts if h is not None]
@@ -239,8 +249,8 @@ class Streamer:
             event.record(side)
         return tensors, event
 
-    def _trim(self) -> None:
-        while len(self._cache) > self.copies:
+    def _trim(self, copies: int | None = None) -> None:
+        while len(self._cache) > (self.copies if copies is None else copies):
             victim = next((k for k in self._cache if k not in self._busy), None)
             if victim is None:
                 return

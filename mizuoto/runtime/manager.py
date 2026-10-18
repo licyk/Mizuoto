@@ -215,8 +215,7 @@ class ModelManager:
         if mode == "low":
             _, total = self._memory(device)
             budget = min(budget, int((total or budget) * policy.low_ratio))
-        copies = streamer.copies
-        minimums = [h.minimum_bytes(copies) for h in group]
+        minimums = [h.minimum_bytes(streamer.copies_for(h)) for h in group]
         if mode == "none":
             budget = min(budget, sum(minimums))
         if budget < sum(minimums):
@@ -243,7 +242,7 @@ class ModelManager:
                 share = min(share, max(h.cap_bytes, minimums[i]))
             h.keep_host = True  # a streamed unit rests on its host copy
             h.load(None if share >= h.size_bytes and mode != "none" else share, streamer)
-            budget -= h.loaded_bytes + h.stream_reserve([u for u in h.units if not u.resident], copies)
+            budget -= h.loaded_bytes + h.stream_reserve([u for u in h.units if not u.resident], streamer.copies_for(h))
             h.placement = {**placement, "loaded_mb": round(h.loaded_bytes / 2**20), "size_mb": round(h.size_bytes / 2**20)} if h.partial else None
             if h.partial:
                 logger.info(
@@ -423,7 +422,7 @@ class ModelManager:
                 if h.loaded_bytes and self.policy.mode_for(device_kind(h.load_device), self._mode([h])) not in ("high", "shared"):
                     # half of what it had on the device, until it is offloaded (the next requests would run out too)
                     streamer = self._streamer(h.load_device, self.policy)
-                    h.cap_bytes = max(h.minimum_bytes(streamer.copies), h.loaded_bytes // 2)
+                    h.cap_bytes = max(h.minimum_bytes(streamer.copies_for(h)), h.loaded_bytes // 2)
             for d in devices:
                 streamer = self._streamers.get(d)
                 if streamer is not None:

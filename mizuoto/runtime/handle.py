@@ -202,7 +202,7 @@ class ModelHandle:
         with self._lock:
             if self.module is None or not self._moves():
                 return
-            copies = streamer.copies if streamer is not None else 1
+            copies = streamer.copies_for(self) if streamer is not None else 1
             keep = self.fill(budget, copies)
             if keep != {u.index for u in self.units} and streamer is None:
                 raise ValueError(f"{self.name} needs a streamer to load partly")

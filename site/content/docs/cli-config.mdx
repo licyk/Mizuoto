@@ -166,7 +166,7 @@ mizuoto webui
 | `compute.ram_reserve_mb` | `null` | 保留的空闲内存（MB）；低于它时丢弃内存中的权重副本、卸载空闲模型。`null`：2 GB 与内存十分之一中较大者 | **计算** › **保留的空闲内存** |
 | `compute.host_copies` | `auto` | 为 GPU 上模型的权重在内存中保留副本：`auto`（内存充足时）、`on`、`off` | **计算** › **在内存中保留显存权重的副本** |
 | `compute.max_pinned_mb` | `0` | 流式权重使用的锁页内存（MB；0：自动） | **计算** › **流式权重使用的锁页内存** |
-| `compute.async_offload` | `-1` | 流式权重的复制流数量（-1：NVIDIA 和 AMD 上两个，其他为零；0：关闭） | **计算** › **复制流数量** |
+| `compute.async_offload` | `-1` | 流式权重的复制流数量（-1：NVIDIA 和 AMD 上两个，其他为零；0：关闭）；自回归模型从不预取 | **计算** › **复制流数量** |
 | `compute.oom_retry` | `true` | 某一步显存不足时，把更多权重留在内存中重新运行（结果相同） | **计算** › **显存不足时重试该步骤** |
 | `compute.oom_fallback` | `false` | 之后允许引擎用更省显存的方式（分块、更小的批次；输出略有不同） | **计算** › **之后允许更省显存的方式** |
 | `compute.kv_cache` | `dynamic` | `static`：Qwen3-TTS 与 CosyVoice 2/3 使用预先分配的键值缓存 | — |
