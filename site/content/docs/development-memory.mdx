@@ -191,6 +191,8 @@ audio = ctx.run("codec decoder", [self.h_decoder], decode, self._decoder_memory(
 | `low` | 对每个块做梯度检查点（`gradient_checkpointing`：`blocks`、`every:k`；VoxCPM、Qwen3-TTS、OmniVoice、F5-TTS、CosyVoice），重算时恢复全局生成器*以及训练器自己的生成器*；F5-TTS 的 EMA 副本放在内存中；VoxCPM 的 LoRA 冻结权重以 autocast 精度存放 | 相同（在 CPU 上逐个训练器测试） |
 | `lowest` | 另外把 AdamW 的状态放在内存中并在 CPU 上更新（`host_optimizer`；Qwen3-TTS、OmniVoice、不用梯度缩放的 F5-TTS）；VoxCPM 的 LoRA 基座权重在每次矩阵乘法时从内存流式加载（`streamed_linear`） | 在 GPU 上优化器求和的最后几位可能不同 |
 
+主机端优化器把 float32 副本和梯度各放在一个缓冲区中，每一步的梯度和参数经过每种设备 dtype 一个的锁页缓冲区传输，只等待一次；它每一步的大部分时间是 AdamW 本身在 CPU 上的运算（Qwen3-TTS 1.7B：每步 5.5 秒中约 4.5 秒），只有融合的优化器才能缩短，但结果会不同。`lowest` 阶段运行时不使用 torch 的大页（`compute.cpu_allocator`）：使用大页时，每一步的分配都卡在内核的内存整理上，运行时间是 2.2 倍。
+
 始终如此：GPU 阶段报告 `memory/peak_mb`；`MethodInfo.memory_mb` 根据模型大小估算每个预设下的峰值，GPU 上运行时若估算超过空闲显存，会在日志中警告并给出放得下的预设。训练器本身见[训练器](/docs/development-training)。
 
 ## 编写配合显存管理的引擎

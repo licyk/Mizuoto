@@ -661,6 +661,59 @@ def test_the_host_optimizer_steps_as_the_plain_one_on_the_cpu():
     assert all(torch.equal(a, b) for a, b in zip(run(False), run(True), strict=True))
 
 
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="needs a CUDA device")
+def test_the_host_optimizer_moves_the_values_per_tensor_copies_move_on_a_gpu():
+    """On a GPU, with bf16 and float32 parameters and one without a gradient: the host optimizer's page-locked buffers
+    and queued copies give the parameters the per-tensor ``.to`` copies gave (its earlier form, written out here)."""
+    import types
+
+    from mizuoto.training.memory import host_optimizer
+
+    def per_tensor(params, make):
+        device_params = [p for p in params if p.requires_grad]
+        host_params = [torch.nn.Parameter(p.detach().to("cpu", dtype=torch.float32, copy=True).pin_memory()) for p in device_params]
+        opt = make(host_params)
+        inner, inner_zero = opt.step, opt.zero_grad
+
+        def step(_self, closure=None):
+            with torch.no_grad():
+                for d, h in zip(device_params, host_params, strict=True):
+                    h.grad = None if d.grad is None else d.grad.to("cpu", dtype=torch.float32)
+                inner()
+                for d, h in zip(device_params, host_params, strict=True):
+                    d.copy_(h.to(d.device, dtype=d.dtype, non_blocking=True))
+
+        def zero_grad(_self, set_to_none=True):
+            for d in device_params:
+                d.grad = None
+            inner_zero(set_to_none=set_to_none)
+
+        opt.step, opt.zero_grad = types.MethodType(step, opt), types.MethodType(zero_grad, opt)
+        return opt
+
+    def run(build):
+        torch.manual_seed(0)
+        model = torch.nn.Sequential(torch.nn.Linear(64, 96), torch.nn.GELU(), torch.nn.Linear(96, 32), torch.nn.Linear(32, 8)).cuda()
+        model[0].to(torch.bfloat16)
+        model[3].requires_grad_(False)
+        unused = torch.nn.Parameter(torch.randn(5, device="cuda"))
+        make = lambda ps: torch.optim.AdamW(ps, lr=1e-2, weight_decay=0.01)  # noqa: E731
+        opt = build([*model.parameters(), unused], make)
+        sched = torch.optim.lr_scheduler.LambdaLR(opt, lambda s: 1.0 / (1 + s))
+        gen = torch.Generator(device="cuda").manual_seed(5)
+        for _ in range(4):
+            x = torch.randn(7, 64, device="cuda", generator=gen, dtype=torch.bfloat16)
+            loss = model[3](model[2](model[1](model[0](x).float()))).square().sum()
+            loss.backward()
+            torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+            opt.step()
+            sched.step()
+            opt.zero_grad()
+        return [p.detach().cpu() for p in [*model.parameters(), unused]]
+
+    assert all(torch.equal(a, b) for a, b in zip(run(per_tensor), run(host_optimizer), strict=True))
+
+
 def test_a_request_that_does_not_fit_waits_for_another_to_let_go():
     """Two GPU jobs at once (compute.gpu_jobs): the second, short of its minimum while the first holds the device,
     waits instead of failing, and runs once the first lets go."""

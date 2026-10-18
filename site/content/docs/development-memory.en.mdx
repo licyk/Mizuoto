@@ -191,6 +191,8 @@ Training stages run in their own process and own their device: before a GPU stag
 | `low` | gradient checkpointing over each block (`gradient_checkpointing`: `blocks`, `every:k`; VoxCPM, Qwen3-TTS, OmniVoice, F5-TTS, CosyVoice), the recomputation with the global generators *and the trainer's own* put back; F5-TTS's EMA copy in RAM; VoxCPM's LoRA frozen weights in the autocast dtype | identical (tested per trainer on the CPU) |
 | `lowest` | also AdamW's state in RAM, stepped on the CPU (`host_optimizer`; Qwen3-TTS, OmniVoice, F5-TTS without a gradient scaler); VoxCPM's LoRA base weights streamed from RAM for each product (`streamed_linear`) | the optimizer's sums may differ in the last bits on a GPU |
 
+The host optimizer keeps the float32 copies and the gradients in one buffer each and moves a step's gradients and parameters through one page-locked buffer per device dtype, with one wait; most of its step is AdamW's own arithmetic on the CPU (Qwen3-TTS 1.7B: about 4.5 s of its 5.5 s step), which only a fused optimizer, with other results, would shorten. A `lowest` stage runs without torch's huge pages (`compute.cpu_allocator`): with them its per-step allocations stalled in the kernel's compaction and the run took 2.2× as long.
+
 Always: a GPU stage reports `memory/peak_mb`; `MethodInfo.memory_mb` estimates a run's peak per preset from the model's size, and a GPU run warns in its log, naming the preset that would fit, when the estimate exceeds the free memory. Trainers themselves are in [Trainers](/docs/development-training).
 
 ## Writing an engine for it

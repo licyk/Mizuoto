@@ -245,25 +245,57 @@ def host_optimizer(params: list[Any], make: Callable[[list[Any]], Any]) -> Any:
     host, steps there and copies the parameters back. The device holds only the parameters and their gradients;
     AdamW's two moments (8 bytes a parameter) and the step's sums stay off it, so the update's last bits may differ from
     a GPU's. It is the optimizer ``make`` returns (schedulers take it); the clipping runs on the device's gradients
-    before ``step``. Not with a gradient scaler (its unscaling reads the optimizer's own gradients)."""
+    before ``step``. Not with a gradient scaler (its unscaling reads the optimizer's own gradients).
+
+    The copies are views of one float32 buffer and the gradients of another (one allocation each, not one per tensor).
+    On a CUDA device a step moves the gradients and the parameters of each other dtype (bf16, fp16) through one
+    page-locked buffer in that dtype, converting on the host; float32 parameters move straight between the device and
+    the float32 buffers, which are then page-locked. The copies are queued without a wait each and waited for once.
+    Every value is what a per-tensor ``.to`` gives. Most of a step is AdamW's own arithmetic on the CPU (Qwen3-TTS
+    1.7B: about 4.5 of 5.5 s), which only a fused optimizer, with other results, would shorten."""
     import torch
 
     device_params = [p for p in params if p.requires_grad]
     pin = any(p.device.type == "cuda" for p in device_params) and torch.cuda.is_available()
-    host_params = []
-    for p in device_params:
-        host = p.detach().to("cpu", dtype=torch.float32, copy=True)
-        host_params.append(torch.nn.Parameter(host.pin_memory() if pin else host, requires_grad=True))
+    sizes = [p.numel() for p in device_params]
+    # a float32 parameter's gradient lands in its gradient view and the parameter goes back from its copy (no staging):
+    # the float32 buffers need page-locking only then
+    other = {p.dtype for p in device_params if p.dtype != torch.float32}
+    pin_flat = pin and any(p.dtype == torch.float32 for p in device_params)
+    host_flat = torch.empty(sum(sizes), dtype=torch.float32, pin_memory=pin_flat)
+    grad_flat = torch.empty(sum(sizes), dtype=torch.float32, pin_memory=pin_flat)
+    staging = {dt: torch.empty(sum(n for p, n in zip(device_params, sizes, strict=True) if p.dtype == dt), dtype=dt, pin_memory=pin) for dt in other}
+    host_params, grads, stages, offset = [], [], [], 0
+    seen = dict.fromkeys(other, 0)
+    for p, n in zip(device_params, sizes, strict=True):
+        host = host_flat[offset : offset + n].view(p.shape)
+        host.copy_(p.detach())
+        host_params.append(torch.nn.Parameter(host, requires_grad=True))
+        grads.append(grad_flat[offset : offset + n].view(p.shape))
+        stages.append(staging[p.dtype][seen[p.dtype] : seen[p.dtype] + n].view(p.shape) if p.dtype in other else None)
+        offset = offset + n
+        if p.dtype in other:
+            seen[p.dtype] += n
     optimizer = make(host_params)
     inner_step, inner_zero = optimizer.step, optimizer.zero_grad
+    devices = {p.device for p in device_params if p.device.type == "cuda"}
+
+    def wait() -> None:
+        for device in devices:
+            torch.cuda.current_stream(device).synchronize()
 
     def step(_self: Any, closure: Any = None) -> Any:
         with torch.no_grad():
-            for d, h in zip(device_params, host_params, strict=True):
-                h.grad = None if d.grad is None else d.grad.to("cpu", dtype=torch.float32)
+            wait()  # the last step's parameters have left the host buffers
+            for d, s, g in zip(device_params, stages, grads, strict=True):
+                if d.grad is not None:
+                    (g if s is None else s).copy_(d.grad, non_blocking=pin)
+            wait()
+            for d, h, s, g in zip(device_params, host_params, stages, grads, strict=True):
+                h.grad = None if d.grad is None else g if s is None else g.copy_(s)
             out = inner_step(closure) if closure is not None else inner_step()
-            for d, h in zip(device_params, host_params, strict=True):
-                d.copy_(h.to(d.device, dtype=d.dtype, non_blocking=True))
+            for d, h, s in zip(device_params, host_params, stages, strict=True):
+                d.copy_(h if s is None else s.copy_(h), non_blocking=pin)
         return out
 
     def zero_grad(_self: Any, set_to_none: bool = True) -> None:
