@@ -165,7 +165,7 @@ Access tokens, the origin check and the Host check are described in [HTTP API](/
 | `compute.vram_limit_mb` | `0` | Use at most this much of each GPU (MB; 0: all) | **Compute** › **Use at most this much of each GPU** |
 | `compute.ram_reserve_mb` | `null` | RAM left free (MB); below it copies of weights in RAM are dropped and idle models unloaded. `null`: the larger of 2 GB and a tenth of the RAM | **Compute** › **RAM left free** |
 | `compute.host_copies` | `auto` | Keep a RAM copy of the weights of models on a GPU: `auto` (while RAM allows), `on`, `off` | **Compute** › **Keep a copy of GPU weights in RAM** |
-| `compute.max_pinned_mb` | `0` | Page-locked RAM for weights that stream (MB; 0: automatic) | **Compute** › **Page-locked RAM for streamed weights** |
+| `compute.max_pinned_mb` | `0` | Page-locked RAM for the host copies of weights, streamed or kept for a reload (MB; 0: automatic) | **Compute** › **Page-locked RAM for weights on the host** |
 | `compute.async_offload` | `-1` | Copy streams for streamed weights (-1: two on NVIDIA and AMD, none elsewhere; 0: off); autoregressive models never prefetch | **Compute** › **Copy streams** |
 | `compute.oom_retry` | `true` | Run a step that runs out of GPU memory again with more of its weights in RAM (the same result) | **Compute** › **Retry a step that runs out of GPU memory** |
 | `compute.oom_fallback` | `false` | Then allow an engine's cheaper way (tiles, smaller batches; the output differs slightly) | **Compute** › **Then allow cheaper ways** |

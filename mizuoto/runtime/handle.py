@@ -11,6 +11,8 @@ before it runs (a forward pre-hook) and back after (a forward hook; ``runtime.st
   A module pinned to the CPU (``device.pin_to_cpu``) never moves.
 - **Host copies.** With ``keep_host``, a parameter placed on the device keeps its host tensor, so offloading it costs no
   transfer (ComfyUI's dynamic VRAM: the device as a cache over host memory). Without, offloading copies it back.
+  Kept host copies are page-locked in place as they load, within the streamer's budget (``runtime.pinning``), so a
+  reload copies at the link's speed.
   Buffers are always copied back (a module may update one in place).
 - **Freeing** drops everything with no copy back.
 - **Never changed in place on the device.** A weight that changes after placement goes through the handle
@@ -26,10 +28,11 @@ import threading
 from collections.abc import Iterable
 from typing import TYPE_CHECKING, Any, Literal
 
+from mizuoto.runtime import pinning
 from mizuoto.runtime.units import Mark, Split, Unit, split
 
 if TYPE_CHECKING:
-    from mizuoto.runtime.stream import Streamer
+    from mizuoto.runtime.stream import PinBudget, Streamer
 
 Kind = Literal["oneshot", "sequence"]
 
@@ -62,6 +65,8 @@ class ModelHandle:
         self._host_buffers: dict[tuple[int, str], Any] = {}
         """Buffers of a parked handle (``strict``), by (module id, name)."""
         self._streamer: Streamer | None = None
+        self._pins: PinBudget | None = None
+        """Where kept host copies are page-locked during a load (the streamer's budget)."""
         self._lock = threading.RLock()
 
     # -- structure --------------------------------------------------------------------
@@ -223,6 +228,7 @@ class ModelHandle:
             if self.module is None or not self._moves():
                 return
             copies = streamer.copies_for(self) if streamer is not None else 1
+            self._pins = streamer.budget if streamer is not None and self.keep_host else None
             keep = self.fill(budget, copies)
             if keep != {u.index for u in self.units} and streamer is None:
                 raise ValueError(f"{self.name} needs a streamer to load partly")
@@ -387,6 +393,8 @@ class ModelHandle:
             if not self.simulated and _same_device(str(current.device), self._target()):
                 return  # already there (the engine built it on the device)
             host = current
+        if self._pins is not None:  # kept for the next load: page-locked, this copy and the next are asynchronous
+            pinning.pin(host, self._pins, self._target())
         device = _copy(host, self._target())
         if self.keep_host:
             self._host[key] = host

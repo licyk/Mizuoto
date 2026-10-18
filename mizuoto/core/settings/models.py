@@ -79,8 +79,8 @@ class ComputeSettings(Record):
     """Keep a copy in RAM of the weights of models on a GPU, so moving them off it costs nothing (``auto``: while RAM
     allows)."""
     max_pinned_mb: int = Field(default=0, ge=0)
-    """Page-locked RAM for weights that stream to a GPU (faster copies). 0: automatic (40 % of the RAM on Windows, up to
-    90 % elsewhere)."""
+    """Page-locked RAM for the host copies of weights: those that stream to a GPU, and those kept for reloading a model
+    (faster copies). 0: automatic (40 % of the RAM on Windows, up to 90 % elsewhere)."""
     async_offload: int = Field(default=-1, ge=-1, le=8)
     """Side streams that copy streamed weights while the GPU computes (-1: 2 on NVIDIA and AMD, none elsewhere; 0: off)."""
     oom_retry: bool = True

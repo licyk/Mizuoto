@@ -473,7 +473,20 @@ Measured on the RTX 3090s (2026-10-18) with torch 2.8.0+cu128, flash-attn 2.8.3 
 
 Measured on an RTX 3090 (2026-10-18), each model capped (`compute.vram_limit_mb`) so its decoder streams, warm requests against the code before, three runs a case, the audio compared.
 
-**Reloading** a component unloaded to RAM copies 7–9.8 GB/s, 52–73 % of the 13.45 GB/s the card takes from page-locked memory; a handle reloaded alone reaches 12.46 GB/s. The rest is per-tensor work: a Qwen3-TTS talker is 987 copies, and its fixed parts alone take 0.14 s. Gathering them into fewer, larger copies is still open (the aim was 80 %).
+**Reloading** a component unloaded to RAM copied 7–9.8 GB/s, 52–73 % of the 13.45 GB/s the card takes from page-locked memory: the kept host copies were pageable, so each copy waited for the one before. They are now page-locked in place as the component loads (`runtime/pinning.py`, see [Memory](/docs/development-memory)); offload, the first load and peak memory are unchanged:
+
+| Reload (whole GPU) | MB | Pageable | Pinned in place |
+| --- | --- | --- | --- |
+| CosyVoice 2 | 2,937 | 0.408 s, 7.55 GB/s | 0.365 s, 8.43 GB/s |
+| F5-TTS | 703 | 0.092 s, 8.02 GB/s | 0.083 s, 8.90 GB/s |
+| Fish Speech S2 Pro | 9,456 | 1.012 s, 9.80 GB/s | 0.947 s, 10.47 GB/s |
+| GPT-SoVITS v2 | 1,026 | 0.154 s, 6.98 GB/s | 0.149 s, 7.24 GB/s |
+| IndexTTS 2 | 6,963 | 0.823 s, 8.87 GB/s | 0.766 s, 9.53 GB/s |
+| OmniVoice | 1,869 | 0.230 s, 8.53 GB/s | 0.197 s, 9.95 GB/s |
+| Qwen3-TTS 1.7B Base | 4,004 | 0.471 s, 8.91 GB/s | 0.418 s, 10.05 GB/s |
+| VoxCPM 2 | 4,775 | 0.554 s, 9.03 GB/s | 0.485 s, 10.33 GB/s |
+
+The copies themselves now run at 13.2 GB/s (98 % of the link, measured over the talker's own host tensors); what remains of a reload is allocating the device memory again, 0.08–0.1 s for the talker, since giving memory up empties the allocator's cache (on purpose: other processes get it back). Expandable segments allocate no faster. The smaller models have more small tensors, which stay pageable (under 1 MB). Under a cap, the streamer used to copy streamed weights into page-locked memory at 1.5 GB/s on the first request; registering them in place took that off the cold request: F5-TTS 5.40 → 4.99 s, OmniVoice 5.96 → 5.07 s, CosyVoice 2/3 20.82/16.93 → 19.36/14.10 s, GPT-SoVITS v4 6.51 → 5.65 s, Fish Speech 44.89 → 41.23 s, IndexTTS 2 36.10 → 33.54 s, VoxCPM 2 29.12 → 26.85 s, Qwen3-TTS 9.22/10.90 → 8.57/9.86 s; warm requests and every output identical.
 
 **Streaming** under a cap left Qwen3-TTS bound by kernel launches, not copies: the GPU was busy 7.5 of 12.9 s, since a streamed talker decoded without its CUDA graphs. Graphs now run over a streamed `sequence` handle whose layers rest in page-locked memory, each step's graphs copying its streamed weights in (see [Memory](/docs/development-memory)):
 

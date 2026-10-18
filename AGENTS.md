@@ -140,8 +140,9 @@ Details: `development-runtime`, `development-memory`, `development-acceleration`
   + working memory + `compute.vram_reserve_mb`, else other components give up memory and the request's own load
   partly, the rest streaming from RAM through forward hooks. No estimate refuses a load. A phase under `ctx.run` that
   runs out of memory runs again (at most twice) with more streamed and its generators put back: identical, slower.
-  Partial placements are explained in the log and in `meta.memory.partial`. Only linear/conv weights stream; code that
-  reads a unit's weights outside its forward must mark it `fixed`. New engines must pass
+  Partial placements are explained in the log and in `meta.memory.partial`. Host memory is registered in place
+  (`cudaHostRegister`) only by `runtime/pinning.py`, which releases it with the storage. Only linear/conv weights
+  stream; code that reads a unit's weights outside its forward must mark it `fixed`. New engines must pass
   `tests/engines_native/streaming.py` (every unit streamed, half, none: identical on a simulated device). Mark an
   autoregressive model's handle `kind="sequence"`: its streamed layers are never prefetched (a token's work hides no
   copy; prefetching only took room from resident weights), while models run once per input prefetch on side streams.

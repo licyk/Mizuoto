@@ -545,7 +545,7 @@ export default {
     ramReserve: '保留的空闲内存（MB；留空：自动）',
     hostCopies: '在内存中保留显存权重的副本',
     hostCopiesModes: { auto: '内存充足时', on: '总是', off: '从不' },
-    maxPinned: '流式权重使用的锁页内存（MB；0：自动）',
+    maxPinned: '主机上的权重使用的锁页内存（MB；0：自动）',
     asyncOffload: '复制流数量（-1：自动）',
     oomRetry: '显存不足时重试该步骤',
     oomRetryHint: '把更多权重留在内存中：结果相同，速度较慢',

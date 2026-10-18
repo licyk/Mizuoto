@@ -545,7 +545,7 @@ export default {
     ramReserve: 'RAM left free (MB; empty: automatic)',
     hostCopies: 'Keep a copy of GPU weights in RAM',
     hostCopiesModes: { auto: 'While RAM allows', on: 'Always', off: 'Never' },
-    maxPinned: 'Page-locked RAM for streamed weights (MB; 0: automatic)',
+    maxPinned: 'Page-locked RAM for weights on the host (MB; 0: automatic)',
     asyncOffload: 'Copy streams (-1: automatic)',
     oomRetry: 'Retry a step that runs out of GPU memory',
     oomRetryHint: 'With more of its weights in RAM: the same result, slower',

@@ -14,7 +14,8 @@ device copies of a unit's weights when the unit is entered and gives them back w
   copies take from resident weights (measured on an RTX 3090: Qwen3-TTS's talker partly loaded ran 24.6 s with two
   side streams, 18.6 s with none);
 - **pins** the host copies of streamed weights (page-locked memory makes the copies asynchronous and about twice as
-  fast) within the policy's budget; beyond it they stay pageable and copy synchronously.
+  fast) within the policy's budget: in place on NVIDIA GPUs (``runtime.pinning``), else (other devices, tensors too
+  small to register) as page-locked copies; beyond the budget they stay pageable and copy synchronously.
 
 Copies are made in the weights' own dtype, outside inference mode, as the resident weights are: a streamed unit
 computes with the same tensors (same values, same kind) as a resident one.
@@ -26,6 +27,8 @@ import logging
 import threading
 from collections import OrderedDict
 from typing import TYPE_CHECKING, Any
+
+from mizuoto.runtime import pinning
 
 if TYPE_CHECKING:
     from mizuoto.runtime.handle import ModelHandle
@@ -99,6 +102,7 @@ class Streamer:
                 self._units[(id(handle), u.index)] = (handle, u)
             if self._pin is None or self.device == "cpu":
                 return
+            in_place = pinning.usable(self.device)
             pinned = self._pinned.setdefault(id(handle), [])
             done = {k for k, _ in pinned}
             for u in handle.units:
@@ -109,6 +113,8 @@ class Streamer:
                     host = handle._host.get(key)
                     if host is None or key in done or host.is_pinned():
                         continue
+                    if in_place and pinning.pin(host, self._pin, self.device):
+                        continue  # registered where it is (released with its storage); a small one is copied below
                     size = host.numel() * host.element_size()
                     if not self._pin.take(size):
                         return
@@ -122,6 +128,11 @@ class Streamer:
                     if m._parameters[n].data is host:
                         m._parameters[n].data = pinned_host
                     pinned.append((key, size))
+
+    @property
+    def budget(self) -> PinBudget | None:
+        """The page-locked bytes this streamer's device may use (shared by the process's streamers)."""
+        return self._pin
 
     def detach(self, handle: ModelHandle) -> None:
         with self._lock:
