@@ -31,9 +31,12 @@ def test_engine_mirrors_its_manifest():
     check_devices_mirror("fishspeech")
 
 
-def test_fish_codecs_in_place_snake_matches_the_original():
+@pytest.mark.parametrize("device", ["cpu", "cuda"])
+def test_fish_codecs_in_place_snake_matches_the_original(device):
     torch = pytest.importorskip("torch")
     codec = pytest.importorskip("mizuoto_fishspeech.codec")
+    if device == "cuda" and not torch.cuda.is_available():
+        pytest.skip("no CUDA device")
 
     def upstream(x, alpha):
         shape = x.shape
@@ -41,10 +44,14 @@ def test_fish_codecs_in_place_snake_matches_the_original():
         return (x + (alpha + 1e-9).reciprocal() * torch.sin(alpha * x).pow(2)).reshape(shape)
 
     g = torch.Generator().manual_seed(0)
-    for dtype in (torch.float32, torch.bfloat16):
+    for dtype in (torch.float32, torch.bfloat16, torch.float16):
         for shape in ((1, 64, 3001), (2, 16, 7)):
-            x = (torch.randn(shape, generator=g) * 3).to(dtype)
-            alpha = (torch.rand(1, shape[1], 1, generator=g) * 2).to(dtype)
+            x = (torch.randn(shape, generator=g) * 3).to(device, dtype)
+            alpha = (torch.rand(1, shape[1], 1, generator=g) * 2).to(device, dtype)
             with torch.no_grad():
                 assert torch.equal(codec.snake(x, alpha), upstream(x, alpha)), (dtype, shape)
             assert torch.equal(codec.snake(x, alpha), upstream(x, alpha)), (dtype, shape)
+            if dtype != torch.float32:  # the codec on a GPU runs under autocast, which computes pow in float32
+                with torch.no_grad(), torch.autocast(device, dtype=dtype):
+                    ours, theirs = codec.snake(x, alpha), upstream(x, alpha)
+                assert ours.dtype == theirs.dtype and torch.equal(ours, theirs), (dtype, shape, "autocast")
