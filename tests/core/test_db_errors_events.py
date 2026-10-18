@@ -1,3 +1,5 @@
+from typing import Any
+
 from mizuoto.core import codes
 from mizuoto.core.db.database import MIGRATIONS, Database
 from mizuoto.core.errors import ERROR_CLASSES, AssetMissingError, MizuotoError, ModelMissingError, ParameterError, error_from_code
@@ -53,3 +55,31 @@ def test_services_publish_settings_changes(services):
     services.events.subscribe(got.append)
     services.settings.update({"server": {"port": 8123}})
     assert got and got[-1].keys == ["server.port"]
+
+
+def _open_together(args: tuple[str, Any]) -> str | None:
+    from mizuoto.core.db.database import Database
+
+    path, barrier = args
+    barrier.wait()
+    try:
+        Database(path)
+        return None
+    except Exception as e:  # reported to the test
+        return f"{type(e).__name__}: {e}"
+
+
+def test_processes_opening_a_new_data_folder_at_once_all_succeed(tmp_path):
+    """Two processes opening one folder (two test suites, the server and a command) used to fail with "database is
+    locked": switching a new file to WAL does not wait for the other. Eight at once, each folder new, three times."""
+    import multiprocessing as mp
+
+    from mizuoto.core.db.database import MIGRATIONS, Database
+
+    ctx = mp.get_context("spawn")
+    with ctx.Manager() as manager, ctx.Pool(8) as pool:
+        for trial in range(3):
+            path = str(tmp_path / f"t{trial}" / "mizuoto.db")
+            barrier = manager.Barrier(8)
+            assert pool.map(_open_together, [(path, barrier)] * 8) == [None] * 8
+            assert Database(path).schema_version == len(MIGRATIONS)

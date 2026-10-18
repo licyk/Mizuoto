@@ -4,7 +4,8 @@ import json
 import logging
 import sqlite3
 import threading
-from collections.abc import Generator
+import time
+from collections.abc import Callable, Generator
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
@@ -119,6 +120,21 @@ MIGRATIONS: list[str] = [
 ]
 
 
+def _while_locked(statement: Callable[[], object], seconds: float = 10.0) -> None:
+    """Run ``statement`` again while the file is locked, for up to ``seconds``: switching a new file to WAL takes an
+    exclusive lock, and SQLite answers "database is locked" at once, without the busy handler, while another process
+    opens the same folder (two contract suites, the server and a command)."""
+    deadline = time.monotonic() + seconds
+    while True:
+        try:
+            statement()
+            return
+        except sqlite3.OperationalError as e:
+            if "locked" not in str(e) or time.monotonic() > deadline:
+                raise
+            time.sleep(0.05)
+
+
 class Database:
     """One shared connection guarded by a lock. Fine for a single local process."""
 
@@ -130,7 +146,7 @@ class Database:
         self._conn.row_factory = sqlite3.Row
         self._lock = threading.RLock()
         with self._lock:
-            self._conn.execute("PRAGMA journal_mode=WAL")
+            _while_locked(lambda: self._conn.execute("PRAGMA journal_mode=WAL"))
             self._conn.execute("PRAGMA foreign_keys=ON")
             self._conn.execute("PRAGMA synchronous=NORMAL")
             # The command line reads the same file while a server writes it.
@@ -144,11 +160,17 @@ class Database:
 
     def migrate(self) -> None:
         with self._lock:
-            current = self.schema_version
             for number, script in enumerate(MIGRATIONS, start=1):
-                if number <= current:
+                if number <= self.schema_version:
                     continue
-                self._conn.executescript(f"BEGIN;\n{script}\nPRAGMA user_version = {number};\nCOMMIT;")
+                try:
+                    self._conn.executescript(f"BEGIN IMMEDIATE;\n{script}\nPRAGMA user_version = {number};\nCOMMIT;")
+                except sqlite3.OperationalError:
+                    if self._conn.in_transaction:
+                        self._conn.execute("ROLLBACK")
+                    if number <= self.schema_version:  # another process opening the folder migrated it first
+                        continue
+                    raise
 
     @contextmanager
     def transaction(self) -> Generator[sqlite3.Connection, None, None]:
