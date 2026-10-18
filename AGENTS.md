@@ -148,7 +148,8 @@ Details: `development-runtime`, `development-memory`, `development-acceleration`
 - **Speed without changing results**: on NVIDIA GPUs every autoregressive decoder runs its steps as CUDA graphs
   (`compute.cuda_graphs`, on by default, `runtime/graphs.py`) with one wait for the device per step
   (`runtime/sampling.py`'s sync-free draws). Graphs replay the eager kernels, so outputs are identical; they are used
-  only for a model wholly on its device and dropped when its weights move. Capture and replay them under
+  for a model wholly on its device (or a streamed `sequence` handle in pinned memory, `ModelHandle.graphable`: the
+  graphs copy its weights; only Qwen3-TTS, where it was measured faster) and dropped when its weights move. Capture and replay them under
   `torch.cuda.device(graphs.device)` (a replay runs on the current device's stream: a model on `cuda:1` faults
   otherwise); none are captured under cudaMallocAsync (`graphs.usable`). Opt-ins that change bits are labelled in
   the output: `compute.compile`, non-`auto` attention backends, Qwen3-TTS's `fused_projections`, OmniVoice's

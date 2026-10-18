@@ -62,7 +62,7 @@ talker 的工作内存按请求估算：每行的提示（指令、参考文本�
 一帧是 talker 的一步加 code predictor 的十五步：约 6 000 个小内核，由 CPU 逐个启动。普通循环每帧还要等待设备约 35 次（`torch.multinomial` 每次抽样的两项有效性检查、每步把被屏蔽的 id 复制到设备上、填充检查、EOS 检查），每次等待都会清空 GPU 的队列。`decode.py` 在不改变任何结果的前提下去掉了这些：
 
 - **每帧只等待一次。** 单样本抽样采用 `multinomial` 本身的计算（`argmax(p / Exp(1))`），去掉它的检查（`runtime.sampling.multinomial1`；概率为 NaN 仍是错误，在每帧那一次等待时读取）；掩码每个设备只构建一次；重复惩罚作用于已抽取 id 的掩码（`repetition_penalty_seen`，算术相同）；填充情况在主机端已知。
-- **CUDA 图**（`compute.cuda_graphs`，默认开启；NVIDIA，且 talker 完整位于设备上）。采样和 code predictor 的 15 步各是一个图；talker 的一步在两次注意力调用之间各为一个图，注意力在不断增长的缓存上以 eager 方式运行。图从自己的生成器抽样，该生成器从请求的生成器载入状态并写回。图按批大小和采样设置保存，权重移动时丢弃。
+- **CUDA 图**（`compute.cuda_graphs`，默认开启；NVIDIA）。部分加载的 talker（其余层从锁页内存流式加载）照样使用：每步的图把流式加载的层复制进来（`ModelHandle.graphable`），在 4 GB 限额下比 eager 流式加载快 1.32–1.35 倍，音频相同。采样和 code predictor 的 15 步各是一个图；talker 的一步在两次注意力调用之间各为一个图，注意力在不断增长的缓存上以 eager 方式运行。图从自己的生成器抽样，该生成器从请求的生成器载入状态并写回。图按批大小和采样设置保存，权重移动时丢弃。
 - **更少的内核，相同的比特**（仅在不需要自动求导时，所以训练不受影响）：q 和 k 一起归一化和旋转；code predictor 的旋转表只生成一次；在设备上的自检表明 `F.rms_norm` 给出与 float32 归一化相同的比特时使用它。
 
 与 eager 的编码相同；在 1.7B 规模的解码循环上，比带等待的循环快 2.7–3.4 倍。
@@ -87,4 +87,4 @@ talker 的工作内存按请求估算：每行的提示（指令、参考文本�
 ## 限制
 
 - `fused_projections` 以 GPU 上的逐位一致换取速度。
-- CUDA 图要求 talker 完整位于一块 NVIDIA GPU 上；部分加载的 talker 以 eager 方式解码。
+- CUDA 图要求 talker 位于一块 NVIDIA GPU 上，且流式加载的层在锁页内存中（受 `compute.max_pinned_mb` 限制）；否则部分加载的 talker 以 eager 方式解码。

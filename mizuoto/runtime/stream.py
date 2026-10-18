@@ -146,6 +146,11 @@ class Streamer:
                 self._next[self._last] = key
             self._last = key
             entry = self._cache.pop(key, None)
+            if entry is not None and _capturing(self.device):
+                # a CUDA graph is being captured (``ModelHandle.graphable``): the copy must be in it, so the replay
+                # brings the weights; a copy made before the capture would leave the graph reading a stale buffer
+                self._held -= _nbytes(entry[0])
+                entry = None
             if entry is None:
                 if handle.kind == "sequence":  # the copy it replaces goes first: one copy at a time, as placed
                     self._trim(self.copies_for(handle) - 1)
@@ -255,6 +260,14 @@ class Streamer:
             if victim is None:
                 return
             self._held -= _nbytes(self._cache.pop(victim)[0])
+
+
+def _capturing(device: str) -> bool:
+    if not device.startswith("cuda"):
+        return False
+    import torch
+
+    return torch.cuda.is_current_stream_capturing()
 
 
 def _nbytes(tensors: list[Any]) -> int:

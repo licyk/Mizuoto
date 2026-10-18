@@ -691,6 +691,8 @@ class LoadedQwen3Tts(LoadedEngine):
                 decoder.talk(mask_for(attention, 1, past, padding="left", padded=padded), cache)
         if decoder.graphs is None and ctx.applied.pop("cuda_graphs", None):
             self._graphs_failed = True
+        elif decoder.graphs is not None:
+            self.h_talker.replayed(step)  # each step's graphs copied the streamed layers (none when wholly loaded)
 
         if not frames:
             return [torch.empty((0, c.num_code_groups), dtype=torch.long, device=dev) for _ in range(batch)]
@@ -707,7 +709,7 @@ class LoadedQwen3Tts(LoadedEngine):
         from mizuoto.engines.qwen3tts.decode import FrameDecoder
         from mizuoto.runtime.graphs import Graphs, signature, usable
 
-        if not (usable(self.device, self.cuda_graphs) and not self._graphs_failed and self.h_talker.loaded):
+        if not (usable(self.device, self.cuda_graphs) and not self._graphs_failed and self.h_talker.graphable()):
             return FrameDecoder(self.talker, self.config.talker, batch, talker_sampling, sub_sampling, self.kv_cache, None)
         where = signature([self.talker])
         if where != self._graph_signature:  # the weights moved since the graphs were captured

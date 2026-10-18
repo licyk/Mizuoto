@@ -59,7 +59,7 @@ Mizuoto 像 ComfyUI 一样管理显存。一个请求的每一步只放上它需
 | `compute.oom_retry` | 开 | 某一步显存不足时，把更多权重留在内存中重新运行这一步：结果相同，速度较慢 |
 | `compute.oom_fallback` | 关 | 之后允许这一步用更省显存的方式（分块解码、更小的批次）：占用更少显存，输出略有不同并会注明 |
 | `compute.kv_cache` | `dynamic` | `static`：Qwen3-TTS 与 CosyVoice 的语言模型把缓存写入预先分配的缓冲区（复制和碎片更少）。在 CPU 上结果相同；在 GPU 上结果的最后几位可能不同，因此需主动开启 |
-| `compute.cuda_graphs` | `true` | 在 NVIDIA 显卡上把 Qwen3-TTS、Fish Speech、CosyVoice 2/3、VoxCPM、GPT-SoVITS 与 IndexTTS 每一帧（每个 token、每个 patch）的解码作为 CUDA Graph 一次启动，生成快数倍，结果完全一致；部分权重从内存流式加载的模型不使用 CUDA Graph；`false` 逐个启动算子 |
+| `compute.cuda_graphs` | `true` | 在 NVIDIA 显卡上把 Qwen3-TTS、Fish Speech、CosyVoice 2/3、VoxCPM、GPT-SoVITS 与 IndexTTS 每一帧（每个 token、每个 patch）的解码作为 CUDA Graph 一次启动，生成快数倍，结果完全一致；部分权重从内存流式加载的模型不使用 CUDA Graph，Qwen3-TTS 的 talker 除外：它照样使用（流式加载的层在图内复制）；`false` 逐个启动算子 |
 | `engines.qwen3tts.load_options.fused_projections` | `false` | 快速模式：Qwen3-TTS 的 q/k/v 与 gate/up 投影各合并为一次矩阵乘法（与 qwen-tts-webui 相同），在 GPU 上再快几个百分点；GPU 上结果不再逐位一致 |
 | `engines.voxcpm.load_options.attention_span` | `false` | 快速模式：VoxCPM 的解码在 GPU 上也只关注缓存中已填充的部分，快 1.4–1.7 倍；那里的结果不再逐位一致 |
 | `compute.cuda_allocator` | `auto` | torch 的 CUDA 显存分配器：`native`、`async`（cudaMallocAsync；其下不使用 CUDA Graph，解码较慢）、`expandable`（可扩展段：结果相同，保留的显存更少）；下次启动时生效 |

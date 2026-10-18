@@ -186,6 +186,26 @@ class ModelHandle:
             used -= last.bytes
         return {u.index for u in chosen}
 
+    def graphable(self) -> bool:
+        """Whether CUDA graphs may run this handle's steps: wholly on its device, or a ``sequence`` handle whose streamed
+        units rest in page-locked memory. Captured, a streamed unit's copy is a memcpy node from its fixed host tensor
+        into the graph's own memory, replayed in order with the kernels that read it (one unit's copy at a time, as
+        streaming eagerly holds them); a copy from pageable memory cannot be captured."""
+        with self._lock:
+            if self.loaded:
+                return True
+            if self.kind != "sequence" or self._streamer is None or not self._placed:
+                return False
+            hosts = [self._host.get((id(m), n)) for u in self.units if not u.resident for m, n in u.slots]
+            return all(h is not None and h.is_pinned() for h in hosts)
+
+    def replayed(self, steps: int) -> None:
+        """``steps`` graph replays of a partly loaded handle each copied its streamed units once (``graphable``): count
+        them with the streamer's copies, which the output reports (``meta.memory.streamed_mb``)."""
+        with self._lock:
+            if self._streamer is not None and not self.loaded:
+                self._streamer.copied_bytes += self.streamed_bytes * steps
+
     def minimum_bytes(self, copies: int) -> int:
         """The least device memory the handle runs in: its fixed parts and the copies of its largest units."""
         return self.fixed_bytes + self.stream_reserve(self.units, copies)
@@ -473,6 +493,13 @@ class ModelHandle:
     def _enter_leaf(self, u: Unit, indices: list[int]) -> None:
         if u.resident or u.entered or self._streamer is None:
             return
+        if _capturing(self._streamer.device):
+            # a CUDA graph being captured (``graphable``): this leaf's weights only, copied inside it, so that each weight
+            # is copied once per step though a unit's leaves sit in different graphs (around its attention)
+            for i in indices:
+                m, n = u.slots[i]
+                _assign(m, n, _copy(self._host[(id(m), n)], self._streamer.device))
+            return
         tensors = self._fetch(u)
         for i in indices:
             m, n = u.slots[i]
@@ -515,6 +542,14 @@ def _assign(module: Any, name: str, t: Any) -> None:
         p.data = t
     else:  # (an inference tensor cannot require grad: weights a request built, e.g. a voice's own)
         module._parameters[name] = torch.nn.Parameter(t, requires_grad=p.requires_grad and not t.is_inference())
+
+
+def _capturing(device: str) -> bool:
+    if not device.startswith("cuda"):
+        return False
+    import torch
+
+    return torch.cuda.is_current_stream_capturing()
 
 
 def _copy(t: Any, device: str) -> Any:

@@ -293,6 +293,56 @@ def test_cuda_graphs_decode_exactly_as_eagerly_on_a_gpu(model_dir):
         assert all(a.shape == b.shape and (a == b).all() for a, b in zip(want, got, strict=True))
 
 
+@pytest.mark.skipif(not torch.cuda.is_available() or torch.version.hip is not None, reason="CUDA graphs need an NVIDIA GPU")
+def test_cuda_graphs_over_a_streamed_talker_decode_exactly_as_eagerly(model_dir, monkeypatch):
+    """A talker partly on the GPU, its other layers streaming from page-locked memory, still decodes with CUDA graphs
+    (ModelHandle.graphable): each captured step copies the streamed layers into the graph's memory before reading them,
+    so the audio equals the wholly loaded eager decoder's, request after request, though the copies are
+    dropped between requests and the memory they leave filled with NaNs. A capture that reused a copy made before it
+    would read those."""
+    from mizuoto.engines.qwen3tts.engine import LoadedQwen3Tts
+    from mizuoto.runtime import units
+    from mizuoto.runtime.runtime import RuntimeOptions
+    from mizuoto.runtime.stream import PinBudget, Streamer
+
+    monkeypatch.setattr(units, "UNIT_MIN_BYTES", 0)  # the tiny talker in units at all
+    monkeypatch.setattr(units, "TINY_BYTES", 1)
+    devices = DeviceService()
+
+    def load(graphs: bool, streamed: bool):
+        loaded = Qwen3TtsEngine().load(
+            LoadSpec("qwen3tts/tiny", model_dir, "custom_voice", "cuda"), Runtime(devices, ModelManager(devices), RuntimeOptions(cuda_graphs=graphs)), RequestContext("load")
+        )
+        assert isinstance(loaded, LoadedQwen3Tts)
+        streamer = Streamer("cuda", pin=PinBudget(1 << 30)) if streamed else None
+        for h in loaded.handles:
+            if h is loaded.h_talker and streamer is not None:
+                h.load(h.minimum_bytes(1), streamer)
+            else:
+                h.load()
+        return loaded, streamer
+
+    eager, _ = load(False, False)
+    graphed, streamer = load(True, True)
+    assert streamer is not None and not graphed.h_talker.loaded and graphed.h_talker.graphable()
+    assert sum(not u.resident for u in graphed.h_talker.units) > 1
+    for seed in (3, 4, 3):
+        want = speak(eager, seed=seed, ctx=RequestContext("r", seed=seed, device="cuda"))[0][0].samples
+        ctx = RequestContext("r", seed=seed, device="cuda")
+        before = streamer.copied_bytes
+        got = speak(graphed, seed=seed, ctx=ctx)[0][0].samples
+        assert ctx.applied.get("cuda_graphs")
+        assert want.shape == got.shape and (want == got).all()
+        assert streamer.copied_bytes - before >= graphed.h_talker.streamed_bytes  # the replays' copies are counted
+        # drop the copies and fill the memory they leave with NaNs, held through the next request: a graph that reads a
+        # copy made outside it (in the eager run before its capture, on the graphs' stream) reads these
+        streamer.release_all(graphed.h_talker)
+        host = [graphed.h_talker._host[(id(m), n)] for u in graphed.h_talker.units if not u.resident for m, n in u.slots]
+        with torch.cuda.stream(graphed._graphs.stream):
+            spoiled = [torch.full(t.shape, float("nan"), dtype=t.dtype, device="cuda") for _ in range(4) for t in host]  # noqa: F841
+        torch.cuda.synchronize()
+
+
 def test_fused_projections_compute_the_same_maths():
     """QwenDecoder.fuse (fast mode): q/k/v and gate/up as one product each give the unfused decoder's output (not
     necessarily bit for bit: a wider product may sum in another order)."""

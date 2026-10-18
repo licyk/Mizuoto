@@ -469,6 +469,26 @@ Measured on the RTX 3090s (2026-10-18) with torch 2.8.0+cu128, flash-attn 2.8.3 
 
 **Decided:** `fast` on NVIDIA is FlashAttention for fp16/bf16 calls over padded keys and SDPA for everything else (`PADDED_CHAIN`); SageAttention and xFormers leave its chain and stay available by name; autoregressive sites refuse quantised backends (`approx_ok=False`); `auto` stays the default (D-A6: `sdpa` gives the same audio where the reference is plain SDPA, no faster). The doctor's flash-attn command says that on torch 2.8 it and xFormers exclude each other.
 
+## Partly loaded models
+
+Measured on an RTX 3090 (2026-10-18), each model capped (`compute.vram_limit_mb`) so its decoder streams, warm requests against the code before, three runs a case, the audio compared.
+
+**Reloading** a component unloaded to RAM copies 7–9.8 GB/s, 52–73 % of the 13.45 GB/s the card takes from page-locked memory; a handle reloaded alone reaches 12.46 GB/s. The rest is per-tensor work: a Qwen3-TTS talker is 987 copies, and its fixed parts alone take 0.14 s. Gathering them into fewer, larger copies is still open (the aim was 80 %).
+
+**Streaming** under a cap left Qwen3-TTS bound by kernel launches, not copies: the GPU was busy 7.5 of 12.9 s, since a streamed talker decoded without its CUDA graphs. Graphs now run over a streamed `sequence` handle whose layers rest in page-locked memory, each step's graphs copying its streamed weights in (see [Memory](/docs/development-memory)):
+
+| Case (cap) | Eager while streaming | Graphs while streaming | Audio |
+| --- | --- | --- | --- |
+| Qwen3-TTS 1.7B custom voice (4 GB) | 6.62 s | **5.00 s** (1.32×) | identical |
+| Qwen3-TTS 1.7B Base clone (4 GB) | 10.45 s | **7.75 s** (1.35×) | identical |
+| CosyVoice 2 / 3 (1.5 GB) | 14.93 / 12.46 s | 15.09 / 12.57 s | identical |
+| GPT-SoVITS v2 / v4 (640 MB) | 0.90 / 2.60 s | 0.90 / 2.61 s | identical |
+| Fish Speech (6 GB) | 36.58 s | 36.35 s | identical |
+| IndexTTS 1.5 / 2 (3 GB) | 1.88 / 30.76 s | 1.87 / 30.83 s | identical |
+| VoxCPM 2 / 1.5 (2.5 GB) | 22.96 / 3.88 s | 24.07 / 8.62 s | identical |
+
+The others were already bound by the copies (about 12.4 GB/s) and VoxCPM 1.5 lost 2.2×, so only Qwen3-TTS uses graphs while streamed; `meta.memory.streamed_mb` counts the replays' copies (within 2 % of the eager count).
+
 ## `torch.compile` on the CPU
 
 `compute.compile`, fp32, 8 threads; time of the compiled module, warm:

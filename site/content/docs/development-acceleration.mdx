@@ -187,7 +187,7 @@ GPU 上的自回归模型每一步要启动几千个小内核（Qwen3-TTS：每 
   - `drawing(generator)` 把请求的生成器状态装进图自己的生成器，结束后写回，所以带种子的请求抽到的随机数与即时执行相同。
 - **`LayerSteps`**：把一个层栈的单 token 步骤按两次注意力调用之间的每一段捕获为一个图，由每层的 `before`、`attend`、`after` 给出。注意力在图之间即时执行，作用于每步变长的键上，所以缓存和注意力内核都与即时执行相同；归一化、投影、旋转位置编码和 MLP 被重放。
 - **`DecoderSteps`**：用于 `QwenDecoder` 的 `LayerSteps`。
-- **`signature(modules)`**：权重所在的地址。图持有这些地址，所以只用于整个放在设备上的模型（没有流式单元），权重移动后丢弃。
+- **`signature(modules)`**：权重所在的地址。图持有这些地址，所以用于整个放在设备上的模型，权重移动后丢弃。例外是流式单元留在锁页内存中的 `sequence` 句柄（`ModelHandle.graphable`）：图每步自己复制这些权重（见[显存](/docs/development-memory)）。只有 Qwen3-TTS 用到它；其他解码器在限额下流式加载时已经受复制限制（约 12.4 GB/s），没有加速，VoxCPM 1.5 反而慢 2.2 倍，所以它们流式加载时以 eager 方式解码。
 
 | 引擎 | 每步等待次数（之前 → 之后） | 捕获的内容 |
 | --- | --- | --- |
@@ -224,6 +224,6 @@ GPU 上的自回归模型每一步要启动几千个小内核（Qwen3-TTS：每 
 
 - 所有注意力都经 `accel.attention`，每个调用点一个 `Site`；上游手写的注意力作为调用点的 `reference`；掩码由结构构造时传 `mask_info`。
 - 用 `multinomial1` / `multinomial_draws` 抽样，解码步骤中除每步一次之外不等待设备（不用 `.item()`、`tolist()`、写入张量的 Python 标量、掩码赋值）。
-- CUDA Graph：在固定张量上运行一步，仅当 `graphs.usable(device, runtime.options.cuda_graphs)` 且模型整个在设备上时用 `Graphs` / `LayerSteps` 捕获，图随已加载模型保留，`signature` 变化时丢弃；在 `drawing(ctx.generator_for(device))` 中抽样。捕获和重放都要在 `torch.cuda.device(graphs.device)` 下进行：重放在当前设备的流上运行，所以模型在 `cuda:1` 上而当前设备是 `cuda:0` 时重放会因非法内存访问而出错（CosyVoice 在 2026-10-18 之前就是如此）。
+- CUDA Graph：在固定张量上运行一步，仅当 `graphs.usable(device, runtime.options.cuda_graphs)` 且模型整个在设备上（`handle.loaded`；`handle.graphable()` 也接受流式加载的 `sequence` 句柄，实测只对 Qwen3-TTS 更快）时用 `Graphs` / `LayerSteps` 捕获，图随已加载模型保留，`signature` 变化时丢弃；在 `drawing(ctx.generator_for(device))` 中抽样。捕获和重放都要在 `torch.cuda.device(graphs.device)` 下进行：重放在当前设备的流上运行，所以模型在 `cuda:1` 上而当前设备是 `cuda:0` 时重放会因非法内存访问而出错（CosyVoice 在 2026-10-18 之前就是如此）。
 - 对耗时且反复调用的模块用 `compile_module(module, runtime.options.compile, name)` 包装，调用 `compiled or module`。
 - 验证：小型引擎在 CUDA 上开关图、故意让捕获失败、以及 `MIZUOTO_TEST_ACCEL=count` 下的音频都完全相同。见[接入引擎](/docs/development-engine)和[测试](/docs/development-testing)。
