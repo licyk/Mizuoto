@@ -32,9 +32,13 @@ log = logging.getLogger(__name__)
 
 
 def usable(device: torch.device | str, enabled: bool = True) -> bool:
-    """Whether to capture graphs on ``device``: ``compute.cuda_graphs`` on, an NVIDIA GPU."""
+    """Whether to capture graphs on ``device``: ``compute.cuda_graphs`` on, an NVIDIA GPU, torch's caching allocator.
+    Under cudaMallocAsync (``compute.cuda_allocator = async``) a capture's warm-up frees its temporaries the
+    stream-ordered way, and replays then fault with an illegal memory access, so the steps run eagerly there."""
     device = torch.device(device)
-    return bool(enabled) and device.type == "cuda" and getattr(torch.version, "hip", None) is None and torch.cuda.is_available()
+    if not (bool(enabled) and device.type == "cuda" and getattr(torch.version, "hip", None) is None and torch.cuda.is_available()):
+        return False
+    return torch.cuda.get_allocator_backend() != "cudaMallocAsync"
 
 
 def signature(modules: Sequence[torch.nn.Module]) -> tuple[int, ...]:

@@ -237,6 +237,15 @@ def test_the_cuda_allocator_is_set_before_cuda_is_used(monkeypatch):
     assert set_allocator("async") is False  # the environment's own choice stays
 
 
+def test_training_stages_get_the_cuda_allocator_whether_or_not_the_host_loaded_a_model():
+    from mizuoto.core.inference.service import allocator_env
+
+    assert allocator_env("async", {}) == {"PYTORCH_CUDA_ALLOC_CONF": "backend:cudaMallocAsync"}
+    assert allocator_env("expandable", {}) == {"PYTORCH_CUDA_ALLOC_CONF": "expandable_segments:True"}
+    assert allocator_env("auto", {}) == allocator_env("native", {}) == {}
+    assert allocator_env("async", {"PYTORCH_CUDA_ALLOC_CONF": "expandable_segments:True"}) == {}  # the environment's wins
+
+
 def test_attention_follows_the_settings_per_engine(services):
     rt = services.runtime
     assert rt.attention("dummy") == ("auto", False)

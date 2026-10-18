@@ -61,7 +61,7 @@ Mizuoto 像 ComfyUI 一样管理显存。一个请求的每一步只放上它需
 | `compute.kv_cache` | `dynamic` | `static`：Qwen3-TTS 与 CosyVoice 的语言模型把缓存写入预先分配的缓冲区（复制和碎片更少）。在 CPU 上结果相同；在 GPU 上结果的最后几位可能不同，因此需主动开启 |
 | `compute.cuda_graphs` | `true` | 在 NVIDIA 显卡上把 Qwen3-TTS、Fish Speech、CosyVoice 2/3、VoxCPM、GPT-SoVITS 与 IndexTTS 每一帧（每个 token、每个 patch）的解码作为 CUDA Graph 一次启动，生成快数倍，结果完全一致；部分权重从内存流式加载的模型不使用 CUDA Graph；`false` 逐个启动算子 |
 | `engines.qwen3tts.load_options.fused_projections` | `false` | 快速模式：Qwen3-TTS 的 q/k/v 与 gate/up 投影各合并为一次矩阵乘法（与 qwen-tts-webui 相同），在 GPU 上再快几个百分点；GPU 上结果不再逐位一致 |
-| `compute.cuda_allocator` | `auto` | torch 的 CUDA 显存分配器：`native`、`async`（cudaMallocAsync）、`expandable`（可扩展段）；下次启动时生效 |
+| `compute.cuda_allocator` | `auto` | torch 的 CUDA 显存分配器：`native`、`async`（cudaMallocAsync；其下不使用 CUDA Graph，解码较慢）、`expandable`（可扩展段：结果相同，保留的显存更少）；下次启动时生效 |
 
 - 模型如何放置记录在每个结果的详情中（`meta.memory`：从内存流式加载的 MB、在设备上的 MB）；部分从内存运行、或显存不足后重试过的结果带有一条警告。部件只部分加载时，`meta.memory.partial` 逐个说明原因：当时权衡的空闲显存、预留的工作显存和保留量，或它为哪个部件让出了显存。日志中也有同样的信息。
 - 每一步预留的工作显存随请求而定：语言模型的缓存按文本长度估算，而不是按 `max_new_tokens` 允许的最长生成估算。生成远超其文本长度、超出显存时，这一步会以更多权重流式加载的方式重新运行，结果相同。

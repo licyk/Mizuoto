@@ -171,7 +171,7 @@ mizuoto webui
 | `compute.oom_fallback` | `false` | 之后允许引擎用更省显存的方式（分块、更小的批次；输出略有不同） | **计算** › **之后允许更省显存的方式** |
 | `compute.kv_cache` | `dynamic` | `static`：Qwen3-TTS 与 CosyVoice 2/3 使用预先分配的键值缓存 | — |
 | `compute.cuda_graphs` | `true` | 在 NVIDIA 显卡上以 CUDA Graph 运行语言模型的解码步骤（Qwen3-TTS、Fish Speech、CosyVoice 2/3、VoxCPM、GPT-SoVITS、IndexTTS），结果完全一致 | — |
-| `compute.cuda_allocator` | `auto` | torch 的 CUDA 显存分配器：`native`、`async`、`expandable`（`auto`：native）；下次启动时生效 | — |
+| `compute.cuda_allocator` | `auto` | torch 的 CUDA 显存分配器：`native`、`async`（其下不使用 CUDA Graph）、`expandable`（`auto`：native）；下次启动时生效 | — |
 | `compute.cpu_allocator` | `auto` | CPU 内存分配：`tuned`、`system`（`auto`：Linux + glibc 上为 tuned）；下次启动时生效 | — |
 | `compute.cpu_threads` | `auto` | CPU 线程：`cores`（绑定到物理核心）、`off`（`auto`：Linux 上为 cores）；下次启动时生效 | — |
 | `compute.simulate_vram_mb` | `0` | 用于测试：让 CPU 扮演这么大的一块 GPU | — |

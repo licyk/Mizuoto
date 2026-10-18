@@ -171,7 +171,7 @@ Access tokens, the origin check and the Host check are described in [HTTP API](/
 | `compute.oom_fallback` | `false` | Then allow an engine's cheaper way (tiles, smaller batches; the output differs slightly) | **Compute** › **Then allow cheaper ways** |
 | `compute.kv_cache` | `dynamic` | `static`: preallocated key/value caches for Qwen3-TTS and CosyVoice 2/3 | — |
 | `compute.cuda_graphs` | `true` | Decoding steps of language models (Qwen3-TTS, Fish Speech, CosyVoice 2/3, VoxCPM, GPT-SoVITS, IndexTTS) as CUDA graphs on NVIDIA GPUs; identical results | — |
-| `compute.cuda_allocator` | `auto` | torch's CUDA allocator: `native`, `async`, `expandable` (`auto`: native); at the next start | — |
+| `compute.cuda_allocator` | `auto` | torch's CUDA allocator: `native`, `async` (no CUDA graphs under it), `expandable` (`auto`: native); at the next start | — |
 | `compute.cpu_allocator` | `auto` | CPU memory: `tuned`, `system` (`auto`: tuned on Linux with glibc); at the next start | — |
 | `compute.cpu_threads` | `auto` | CPU threads: `cores` (bound to physical cores), `off` (`auto`: cores on Linux); at the next start | — |
 | `compute.simulate_vram_mb` | `0` | For tests: the CPU plays a GPU of this size | — |

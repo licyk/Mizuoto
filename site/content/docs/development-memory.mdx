@@ -169,7 +169,7 @@ audio = ctx.run("codec decoder", [self.h_decoder], decode, self._decoder_memory(
 ## 静态 KV 缓存与 CUDA 分配器
 
 - `compute.kv_cache = static` 让 Qwen 系列的缓存（Qwen3-TTS、CosyVoice 2/3）写入预分配的缓冲区，满了就翻倍（`BufferCache`）：没有每步拼接，没有临时拷贝，碎片更少。注意力读取的是带缓冲区步长的视图，某些内核会以另一种顺序求和。在 CPU 上结果相同；在 GPU 上验证结果相同之前一直需要主动开启。
-- `compute.cuda_allocator`（`native`；`async`：cudaMallocAsync；`expandable`：可扩展段；`auto` 即 `native`）由主机在第一次使用 CUDA 之前写入 `PYTORCH_CUDA_ALLOC_CONF`，从不由引擎代码设置，并传给训练阶段。环境中已设置的值优先；修改在下次启动时生效。
+- `compute.cuda_allocator`（`native`；`async`：cudaMallocAsync；`expandable`：可扩展段；`auto` 即 `native`）由主机在第一次使用 CUDA 之前写入 `PYTORCH_CUDA_ALLOC_CONF`，从不由引擎代码设置，并通过环境传给训练阶段（`allocator_env`），无论主机是否已加载模型。环境中已设置的值优先；修改在下次启动时生效。在 `async` 下不捕获 CUDA Graph（`graphs.usable`）：这种按流排序的分配器释放捕获预热时的临时张量的方式，曾使重放因非法内存访问而出错。
 
 ## 模拟设备与测试
 

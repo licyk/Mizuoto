@@ -99,9 +99,9 @@ class ComputeSettings(Record):
     change."""
     cuda_allocator: Literal["auto", "native", "async", "expandable"] = "auto"
     """torch's CUDA memory allocator (``PYTORCH_CUDA_ALLOC_CONF``): ``native`` (torch's caching allocator), ``async``
-    (cudaMallocAsync, ComfyUI's default), ``expandable`` (expandable segments: less fragmentation as caches grow;
-    Linux). ``auto`` is ``native`` and leaves a ``PYTORCH_CUDA_ALLOC_CONF`` of the environment alone. Applies when
-    Mizuoto next starts."""
+    (cudaMallocAsync, ComfyUI's default; CUDA graphs are not used under it, so decoding is slower), ``expandable``
+    (expandable segments: less fragmentation as caches grow; Linux). ``auto`` is ``native`` and leaves a
+    ``PYTORCH_CUDA_ALLOC_CONF`` of the environment alone. Applies when Mizuoto next starts."""
     cpu_allocator: Literal["auto", "tuned", "system"] = "auto"
     """The C allocator torch's CPU tensors come from: ``tuned`` (``auto`` on Linux with glibc) keeps large blocks in
     the heap, up to 512 MB of free memory for reuse and large tensors on huge pages, which spares the kernel mapping

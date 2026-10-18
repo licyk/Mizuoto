@@ -29,6 +29,7 @@ from mizuoto.core.engines.params import check_options
 from mizuoto.core.engines.registry import EngineRegistry
 from mizuoto.core.errors import AssetMissingError, CapabilityError, ConflictError, NotFoundError, ValidationError
 from mizuoto.core.files import trash
+from mizuoto.core.inference.service import allocator_env
 from mizuoto.core.jobs.models import Job, JobStep
 from mizuoto.core.jobs.service import JobContext, JobService, JobSpec
 from mizuoto.core.process import host_target
@@ -400,7 +401,8 @@ class TrainingService:
         workdir = folder / "work"
         # A child of this interpreter: the native modules, every device visible under its own name.
         compute = self._settings.settings.compute
-        target = host_target(STAGE_MODULE, cwd=workdir, env=cpu.child_env(compute.cpu_allocator, compute.cpu_threads))
+        env = {**cpu.child_env(compute.cpu_allocator, compute.cpu_threads), **allocator_env(compute.cuda_allocator)}
+        target = host_target(STAGE_MODULE, cwd=workdir, env=env)
         current = self.fingerprints(exp)
         hyperparams = self._effective(exp, method)
         workdir.mkdir(parents=True, exist_ok=True)

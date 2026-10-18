@@ -169,7 +169,7 @@ A phase's estimate decides whether its weights fit whole, so it is sized by the 
 ## Static KV cache and the CUDA allocator
 
 - `compute.kv_cache = static` gives the Qwen-family caches (Qwen3-TTS, CosyVoice 2/3) preallocated buffers that double when full (`BufferCache`): no per-step concatenation, no transient copy, less fragmentation. Attention reads views with the buffer's strides, which some kernels sum in another order. Identical on the CPU; opt-in until it is checked identical on a GPU.
-- `compute.cuda_allocator` (`native`, `async`: cudaMallocAsync, `expandable`: expandable segments; `auto` is `native`) is set by the host in `PYTORCH_CUDA_ALLOC_CONF` before CUDA is first used, never by engine code, and handed to training stages. A value the environment already sets wins; a change applies at the next start.
+- `compute.cuda_allocator` (`native`, `async`: cudaMallocAsync, `expandable`: expandable segments; `auto` is `native`) is set by the host in `PYTORCH_CUDA_ALLOC_CONF` before CUDA is first used, never by engine code, and handed to training stages in their environment (`allocator_env`), whether or not the host has loaded a model. A value the environment already sets wins; a change applies at the next start. Under `async` no CUDA graphs are captured (`graphs.usable`): the stream-ordered allocator frees a capture's warm-up temporaries in a way that made replays fault with an illegal memory access.
 
 ## Simulated devices and tests
 

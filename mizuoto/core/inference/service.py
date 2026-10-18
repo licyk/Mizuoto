@@ -112,6 +112,16 @@ ALLOCATORS = {"async": "backend:cudaMallocAsync", "expandable": "expandable_segm
 """``compute.cuda_allocator`` → ``PYTORCH_CUDA_ALLOC_CONF``."""
 
 
+def allocator_env(choice: str, environ: dict[str, str] | None = None) -> dict[str, str]:
+    """The variable a new process (a training stage) needs for ``choice``, unless ``environ`` (default this process's)
+    names an allocator already: a stage gets the setting whether or not this process has loaded a model."""
+    import os
+
+    conf = ALLOCATORS.get(choice)
+    env = os.environ if environ is None else environ
+    return {} if conf is None or "PYTORCH_CUDA_ALLOC_CONF" in env else {"PYTORCH_CUDA_ALLOC_CONF": conf}
+
+
 def set_allocator(choice: str) -> bool:
     """Set torch's CUDA allocator for this process (and the training stages it starts) before CUDA is first used: the
     host's decision, made once, never by engine code. Leaves an allocator the environment names alone. Returns whether
