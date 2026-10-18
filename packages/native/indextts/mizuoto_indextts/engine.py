@@ -615,7 +615,9 @@ class LoadedIndexTts2(LoadedEngine):
                 if use_random:
                     index = [ctx.rng.randint(0, x - 1) for x in self.emo_num]
                 else:
-                    index = [int(torch.argmax(torch.nn.functional.cosine_similarity(spk.style.float(), m.float(), dim=1))) for m in self.spk_matrix]
+                    # on the style's device, as upstream moves its matrices to the model's (the matrices stay on the CPU here)
+                    style = spk.style.float()
+                    index = [int(torch.argmax(torch.nn.functional.cosine_similarity(style, m.to(style.device).float(), dim=1))) for m in self.spk_matrix]
                 rows = torch.cat([m[i].unsqueeze(0) for i, m in zip(index, self.emo_matrix, strict=True)], 0).to(self.device)
                 emovec_mat = torch.sum(weight.unsqueeze(1) * rows, 0).unsqueeze(0)
             lengths = torch.tensor([spk.spk_cond_emb.shape[-1]], device=self.device)

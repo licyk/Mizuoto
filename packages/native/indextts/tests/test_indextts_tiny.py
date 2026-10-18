@@ -441,6 +441,11 @@ def test_cuda_graphs_decode_exactly_as_eagerly_on_a_gpu(tmp_path_factory, refere
                     (b,), ctx = speak(graphed, reference, seed=seed, ctx=RequestContext("r", seed=seed, device="cuda"), max_new_tokens=40)
                     assert ctx.applied.get("cuda_graphs"), variant
                     assert a.samples.shape == b.samples.shape and (a.samples == b.samples).all(), (variant, seed)
+                if variant != "v1_5":  # an emotion vector picks its rows by the style on the GPU
+                    style = StyleSpec(emotion=EmotionSpec(vector={"happy": 0.6}, strength=0.5))
+                    (a,), _ = speak(eager, reference, style=style, ctx=RequestContext("r", seed=3, device="cuda"), max_new_tokens=40)
+                    (b,), _ = speak(graphed, reference, style=style, ctx=RequestContext("r", seed=3, device="cuda"), max_new_tokens=40)
+                    assert a.samples.size and (a.samples == b.samples).all(), variant
 
 
 @pytest.mark.skipif(not torch.cuda.is_available() or torch.version.hip is not None, reason="CUDA graphs need an NVIDIA GPU")
