@@ -130,12 +130,13 @@ class ComputeSettings(Record):
     """GPU speed switches for the whole process, each changing results slightly (ComfyUI's ``--fast``): ``tf32``
     (TensorFloat-32 products on NVIDIA GPUs from Ampere on), ``fp16_accumulation`` (fp16 products sum in fp16),
     ``cudnn_benchmark`` (cuDNN tries kernels per shape), ``sdpa_reduced_precision`` (SDPA's math kernel sums fp16/bf16
-    in their own precision). Outputs list those in effect. Applies when Mizuoto next starts."""
+    in their own precision). Outputs list those in effect. Applies when Mizuoto next starts. GPT-SoVITS runs slower
+    under ``tf32`` or ``fp16_accumulation`` (its GPT 1.3–1.6×, measured on an RTX 3090)."""
     compile: bool = False
     """Compile the heavy modules of native engines with torch.compile (F5-TTS's DiT, CosyVoice's and GPT-SoVITS's
     flow estimators, IndexTTS's DiT and BigVGAN) for faster synthesis. The first synthesis after a model loads is
     slower while it compiles; without a working compiler the engine runs as before. Applies to models loaded after
-    the change."""
+    the change. On a GPU VoxCPM runs without its CUDA graphs while compiled, and slower (0.41–0.64× on an RTX 3090)."""
 
 
 class DownloadSettings(Record):

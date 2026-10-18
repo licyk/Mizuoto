@@ -57,6 +57,7 @@ def tools(monkeypatch, found: dict[str, str], outputs: dict[str, str | None], *,
         ran.append("torch-child")
         return child
 
+    monkeypatch.delenv("CUDA_VISIBLE_DEVICES", raising=False)
     monkeypatch.setattr(probe_module.shutil, "which", lambda name: found.get(name))
     monkeypatch.setattr(probe_module, "find_nvidia_smi", lambda: found.get("nvidia-smi"))
     monkeypatch.setattr(probe_module, "_run", run)
@@ -81,7 +82,7 @@ def service(info: ComputeInfo, settings=None) -> ComputeService:
 
 
 def test_nvidia_smi_comes_first(monkeypatch):
-    smi = "0, NVIDIA GeForce RTX 3090, 24576, 1000, 580.65\n"
+    smi = "0, GPU-0abc, NVIDIA GeForce RTX 3090, 24576, 1000, 580.65\n"
     ran = tools(monkeypatch, {"nvidia-smi": "/usr/bin/nvidia-smi", "rocm-smi": "/usr/bin/rocm-smi"}, {"nvidia-smi": smi + "| CUDA Version: 13.0 |"})
     info = probe()
     assert info.backend == "CUDA 13.0" and info.probed_with == "nvidia-smi" and "rocm-smi" not in ran
@@ -282,3 +283,19 @@ def test_probing_this_machine_loads_no_torch():
     root = str(Path(__file__).resolve().parents[2])
     out = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, timeout=180, cwd=root, check=False)
     assert out.returncode == 0, out.stderr
+
+
+def test_the_probe_shows_the_gpus_cuda_visible_devices_leaves_as_torch_numbers_them(monkeypatch):
+    """The host's nvidia-smi probe applies ``CUDA_VISIBLE_DEVICES`` as CUDA does (indices or UUID prefixes, up to the
+    first that names no GPU; empty: none) and numbers what is left from ``cuda:0``, as torch will."""
+    from mizuoto.core.compute.probe import visible_gpus
+
+    rows = [("0", "GPU-aaa1"), ("1", "GPU-bbb2")]
+    assert visible_gpus(rows, None) == [0, 1]
+    assert visible_gpus(rows, "1") == [1] and visible_gpus(rows, "1,0") == [1, 0]
+    assert visible_gpus(rows, "") == [] and visible_gpus(rows, "GPU-bbb") == [1] and visible_gpus(rows, "0,7,1") == [0]
+    smi = "0, GPU-aaa1, NVIDIA GeForce RTX 3090, 24576, 1000, 580.65\n1, GPU-bbb2, NVIDIA RTX A4000, 16376, 10, 580.65\n"
+    tools(monkeypatch, {"nvidia-smi": "/usr/bin/nvidia-smi"}, {"nvidia-smi": smi + "| CUDA Version: 13.0 |"})
+    monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "1")
+    info = probe()
+    assert [(d.id, d.name, d.memory_total_mb) for d in info.devices if d.kind == "cuda"] == [("cuda:0", "NVIDIA RTX A4000", 16376)]

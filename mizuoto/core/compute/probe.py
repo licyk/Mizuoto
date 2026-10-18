@@ -75,18 +75,43 @@ def find_nvidia_smi() -> str | None:
     return str(wsl) if sys.platform.startswith("linux") and wsl.is_file() else None
 
 
+def visible_gpus(rows: list[tuple[str, str]], value: str | None) -> list[int]:
+    """Which of ``rows`` (``nvidia-smi``'s index and UUID per GPU) torch will see, in its order, under
+    ``CUDA_VISIBLE_DEVICES=value``: every one when it is unset; else its entries in turn, each an index or a ``GPU-``
+    UUID prefix, up to the first that names no GPU (as CUDA reads it; empty: none). Indices are ``nvidia-smi``'s, in
+    PCI bus order, which is CUDA's on machines whose GPUs are alike (``CUDA_DEVICE_ORDER=PCI_BUS_ID`` makes it so)."""
+    if value is None:
+        return list(range(len(rows)))
+    out: list[int] = []
+    for entry in (e.strip() for e in value.split(",")):
+        found = next((i for i, (index, uuid) in enumerate(rows) if (entry.isdigit() and entry == index) or (entry.startswith("GPU-") and uuid.startswith(entry))), None)
+        if found is None or found in out:
+            break
+        out.append(found)
+    return out
+
+
 def probe_nvidia(nvidia_smi: str) -> ComputeInfo | None:
-    out = _run([nvidia_smi, "--query-gpu=index,name,memory.total,memory.used,driver_version", "--format=csv,noheader,nounits"])
+    """The NVIDIA GPUs torch will see (``CUDA_VISIBLE_DEVICES`` applied, numbered as torch numbers them)."""
+    import os
+
+    out = _run([nvidia_smi, "--query-gpu=index,uuid,name,memory.total,memory.used,driver_version", "--format=csv,noheader,nounits"])
     if not out:
         return None
-    devices: list[DeviceInfo] = []
+    rows: list[tuple[str, str]] = []
+    found: list[tuple[str, float | None, float | None]] = []
     driver = None
     for line in out.strip().splitlines():
         parts = [p.strip() for p in line.split(",")]
-        if len(parts) < 5:
+        if len(parts) < 6:
             continue
-        index, name, total, used, driver = parts[:5]
-        devices.append(DeviceInfo(id=f"cuda:{index}", kind="cuda", name=name, memory_total_mb=_float(total), memory_used_mb=_float(used)))
+        index, uuid, name, total, used, driver = parts[:6]
+        rows.append((index, uuid))
+        found.append((name, _float(total), _float(used)))
+    devices = [
+        DeviceInfo(id=f"cuda:{n}", kind="cuda", name=found[i][0], memory_total_mb=found[i][1], memory_used_mb=found[i][2])
+        for n, i in enumerate(visible_gpus(rows, os.environ.get("CUDA_VISIBLE_DEVICES")))
+    ]
     if not devices:
         return None
     header = _run([nvidia_smi]) or ""
