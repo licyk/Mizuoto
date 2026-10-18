@@ -9,12 +9,14 @@ under a seed; split two segments; stop when cancelled; and leave no residue in t
     python scripts/dev.py test-engines [engine…]
 
 uses the models of ``MIZUOTO_TEST_DATA_DIR`` (default: the normal data folder), writes nothing there,
-and runs on ``MIZUOTO_TEST_DEVICE`` (default: auto). Licence-gated engines run when
+and runs on ``MIZUOTO_TEST_DEVICE`` (default: auto). ``MIZUOTO_TEST_SETTINGS`` adds settings as JSON, e.g.
+``{"compute": {"vram_limit_mb": 4096}}`` to run every model partly loaded on a smaller GPU played by a big one. Licence-gated engines run when
 ``MIZUOTO_TEST_ACCEPT_LICENCES=1`` says their licences are accepted (and their distributions are installed).
 """
 
 from __future__ import annotations
 
+import json
 import os
 import re
 import threading
@@ -52,6 +54,9 @@ def services(tmp_path_factory):
         "engines": {e: {"device": device} for e in ("qwen3tts", "asr", "omnivoice", "cosyvoice", "f5tts", "gptsovits", "fishspeech", "indextts", "voxcpm")},
         "tts": {"normalize": "none"},
     }
+    extra = json.loads(os.environ.get("MIZUOTO_TEST_SETTINGS") or "{}")
+    for section, values in extra.items():
+        overrides[section] = {**overrides.get(section, {}), **values} if isinstance(values, dict) else values
     s = build_services(data_dir=tmp_path_factory.mktemp("contract"), environ={}, settings_overrides=overrides, start_background=True)
     if os.environ.get("MIZUOTO_TEST_ACCEPT_LICENCES") == "1":
         # Licence-gated engines, for whoever runs the suite and has accepted their licences: in this temporary folder only.

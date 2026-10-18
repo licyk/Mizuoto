@@ -116,7 +116,7 @@ python scripts/dev.py test-engines qwen3tts f5tts -- -x -k cancel
 MIZUOTO_TEST_DEVICE=cpu python scripts/dev.py test-engines cosyvoice
 ```
 
-`test-engines` sets `MIZUOTO_CONTRACT=1` and `MIZUOTO_TEST_ENGINES` (the engines named) and runs `tests/engines` with `-m engine -v`. The suite uses the models of `MIZUOTO_TEST_DATA_DIR` (default: the normal data folder), but runs in a temporary data folder and writes nothing to the real one, on `MIZUOTO_TEST_DEVICE` (default `auto`).
+`test-engines` sets `MIZUOTO_CONTRACT=1` and `MIZUOTO_TEST_ENGINES` (the engines named) and runs `tests/engines` with `-m engine -v`. The suite uses the models of `MIZUOTO_TEST_DATA_DIR` (default: the normal data folder), but runs in a temporary data folder and writes nothing to the real one, on `MIZUOTO_TEST_DEVICE` (default `auto`). `MIZUOTO_TEST_SETTINGS` adds settings as JSON: `{"compute": {"vram_limit_mb": 4096}}` runs every model partly loaded on a 4 GB GPU played by a bigger one.
 
 | Test | What it checks |
 | --- | --- |

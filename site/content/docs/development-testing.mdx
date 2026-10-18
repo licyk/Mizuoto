@@ -115,7 +115,7 @@ python scripts/dev.py test-engines qwen3tts f5tts -- -x -k cancel
 MIZUOTO_TEST_DEVICE=cpu python scripts/dev.py test-engines cosyvoice
 ```
 
-`test-engines` 设置 `MIZUOTO_CONTRACT=1` 和 `MIZUOTO_TEST_ENGINES`（指定的引擎），以 `-m engine -v` 运行 `tests/engines`。套件使用 `MIZUOTO_TEST_DATA_DIR`（默认是平常的数据目录）里的模型，但在临时数据目录里运行，不往真实目录写任何东西，设备是 `MIZUOTO_TEST_DEVICE`（默认 `auto`）。
+`test-engines` 设置 `MIZUOTO_CONTRACT=1` 和 `MIZUOTO_TEST_ENGINES`（指定的引擎），以 `-m engine -v` 运行 `tests/engines`。套件使用 `MIZUOTO_TEST_DATA_DIR`（默认是平常的数据目录）里的模型，但在临时数据目录里运行，不往真实目录写任何东西，设备是 `MIZUOTO_TEST_DEVICE`（默认 `auto`）。`MIZUOTO_TEST_SETTINGS` 以 JSON 追加设置：`{"compute": {"vram_limit_mb": 4096}}` 让每个模型部分加载，在大卡上模拟一块 4 GB 的 GPU。
 
 | 测试 | 检查什么 |
 | --- | --- |

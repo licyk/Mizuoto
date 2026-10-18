@@ -141,11 +141,15 @@ Details: `development-runtime`, `development-memory`, `development-acceleration`
   runs out of memory runs again (at most twice) with more streamed and its generators put back: identical, slower.
   Partial placements are explained in the log and in `meta.memory.partial`. Only linear/conv weights stream; code that
   reads a unit's weights outside its forward must mark it `fixed`. New engines must pass
-  `tests/engines_native/streaming.py` (every unit streamed, half, none: identical on a simulated device).
+  `tests/engines_native/streaming.py` (every unit streamed, half, none: identical on a simulated device). Mark an
+  autoregressive model's handle `kind="sequence"`: its streamed layers are never prefetched (a token's work hides no
+  copy; prefetching only took room from resident weights), while models run once per input prefetch on side streams.
 - **Speed without changing results**: on NVIDIA GPUs every autoregressive decoder runs its steps as CUDA graphs
   (`compute.cuda_graphs`, on by default, `runtime/graphs.py`) with one wait for the device per step
   (`runtime/sampling.py`'s sync-free draws). Graphs replay the eager kernels, so outputs are identical; they are used
-  only for a model wholly on its device and dropped when its weights move. Opt-ins that change bits are labelled in
+  only for a model wholly on its device and dropped when its weights move. Capture and replay them under
+  `torch.cuda.device(graphs.device)` (a replay runs on the current device's stream: a model on `cuda:1` faults
+  otherwise); none are captured under cudaMallocAsync (`graphs.usable`). Opt-ins that change bits are labelled in
   the output: `compute.compile`, non-`auto` attention backends, Qwen3-TTS's `fused_projections`, `compute.fast`.
 - Devices: `cpu`, `cuda:N` (NVIDIA, and AMD under ROCm), `xpu:N`, `mps`. The host probes them without importing
   torch. CosyVoice 3's float64 F0 predictor stays on the CPU where the device lacks float64 (MPS, Intel Arc).
@@ -161,7 +165,14 @@ Details: `development-runtime`, `development-memory`, `development-acceleration`
 - Exactness is checked by `tests/engines_native/` and `packages/native/*/tests/` (tiny random models, every engine and
   trainer, in CI), the contract suite (`scripts/dev.py test-engines`, real models through the whole stack) and the
   parity harness (`scripts/parity/`; tiers T0–T4 on `development-testing`).
-- On a GPU, "identical" means identical to the code before on the same GPU, driver, torch and settings.
+- On a GPU, "identical" means identical to the code before on the same GPU, driver, torch and settings. A rewrite proven
+  exact on the CPU is not proven on a GPU: SDPA's CUDA paths split their sums by the key length (so a shorter masked
+  cache changes bits: VoxCPM's span is CPU-only), and under autocast in-place operations keep their buffer's dtype
+  where the out-of-place ones autocast to float32 (Fish Speech's Snake). Check such a change on a GPU, against the code
+  before (`development-performance`, G1, runs every step since round 1 that way).
+- TorchScript functions (VoxCPM's Snake, GPT-SoVITS's training gate, both scripted as upstream's) are fused on CUDA
+  after their first call per shape: their bits depend on the shapes the process has seen, and the fuser compiles on
+  the default device. Do not add more.
 - Compare CPU runs with the same thread count: CPU kernels split their sums by it.
 
 ## 6. Feature areas: where to look
@@ -193,7 +204,8 @@ Details: `development-runtime`, `development-memory`, `development-acceleration`
 python scripts/dev.py check          # all CI checks: lint, typecheck-py, test-py, test-web, typegen-check
 python scripts/dev.py format         # ruff format and the safe fixes
 python scripts/dev.py dev            # API server + Vite with hot reload (http://localhost:5173)
-python scripts/dev.py test-engines qwen3tts      # contract suite (installed models; MIZUOTO_TEST_DEVICE=cpu|cuda:N)
+python scripts/dev.py test-engines qwen3tts      # contract suite (installed models; MIZUOTO_TEST_DEVICE=cpu|cuda:N,
+                                                 # MIZUOTO_TEST_SETTINGS='{"compute": {"vram_limit_mb": 4096}}')
 python scripts/dev.py model-manifests [engine]   # re-pin catalogue files after a manifest change
 python scripts/dev.py typegen                    # the web UI's API types
 python scripts/dev.py wheels && python scripts/dev.py smoke   # the distributions, tried in a new environment
