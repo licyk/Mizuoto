@@ -38,6 +38,21 @@ ENCODE_BATCH = 8
 class Qwen3Trainer(Trainer):
     ENGINE = "qwen3tts"
 
+    @classmethod
+    def refuses(cls, method: str, model_dir: Path) -> str | None:
+        """Upstream's speaker recipe adds the text embeddings to the codec's without the text projection: it trains
+        only Base models whose text embeddings are as wide as the talker (the 1.7B; not the 0.6B: 2048 against 1024)."""
+        if method != "speaker":
+            return None
+        try:
+            talker = json.loads((model_dir / "config.json").read_text(encoding="utf-8"))["talker_config"]
+            text, width = int(talker["text_hidden_size"]), int(talker["hidden_size"])
+        except (OSError, ValueError, KeyError, TypeError):
+            return None  # the stage reads it again and says what is wrong
+        if text == width:
+            return None
+        return f"Upstream's speaker recipe trains only models whose text embeddings are as wide as the talker ({text} here against {width}): start from the 1.7B Base"
+
     @staticmethod
     def _model_dir(ctx: StageContext) -> Path:
         if ctx.base_model.get("variant") != "base":

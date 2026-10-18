@@ -76,7 +76,7 @@ Alibaba Qwen's 12 Hz speech LLM. Best for: high-quality cloning in ten languages
 - **Languages**: zh, en, de, it, pt, es, ja, ko, fr, ru.
 - **Reference clips**: 1–30 s, at least 16 kHz (3–20 s works best). With the clip's transcript it follows the voice more closely.
 - **Long text**: upstream does not split it, so Mizuoto does.
-- **Training**: **Teach it a speaker** (`speaker`, Base only): upstream's single-speaker fine-tune (`sft_12hz.py`), reimplemented; the Base model learns the dataset's voice and is exported as a new CustomVoice model with that voice as its preset speaker. A few minutes of one speaker; 24 GB of GPU memory or more for the 1.7B.
+- **Training**: **Teach it a speaker** (`speaker`, the 1.7B Base only): upstream's single-speaker fine-tune (`sft_12hz.py`), reimplemented; the Base model learns the dataset's voice and is exported as a new CustomVoice model with that voice as its preset speaker. A few minutes of one speaker; 24 GB of GPU memory or more for the 1.7B.
 - **Load options**: Attention follows the [attention settings](/docs/advanced-performance). `fused_projections` (off) is a fast mode: each layer's q/k/v and gate/up projections become one product each, a few percent faster on a GPU, where the audio is then no longer bit-identical to the original implementation's (outputs list `fused_projections`).
 
 ## CosyVoice

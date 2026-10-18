@@ -267,6 +267,14 @@ class InferenceService:
 
         return trainer_class(trainer).DEVICES, missing_requirements(trainer)
 
+    def trainer_refuses(self, trainer: str, method: str, model_dir: str) -> str | None:
+        """Why the trainer cannot start ``method`` from that model (``Trainer.refuses``: read without torch), else None."""
+        from pathlib import Path
+
+        from mizuoto.training.trainer import trainer_class
+
+        return trainer_class(trainer).refuses(method, Path(model_dir))
+
     def probe_devices(self) -> dict[str, Any] | None:
         """What torch sees (``mizuoto.runtime.device.probe_devices``), asked in this process only once the runtime is
         built (torch is loaded then) and without initialising CUDA or XPU here; None otherwise, so the core's device

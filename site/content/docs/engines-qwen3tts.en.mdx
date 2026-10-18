@@ -76,7 +76,7 @@ Method `speaker` (Base models; stages `prepare`, `train`, `export`): the model l
 - Clips are encoded eight at a time, zero-padded, as `Qwen3TTSTokenizer.encode` batches them.
 - The order comes from a plain shuffled data loader on the process-wide generator (the training stage's own process). Accelerate's gradient accumulation is reproduced as the loss over the steps, an optimiser step every N batches and at each epoch's end.
 - Both losses are transformers' `ForCausalLMLoss`, which shifts the already shifted labels once more; kept.
-- Upstream adds the raw text embedding to the codec embeddings without its `text_projection`, which inference applies; kept, so the weights are upstream's. It follows that only a model whose text embeddings are as wide as the talker can train: the 1.7B Base can, and the train stage refuses a model that cannot (`capability_not_supported`) before it starts.
+- Upstream adds the raw text embedding to the codec embeddings without its `text_projection`, which inference applies; kept, so the weights are upstream's. It follows that only a model whose text embeddings are as wide as the talker can train: the 1.7B Base can, the 0.6B Base cannot (text 2048, talker 1024). The method shows as unavailable for such a model, with the reason, and an experiment cannot start from it (`Trainer.refuses` reads the model's `config.json` before a run; `capability_not_supported`).
 - Each training forward gets a fresh cache: the first `DynamicCache` update concatenates, so attention sees contiguous keys and values, as upstream's.
 - `training.memory`: gradient checkpointing over the talker's and code predictor's layers gives identical results; `lowest` keeps AdamW's state in RAM (float32 there).
 

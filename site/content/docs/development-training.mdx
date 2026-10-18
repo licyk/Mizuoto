@@ -139,7 +139,7 @@ class Trainer:
         return getattr(self, f"stage_{stage}")(ctx) or {}  # 阶段 id → stage_<id>
 ```
 
-训练器是 `mizuoto.training.Trainer` 的子类，它的各方法声明的每个阶段 id 都对应一个 `stage_<id>(ctx)` 方法；`ctx.request["method"]` 说明正在运行哪个方法。训练器模块顶层不导入 torch：主机会导入它来读取 `REQUIRES` 和 `DEVICES`（`InferenceService.trainer_needs`），所以数学部分放在阶段方法内部才导入的模块里。例如 CosyVoice 的训练器设置了 `DEVICES = ("cuda", "cpu")`：上游用 torchrun 只在 CUDA 上训练，而原生移植没有任何地方需要 CUDA。
+训练器是 `mizuoto.training.Trainer` 的子类，它的各方法声明的每个阶段 id 都对应一个 `stage_<id>(ctx)` 方法；`ctx.request["method"]` 说明正在运行哪个方法。训练器模块顶层不导入 torch：主机会导入它来读取 `REQUIRES` 和 `DEVICES`（`InferenceService.trainer_needs`），并询问 `refuses(method, model_dir)`：它不加载 torch 就说明某个方法为什么不能从某个模型开始（Qwen3-TTS：`speaker` 不能从 0.6B Base 开始；该方法随之显示为不可用，运行也无法开始），所以数学部分放在阶段方法内部才导入的模块里。例如 CosyVoice 的训练器设置了 `DEVICES = ("cuda", "cpu")`：上游用 torchrun 只在 CUDA 上训练，而原生移植没有任何地方需要 CUDA。
 
 阶段方法返回一个可序列化为 JSON 的字典，存为该阶段的 `result`；后面的阶段从 `ctx.results` 读取。`StageContext`（`mizuoto/training/context.py`）提供：
 

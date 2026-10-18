@@ -139,7 +139,7 @@ class Trainer:
         return getattr(self, f"stage_{stage}")(ctx) or {}  # stage id → stage_<id>
 ```
 
-A trainer is a `mizuoto.training.Trainer` subclass with one `stage_<id>(ctx)` method per stage id its methods declare; `ctx.request["method"]` says which method runs. The trainer's module imports no torch at the top: the host imports it to read `REQUIRES` and `DEVICES` (`InferenceService.trainer_needs`), so the maths lives in modules it imports inside the stage methods. CosyVoice's trainer, for example, sets `DEVICES = ("cuda", "cpu")`: upstream trains under torchrun on CUDA only, and nothing in the native port needs CUDA.
+A trainer is a `mizuoto.training.Trainer` subclass with one `stage_<id>(ctx)` method per stage id its methods declare; `ctx.request["method"]` says which method runs. The trainer's module imports no torch at the top: the host imports it to read `REQUIRES` and `DEVICES` (`InferenceService.trainer_needs`) and to ask `refuses(method, model_dir)`, which says, without torch, why a method cannot start from a model (Qwen3-TTS: the 0.6B Base for `speaker`; the method then shows as unavailable, and a run cannot start), so the maths lives in modules it imports inside the stage methods. CosyVoice's trainer, for example, sets `DEVICES = ("cuda", "cpu")`: upstream trains under torchrun on CUDA only, and nothing in the native port needs CUDA.
 
 A stage method returns a JSON-serialisable dict, stored as the stage's `result`; later stages read it from `ctx.results`. `StageContext` (`mizuoto/training/context.py`) offers:
 

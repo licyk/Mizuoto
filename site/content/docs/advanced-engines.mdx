@@ -76,7 +76,7 @@ Web UI 中，**模型** › **引擎** 列出每个引擎的可用状态、设�
 - **语言**：zh、en、de、it、pt、es、ja、ko、fr、ru。
 - **参考音频**：1–30 秒，采样率至少 16 kHz（推荐 3–20 秒）。带上文本时更贴近原音色。
 - **长文本**：上游不切分长文本，由 Mizuoto 分段。
-- **训练**：**Teach it a speaker**（`speaker`，仅 Base）：上游的单说话人微调（`sft_12hz.py`，在 Mizuoto 中重新实现），Base 学会数据集的音色，导出为以它为预置说话人的 CustomVoice 新模型。几分钟的单人语音即可；1.7B 需要 24 GB 以上显存。
+- **训练**：**Teach it a speaker**（`speaker`，仅 1.7B Base）：上游的单说话人微调（`sft_12hz.py`，在 Mizuoto 中重新实现），Base 学会数据集的音色，导出为以它为预置说话人的 CustomVoice 新模型。几分钟的单人语音即可；1.7B 需要 24 GB 以上显存。
 - **加载选项**：注意力按[注意力设置](/docs/advanced-performance)选择。`fused_projections`（默认关闭）是快速模式：每层的 q/k/v 与 gate/up 投影各合并为一次矩阵乘法，在 GPU 上再快几个百分点，但音频不再与原实现逐位一致（输出参数中会标注 `fused_projections`）。
 
 ## CosyVoice

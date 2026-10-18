@@ -76,7 +76,7 @@ talker 的工作内存按请求估算：每行的提示（指令、参考文本�
 - 音频每次编码八段、补零，与 `Qwen3TTSTokenizer.encode` 的批处理方式相同。
 - 顺序来自进程级生成器上的普通打乱数据加载器（训练阶段自己的进程）。Accelerate 的梯度累积复现为：损失按步累加，每 N 个批次以及每个 epoch 结束时执行一次优化器步。
 - 两个损失都是 transformers 的 `ForCausalLMLoss`，它会把已经移位的标签再移一次；保留。
-- 上游把原始的文本嵌入直接加到编解码器嵌入上，没有经过推理时会用的 `text_projection`；保留，这样权重才与上游相同。由此只有文本嵌入宽度与 talker 相同的模型能训练：1.7B Base 可以，不满足的模型会在训练阶段开始前被拒绝（`capability_not_supported`）。
+- 上游把原始的文本嵌入直接加到编解码器嵌入上，没有经过推理时会用的 `text_projection`；保留，这样权重才与上游相同。由此只有文本嵌入宽度与 talker 相同的模型能训练：1.7B Base 可以，0.6B Base 不行（文本 2048，talker 1024）。对这样的模型，该方法显示为不可用并给出原因，也无法从它开始实验（`Trainer.refuses` 在运行前读取模型的 `config.json`；`capability_not_supported`）。
 - 每次训练前向都用新的缓存：`DynamicCache` 第一次更新时会拼接，所以注意力看到的是连续的键和值，与上游相同。
 - `training.memory`：对 talker 和 code predictor 的层做梯度检查点，结果相同；`lowest` 把 AdamW 的状态放在内存里（在那里是 float32）。
 

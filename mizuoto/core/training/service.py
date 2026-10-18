@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import re
 import shutil
 import threading
@@ -43,6 +44,8 @@ if TYPE_CHECKING:
     from mizuoto.core.models.service import ModelService
     from mizuoto.core.outputs.service import OutputService
     from mizuoto.core.voices.service import VoiceService
+
+logger = logging.getLogger(__name__)
 
 EXPERIMENT_FILE = "experiment.json"
 METRICS_FILE = "metrics.jsonl"
@@ -148,7 +151,7 @@ class TrainingService:
             elif info.state not in ("builtin", "installed"):
                 reason = f"{info.title} is {info.state}"
             else:
-                reason = self._missing(info.engine, method, info.variant)
+                reason = self._missing(info.engine, method, info.variant) or self._refused(info.engine, method_id, info.path)
             # As the model sees it: the hyperparameters of other variants left out.
             own = {k: v for k, v in method.hyperparams.items() if v.variants is None or info.variant in v.variants}
             memory = estimate_mb(info.engine, method_id, info.size_mb, "lora" in method_id or "lora_rank" in own) if info.size_mb else None
@@ -191,6 +194,17 @@ class TrainingService:
         if not self._runtime.inference.implemented(engine):
             return None
         return self._runtime.inference.trainer(engine)
+
+    def _refused(self, engine: str, method: str, model_dir: str | None) -> str | None:
+        """What the engine's trainer says about this model (``Trainer.refuses``), when the model is on disk."""
+        trainer = self.trainer(engine)
+        if trainer is None or not model_dir:
+            return None
+        try:
+            return self._runtime.inference.trainer_refuses(trainer, method, model_dir)
+        except Exception:  # a check: the stage itself says what is wrong
+            logger.debug("Asking %s about %s failed", trainer, model_dir, exc_info=True)
+            return None
 
     def _missing(self, engine: str, method: TrainingMethod, variant: str) -> str | None:
         """What training still needs: the engine and its trainer, a device it runs on, the trainer's packages, the
@@ -399,6 +413,9 @@ class TrainingService:
         problem = self._missing(exp.engine, method, info.variant)
         if problem:
             raise CapabilityError(f"{manifest.title} cannot train yet. {problem}", {"hint": problem.split(": ", 1)[-1]})
+        refused = self._refused(exp.engine, exp.method, info.path)
+        if refused:
+            raise CapabilityError(f"{manifest.title}'s {method.title} cannot start from {info.title}: {refused}", {"method": exp.method, "model": info.id})
         assets = self._models.asset_paths(info.id)
         for asset_id in self.training_assets(method, info.variant):
             asset = self._models.asset(asset_id)

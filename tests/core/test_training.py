@@ -213,3 +213,24 @@ def test_the_warning_before_a_run_names_a_batch_that_fits(services, monkeypatch)
     lines.clear()
     tr._preflight(SimpleNamespace(**{**vars(exp), "hyperparams": {"batch_size": 2}}), "cuda:0", SimpleNamespace(log=lines.append))
     assert lines == []
+
+
+def test_qwen3tts_speaker_training_refuses_the_0_6b_base_before_a_run(tmp_path):
+    """Upstream's speaker recipe needs text embeddings as wide as the talker: the 0.6B Base (2048 against 1024) is
+    refused with the reason before a run, the 1.7B's widths pass; other methods and unreadable configs are left to the
+    stage."""
+    import json
+
+    from mizuoto.engines.qwen3tts.train import Qwen3Trainer
+
+    def model(text: int, width: int):
+        folder = tmp_path / f"m{text}-{width}"
+        folder.mkdir(exist_ok=True)
+        (folder / "config.json").write_text(json.dumps({"talker_config": {"text_hidden_size": text, "hidden_size": width}}))
+        return folder
+
+    reason = Qwen3Trainer.refuses("speaker", model(2048, 1024))
+    assert reason is not None and "2048" in reason and "1.7B" in reason
+    assert Qwen3Trainer.refuses("speaker", model(2048, 2048)) is None
+    assert Qwen3Trainer.refuses("other", model(2048, 1024)) is None
+    assert Qwen3Trainer.refuses("speaker", tmp_path) is None

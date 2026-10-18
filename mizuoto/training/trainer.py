@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, ClassVar
 
 from mizuoto.core import codes
@@ -19,6 +20,12 @@ class Trainer:
     """Modules training needs beyond inference (none of the engines has any today), probed by import before a run."""
     DEVICES: ClassVar[tuple[str, ...] | None] = None
     """The device kinds the trainer runs on, when they differ from its manifest method's ``devices`` (these win)."""
+
+    @classmethod
+    def refuses(cls, method: str, model_dir: Path) -> str | None:
+        """Why ``method`` cannot start from the model in ``model_dir`` (read without torch: shown before a run, where
+        the stage would fail), else None."""
+        return None
 
     def run_stage(self, stage: str, ctx: StageContext) -> dict[str, Any]:
         from mizuoto.runtime.engine import EngineError
