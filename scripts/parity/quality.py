@@ -2,7 +2,8 @@
 and the two compared against the tier's thresholds (site page ``development-testing``).
 
     <python> scripts/parity/quality.py run --impl native|reference|upstream [--device cuda:0] [--name NAME] [--only SET]
-        [--seeds 3] [--texts N] [--voice V] [--language zh] [--setting key=value] [--suite corpus/t4.json]
+        [--seeds 3] [--texts N] [--voice V] [--language zh] [--setting key=value] [--option key=value]
+        [--suite corpus/t4.json]
     <python> scripts/parity/quality.py score [--name NAME]... [--device cuda:0] [--only SET]
     <python> scripts/parity/quality.py compare [--a reference] [--b native] [--only SET] [--report out.md]
 
@@ -13,8 +14,8 @@ decides which implementation runs, as for ``stack.py``: this checkout's interpre
 names, ``data-t28`` for CosyVoice); an environment with the upstream package for ``upstream`` (VoxCPM). Clips go to
 ``<workspace>/quality/<name>/<set>/<voice>-<text>-s<seed>.wav`` with a ``.json`` record beside each; a clip already there is
 kept, so a run that stops resumes where it stopped. The default name is ``native`` for the native side and ``reference``
-for both reference kinds. ``--setting`` runs with an opt-in (``compute.attention=fast``), under its own ``--name``, to be
-compared with the default run as ``a``.
+for both reference kinds. ``--setting`` (``compute.attention=fast``) or ``--option`` (a request option, OmniVoice's
+``packed_guidance=true``) runs with an opt-in, under its own ``--name``, to be compared with the default run as ``a``.
 
 ``score`` (this checkout's interpreter) measures each clip once, into ``<clip>.score.json``:
 
@@ -124,6 +125,7 @@ def cmd_run(args: argparse.Namespace) -> int:
         return 1
     tmp = Path(tempfile.mkdtemp(prefix=f"t4-{args.impl}-"))
     settings = parse_settings(args.setting or [])
+    options = dict(_value(pair) for pair in args.option or [])
     s = build(args.device, tmp, args.impl, settings)
     failures = 0
     try:
@@ -140,6 +142,8 @@ def cmd_run(args: argparse.Namespace) -> int:
             for n, (voice, text_id, seed) in enumerate(todo, 1):
                 language, text = suite["texts"][text_id]
                 request = {"model": spec["model"], "text": text, "language": language, "params": {"seed": seed}, "voice_spec": set_voices(suite, spec)[voice]}
+                if options:
+                    request["engine_options"] = options
                 case = {"id": f"t4-{key}-{stem(voice, text_id, seed)}", "request": request}
                 record: dict[str, Any]
                 try:
@@ -151,6 +155,7 @@ def cmd_run(args: argparse.Namespace) -> int:
                     {
                         "impl": args.impl,
                         "settings": settings,
+                        "options": options,
                         "device": args.device,
                         "set": key,
                         "voice": voice,
@@ -173,6 +178,15 @@ def cmd_run(args: argparse.Namespace) -> int:
         s.close()
         shutil.rmtree(tmp, ignore_errors=True)
     return 1 if failures else 0
+
+
+def _value(pair: str) -> tuple[str, Any]:
+    """``key=value``, the value read as JSON when it parses (``true``, ``8``), else as a string."""
+    key, _, raw = pair.partition("=")
+    try:
+        return key.strip(), json.loads(raw)
+    except json.JSONDecodeError:
+        return key.strip(), raw
 
 
 # -- measures -------------------------------------------------------------------------------------------------------
@@ -653,6 +667,7 @@ def main(argv: list[str]) -> int:
     run.add_argument("--only", action="append")
     run.add_argument("--seeds", type=int, default=len(SEEDS))
     run.add_argument("--texts", type=int, default=0, help="Only the first N texts of each language (a quick run)")
+    run.add_argument("--option", action="append", help="An engine option for every request, key=value (an opt-in that is a request option); repeatable")
     run.add_argument("--voice", action="append", help="Only these voices of the set (a targeted run, e.g. more seeds for one voice)")
     run.add_argument("--language", help="Only the texts in this language")
     run.add_argument("--setting", action="append", help="A setting for the whole run, key=value (an opt-in judged against the default); repeatable")

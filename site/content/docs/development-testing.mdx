@@ -210,7 +210,21 @@ $W/native-env/bin/python scripts/parity/compare.py qwen3tts --a reference --b na
 | VoxCPM 2，设计音色（对照上游） | 0.84 → 0.76 | 0 / 0 | 0.687 → 0.687 | 1.000 | 3.31 → 3.31 | 通过 |
 | VoxCPM 1.5，克隆（对照上游） | 0.74 → 0.85 | 0 / 0 | 0.802 → 0.801 | 1.003 | 3.57 → 3.56 | 通过 |
 
-每组的每个音色，响度和 F0 都在参照的四分位距之内。容差之内唯一的系统性差异是 IndexTTS 1.5 的 UTMOS，低 0.03（p 0.025，主要来自第二个英文音色）；同样种子下，它的 GPU 输出本来就与 0.1 不同（2.3 dB，见[性能](/docs/development-performance)中的 G0），原因尚未查明。Fish Speech S2 Pro 在 GPU 上没有参照（0.1 的克隆在 GPU 上失败）：仅原生的结果为错误率 1.23 %，没有失败片段，相似度 0.723，UTMOS 4.07。改变音频的可选项（`compute.attention=fast`、`compute.compile`、`fused_projections`、`packed_guidance`、`attention_span`）用同样的方法评判：用 `--setting` 运行，以默认的原生运行为参照。
+每组的每个音色，响度和 F0 都在参照的四分位距之内。容差之内唯一的系统性差异是 IndexTTS 1.5 的 UTMOS，低 0.03（p 0.025，主要来自第二个英文音色）；同样种子下，它的 GPU 输出本来就与 0.1 不同（2.3 dB，见[性能](/docs/development-performance)中的 G0），原因尚未查明。Fish Speech S2 Pro 在 GPU 上没有参照（0.1 的克隆在 GPU 上失败）：仅原生的结果为错误率 1.23 %，没有失败片段，相似度 0.723，UTMOS 4.07。**改变音频的可选项**用同样的方法评判：在每个可选项改变的组上，用该可选项（`--setting`，请求选项则用 `--option`）运行原生实现，与默认的原生运行对照。全部通过（默认 → 可选项）：
+
+| 可选项 | 组 | 错误率 % | 失败 | 说话人相似度 | UTMOS | 结论 |
+| --- | --- | --- | --- | --- | --- | --- |
+| `compute.attention=fast`，flash-attn 2.8.3 | VoxCPM 2 / 1.5 | 0.91 → 0.94 / 0.85 → 0.82 | 0 / 0 | 0.803 → 0.801 / 0.801 → 0.802 | 3.61 → 3.58（p 0.038）/ 3.56 → 3.58 | 通过 |
+| | F5-TTS、GPT-SoVITS v4 | 音频相同 | | | | 通过 |
+| `fused_projections` | Qwen3-TTS Base / CustomVoice | 0.90 → 0.77 / 1.33 → 1.09 | 0 / 0，1 / 0 | 0.785 → 0.785 / 0.796 → 0.793 | 4.15 → 4.15 / 4.02 → 4.02 | 通过 |
+| `packed_guidance` | OmniVoice 克隆 / 设计音色 | 1.01 → 1.02 / 0.76 → 0.66 | 0 / 0 | 0.846 → 0.844 / 0.660 → 0.660 | 3.73 → 3.73 / 4.07 → 4.08 | 通过 |
+| `attention_span` | VoxCPM 2 / 1.5 | 0.91 → 0.68（p 0.028）/ 0.85 → 0.79 | 0 / 0 | 0.803 → 0.803 / 0.801 → 0.802 | 3.61 → 3.61 / 3.56 → 3.60 | 通过 |
+| `compute.compile` | CosyVoice 2 / F5-TTS / IndexTTS 2 | 1.42 → 1.35 / 1.45 → 1.39 / 0.99 → 1.02 | 0 / 0 | 不变 | 3.96 → 3.96 / 3.37 → 3.41（p 0.002）/ 3.35 → 3.35 | 通过 |
+| `compute.fast`（全部四个开关） | F5-TTS / GPT-SoVITS v4 / IndexTTS 1.5 / VoxCPM 2 | 1.45 → 1.52 / 1.52 → 1.88 / 0.55 → 0.68 / 0.91 → 0.88 | 0 / 0（IndexTTS 1 / 1） | 相差不超过 0.004 | 相差不超过 0.03 | 通过（GPT-SoVITS 的最差片段在噪声范围内） |
+
+未安装 flash-attn 时，`compute.attention=fast` 处处都是 SDPA，所以音频相同。安装后，F5-TTS 没有可交给 FlashAttention 的带填充的半精度调用；GPT-SoVITS 的调用会让 flash-attn 出错并回退到 SDPA（结果精确，但每次调用都要付出这次尝试的开销）。
+
+第一次可选项运行暴露了评测工具的一个错误：请求和对照用例把引擎选项写在 `options` 下，而请求模型没有这个字段，pydantic 会直接忽略它，所以 `packed_guidance` 和六个 T3 用例（GPT-SoVITS 的 cut5、批量和串行用例，VoxCPM 的续写和重试用例）实际上都用默认值运行。现在它们改用 `engine_options`；在 CPU 上重跑后，这六个用例在应用了各自选项的情况下与 0.1 和上游逐采样相同。
 
 ## Web UI 测试
 
