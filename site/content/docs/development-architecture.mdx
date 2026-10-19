@@ -277,6 +277,16 @@ with open_services() as services:
 - 主机和它的远程 agent 必须使用同一个协议版本，不同时互相拒绝。
 - 一个任务记录它所属的进程；打开数据目录时，只有进程已经不在的任务才标为 `interrupted`，所以另一条命令不会打断正在进行的渲染。
 
+### 记录的文件路径
+
+数据目录可以被移动、改名、复制或通过链接打开，数据库必须跟着它走。所以 `outputs.path` 和 `audio_files.path` 对数据目录内的文件记录相对于数据目录的路径（`outputs/2026-10/a.wav`，所有平台都用 `/`），对其他位置的文件（服务器路径、设在数据目录之外的结果目录）记录绝对路径。这条规则由 `mizuoto/core/storage.py` 负责（`StorageService.store` / `resolve`，基于 `core/files.py` 的 `to_stored` / `from_stored`）；对外给出的记录（`Output.path`、`AudioFile.path`）是文件此刻在磁盘上的绝对路径，文件不在时 `missing` 为真。
+
+- **在新位置打开**：`meta` 表（迁移 3）记录上次打开的位置（`data_dir`）。位置不同或没有记录（相对路径之前的数据库，处处是绝对路径）时，`StorageService.reconcile` 把数据目录内文件的记录一次性改写为相对路径，在一个 `BEGIN IMMEDIATE` 事务中完成，几个进程同时打开同一目录时也只做一次。
+- **重新找到**：文件不在记录的位置时，按记录路径的末尾几段到数据目录、结果目录和缓存目录下查找（`relocations`，能读两种平台的分隔符，所以 Windows 上写的数据库在 Linux 容器里也能用）。候选文件必须与记录的大小一致，音频文件还须与记录的 SHA-256 一致；找到后改写记录。对指向数据目录之外的记录，数据目录内的副本优先于原文件：复制出来的数据目录绝不能读取或删除原目录的文件（以前全是绝对路径时确实会这样）。
+- **缺失**：哪里都找不到的文件报 `not_found`，`detail.reason` 为 `file_missing`（`codes.FILE_MISSING`；另有 `detail.recorded`、`detail.path`），从不跳过：打包下载会拒绝它，或在 `skip_missing` 时（界面的 **全部下载**）列在 `MISSING.txt` 里；删除这条结果只删记录，不把任何文件移到回收站。`mizuoto output check`（`POST /outputs/check`，`StorageService.check`）列出所有记录，改写它们（`--fix`），把某个已移动的外部目录下的记录指向新位置（`--rebase OLD NEW`），并删除缺失文件的记录（`--prune-missing`）。
+- 相对的 `paths.*` 目录位于数据目录内，而不是当前工作目录。
+- 数据库架构比当前版本新时会记录日志（旧版 Mizuoto 会把新版写的相对记录显示为缺失，但不会删除任何东西）。
+
 ## 事件
 
 `mizuoto/core/events/models.py` 里的每个事件都是带 `__event_name__` 的 `Record`：`job_updated`、`job_log`、`jobs_cleared`、`outputs_added` / `outputs_removed`、`voices_changed`、`models_changed`、`presets_changed`、`engines_changed`、`runtime_changed`（已加载的模型和各引擎的状态，即 `RuntimeStatus`）、`compute_changed`、`settings_changed`、`datasets_changed`、`projects_changed`、`experiments_changed`、`train_metrics`。`EventBase.get_events()` 收集所有子类；`mizuoto/api/openapi.py` 把它们写进 OpenAPI 模式，界面据此为 socket 生成类型。

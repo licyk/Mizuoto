@@ -110,10 +110,13 @@ class GptSovitsTrainer(Trainer):
 
     @staticmethod
     def _trained(ctx: StageContext, stage: str, folder: Path, pattern: str) -> Path:
-        """The weights a training stage made: the path it reported, else the newest file in its folder."""
-        path = (ctx.results.get(stage) or {}).get("path")
-        if path and Path(path).is_file():
-            return Path(path)
+        """The weights a training stage made: the file it named in its folder, the path it reported, else the newest
+        file in its folder. The name comes first: the reported path is absolute, and stale once the experiments
+        folder moves."""
+        result = ctx.results.get(stage) or {}
+        for candidate in (folder / str(result["weights"]) if isinstance(result.get("weights"), str) else None, result.get("path")):
+            if candidate and Path(candidate).is_file():
+                return Path(candidate)
         if not folder.is_dir():
             raise EngineError(f"There are no trained {stage} weights; run the {stage} stage", code=codes.INVALID_INPUT)
         return GptSovitsTrainer._newest(folder, pattern)

@@ -30,6 +30,10 @@ DOWNLOAD_FAILED = "download_failed"
 INSTALL_FAILED = "install_failed"
 REMOTE_UNAVAILABLE = "remote_unavailable"
 
+# detail["reason"] values of not_found
+FILE_MISSING = "file_missing"
+"""A record's file is neither where it was recorded nor anywhere it could have moved to."""
+
 # detail["reason"] values of compute_unavailable
 OUT_OF_MEMORY = "out_of_memory"
 NO_DEVICE = "no_device"

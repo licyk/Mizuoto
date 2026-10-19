@@ -38,6 +38,8 @@ With more than one result listed, **Download all** downloads them together.
 
 Result files are in `outputs/` in the data folder (change it under **Settings › Storage › Results**); where each came from (model, parameters, timings, licence tags) is recorded in the database.
 
+The data folder can be moved, renamed or copied: start Mizuoto with the new location (`MIZUOTO_DATA_DIR`, or `mizuoto webui --data-dir`) and every result plays from there. A result whose file is gone shows **File missing**; `mizuoto output check` lists such results, and `--prune-missing` removes them.
+
 ## Command line
 
 ```bash
@@ -45,4 +47,5 @@ mizuoto output list                       # the latest results
 mizuoto output list -m qwen3tts/1.7b-base -s "hello" --limit 100
 mizuoto output info <output-id>           # a result and how it was made
 mizuoto output delete <output-id>
+mizuoto output check                      # results and audio files whose files are missing
 ```

@@ -23,7 +23,7 @@ EXPECTED_TREE = {
     "env": {"vars": None},
     "job": {"cancel": None, "list": None, "log": None, "retry": None, "show": None},
     "model": {"delete": None, "download": None, "import": None, "info": None, "list": None, "spec": None, "speakers": None, "verify": None},
-    "output": {"delete": None, "info": None, "list": None},
+    "output": {"check": None, "delete": None, "info": None, "list": None},
     "preset": {"default": None, "delete": None, "list": None, "save": None},
     "project": {k: None for k in ("cast", "delete", "export", "import", "list", "new", "render", "script", "set", "show")},
     "remote": {"add": None, "list": None, "remove": None, "use": None},

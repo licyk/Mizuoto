@@ -117,6 +117,15 @@ MIGRATIONS: list[str] = [
     """
     ALTER TABLE jobs ADD COLUMN owner_pid INTEGER;
     """,
+    # 3: facts about the data folder itself: where it was last opened and the form its file paths take
+    # (core/storage.py). From here on, outputs.path and audio_files.path are relative to the data folder for files
+    # inside it.
+    """
+    CREATE TABLE meta (
+        key   TEXT PRIMARY KEY,
+        value TEXT NOT NULL
+    );
+    """,
 ]
 
 
@@ -160,6 +169,13 @@ class Database:
 
     def migrate(self) -> None:
         with self._lock:
+            if self.schema_version > len(MIGRATIONS):
+                logger.warning(
+                    "%s was last used by a newer Mizuoto (database schema %d, this one knows %d); what it recorded may not show correctly",
+                    self.path,
+                    self.schema_version,
+                    len(MIGRATIONS),
+                )
             for number, script in enumerate(MIGRATIONS, start=1):
                 if number <= self.schema_version:
                     continue
@@ -173,9 +189,11 @@ class Database:
                     raise
 
     @contextmanager
-    def transaction(self) -> Generator[sqlite3.Connection, None, None]:
+    def transaction(self, immediate: bool = False) -> Generator[sqlite3.Connection, None, None]:
+        """``immediate`` takes the write lock at once: a transaction that reads before it writes, while another process
+        may write the same rows, then waits for it instead of failing when it upgrades to a write."""
         with self._lock:
-            self._conn.execute("BEGIN")
+            self._conn.execute("BEGIN IMMEDIATE" if immediate else "BEGIN")
             try:
                 yield self._conn
             except BaseException:
@@ -198,6 +216,15 @@ class Database:
     def close(self) -> None:
         with self._lock:
             self._conn.close()
+
+    # -- meta ----------------------------------------------------------------
+
+    def get_meta(self, key: str) -> str | None:
+        row = self.fetchone("SELECT value FROM meta WHERE key = ?", (key,))
+        return None if row is None else str(row["value"])
+
+    def set_meta(self, key: str, value: str) -> None:
+        self.execute("INSERT INTO meta(key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value", (key, value))
 
     # -- client state --------------------------------------------------------
 

@@ -241,6 +241,9 @@ python scripts/dev.py site-dev | site | test-site             # the documentatio
 - Python ≥ 3.10; ruff and ty (unpinned, `lint.select` written out); line length 180; every function annotated
   (tests and scripts exempt); pydantic v2 `Record` with `json_schema_serialization_defaults_required`; heavy imports
   (torch, numpy, engines) inside functions; no method named `list` on a class that annotates with `list[...]`.
+- A file path the database or a sidecar keeps is relative to the folder holding it when the file lies inside it
+  (`core/storage.py`, `files.to_stored` / `from_stored`), never absolute: the data folder is moved, copied and opened
+  through links, and a copy must not reach the original's files (`development-architecture`, recorded file paths).
 - Comments and docstrings say what the code does and why, in plain sentences. Do not cite planning documents: there
   are none in the repository. Reasons belong in the code or on the site.
 - Documentation: the site is the documentation. A user-visible change updates its `guide-*`/`cli-*`/`advanced-*`

@@ -478,6 +478,7 @@ mizuoto train run alice-v1 -s gpt
 | `output list` | 列出结果，最新的在前 | `--voice`；`-m, --model`；`-s, --search`（文本包含）；`--limit`（默认 30，`[1, 500]`）；`--json` |
 | `output info {output_id}` | 显示结果和它是怎样生成的 | `--json` |
 | `output delete {ids}...` | 删除结果（文件移到回收站） | `-y, --yes` |
+| `output check` | 检查每个结果和音频文件是否在记录的位置（数据目录移动后会重新找到它们），并列出缺失的文件；有缺失时退出码为 1 | `--fix`（改写在别处找到的文件的记录）；`--prune-missing`（删除缺失文件的记录）；`--rebase OLD NEW`（把目录 `OLD` 下的记录指向 `NEW`）；`--json` |
 
 ### `job`
 

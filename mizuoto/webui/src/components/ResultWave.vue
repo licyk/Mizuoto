@@ -4,10 +4,10 @@ import { usePeaks } from '@/api/queries/audio';
 import type { Output } from '@/api/types';
 import { Waveform } from '@/ui';
 
-/** An output's waveform from its server peaks (fetched once per output). */
+/** An output's waveform from its server peaks (fetched once per output; none for a missing file). */
 const props = defineProps<{ output: Output; progress: number }>();
 defineEmits<{ seek: [number] }>();
-const peaks = usePeaks(() => ({ kind: 'output', id: props.output.id }), 512);
+const peaks = usePeaks(() => (props.output.missing ? null : { kind: 'output', id: props.output.id }), 512);
 const data = computed(() => peaks.data.value?.data ?? null);
 </script>
 

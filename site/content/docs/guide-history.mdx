@@ -38,6 +38,8 @@ icon: Clock
 
 结果文件保存在数据文件夹的 `outputs/` 中（可在 **设置 › 存储 › 结果** 中更改），每条结果的来源（模型、参数、耗时、许可标记）记录在数据库中。
 
+数据文件夹可以移动、改名或复制：用新位置启动 Mizuoto（`MIZUOTO_DATA_DIR`，或 `mizuoto webui --data-dir`），所有结果都会从那里播放。文件已不在的结果显示 **文件缺失**；`mizuoto output check` 会列出这些结果，加 `--prune-missing` 则删除它们。
+
 ## 命令行
 
 ```bash
@@ -45,4 +47,5 @@ mizuoto output list                       # 最近的结果
 mizuoto output list -m qwen3tts/1.7b-base -s "你好" --limit 100
 mizuoto output info <结果id>              # 结果及其生成方式
 mizuoto output delete <结果id>
+mizuoto output check                      # 文件缺失的结果和音频文件
 ```

@@ -25,7 +25,7 @@ from mizuoto.cli.commands.doctor import doctor
 from mizuoto.cli.commands.engines import engine_accept_licence, engine_disable, engine_enable, engine_info, engine_licence, engine_list, engine_op
 from mizuoto.cli.commands.jobs import job_cancel, job_list, job_log, job_retry, job_show
 from mizuoto.cli.commands.models import model_delete, model_download, model_import, model_info, model_list, model_speakers, model_spec, model_verify
-from mizuoto.cli.commands.outputs import output_delete, output_info, output_list
+from mizuoto.cli.commands.outputs import output_check, output_delete, output_info, output_list
 from mizuoto.cli.commands.presets import preset_default, preset_delete, preset_list, preset_save
 from mizuoto.cli.commands.projects import (
     project_cast,
@@ -150,6 +150,7 @@ def get_app() -> typer.Typer:
     output_cli.command(help="List outputs", name="list")(output_list)
     output_cli.command(help="Show an output and how it was made", name="info")(output_info)
     output_cli.command(help="Delete outputs", name="delete")(output_delete)
+    output_cli.command(help="Check that every output and audio file is where its record says", name="check")(output_check)
     app.add_typer(output_cli, name="output")
 
     preset_cli = typer_factory(help="Named parameter sets")

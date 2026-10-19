@@ -1134,6 +1134,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/outputs/check": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Check Files
+         * @description Where every recorded output and audio file is; with ``fix``, records rewritten to where the files are now.
+         */
+        post: operations["check_output_files"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/outputs/{output_id}": {
         parameters: {
             query?: never;
@@ -2141,6 +2161,11 @@ export interface components {
             size: number;
             /** Created At */
             created_at: string;
+            /**
+             * Missing
+             * @default false
+             */
+            missing: boolean;
         };
         /** AudioIdsRequest */
         AudioIdsRequest: {
@@ -3535,6 +3560,20 @@ export interface components {
             /** Lr */
             lr: number | null;
         };
+        /** MissingFile */
+        MissingFile: {
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "output" | "audio";
+            /** Id */
+            id: string;
+            /** Name */
+            name: string;
+            /** Recorded */
+            recorded: string;
+        };
         /** ModelEntry */
         ModelEntry: {
             /** Id */
@@ -3847,6 +3886,11 @@ export interface components {
              * @default false
              */
             favourite: boolean;
+            /**
+             * Missing
+             * @default false
+             */
+            missing: boolean;
             /** Created At */
             created_at: string;
         };
@@ -4020,6 +4064,63 @@ export interface components {
              * @default false
              */
             hidden: boolean;
+        };
+        /**
+         * PathCheckReport
+         * @description What ``StorageService.check`` found among the recorded files.
+         */
+        PathCheckReport: {
+            /** Data Dir */
+            data_dir: string;
+            /**
+             * Relative
+             * @default 0
+             */
+            relative: number;
+            /**
+             * External
+             * @default 0
+             */
+            external: number;
+            /**
+             * Relocated
+             * @default 0
+             */
+            relocated: number;
+            /**
+             * Rebased
+             * @default 0
+             */
+            rebased: number;
+            /** Missing */
+            missing: components["schemas"]["MissingFile"][];
+            /**
+             * Pruned
+             * @default 0
+             */
+            pruned: number;
+            /**
+             * Fixed
+             * @default false
+             */
+            fixed: boolean;
+        };
+        /** PathCheckRequest */
+        PathCheckRequest: {
+            /**
+             * Fix
+             * @default false
+             */
+            fix?: boolean;
+            /**
+             * Prune Missing
+             * @default false
+             */
+            prune_missing?: boolean;
+            /** Rebase From */
+            rebase_from?: string | null;
+            /** Rebase To */
+            rebase_to?: string | null;
         };
         /** PathRequest */
         PathRequest: {
@@ -5532,6 +5633,16 @@ export interface components {
             /** Missing */
             missing: string[];
             voice: components["schemas"]["Voice"] | null;
+        };
+        /** ZipRequest */
+        ZipRequest: {
+            /** Ids */
+            ids: string[];
+            /**
+             * Skip Missing
+             * @default false
+             */
+            skip_missing?: boolean;
         };
     };
     responses: never;
@@ -9972,7 +10083,7 @@ export interface operations {
         };
         requestBody: {
             content: {
-                "application/json": components["schemas"]["IdsRequest"];
+                "application/json": components["schemas"]["ZipRequest"];
             };
         };
         responses: {
@@ -9983,6 +10094,75 @@ export interface operations {
                 };
                 content: {
                     "application/zip": unknown;
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    check_output_files: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PathCheckRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PathCheckReport"];
                 };
             };
             /** @description Bad Request */

@@ -132,6 +132,8 @@ export default {
     rerun: 'Run again with these settings',
     downloadAll: 'Download all',
     deleted: 'Result deleted',
+    missing: 'File missing',
+    missingHint: 'The file is no longer at {path}, nor anywhere in the data folder. mizuoto output check lists every missing file.',
     took: '{s} s',
     seed: 'seed {seed}',
     kinds: { speech: 'speech', design: 'design', preview: 'preview', edit: 'edit', conversion: 'conversion', sample: 'sample', line: 'project line', project: 'project' },

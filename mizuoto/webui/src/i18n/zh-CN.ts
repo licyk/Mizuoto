@@ -132,6 +132,8 @@ export default {
     rerun: '用这些设置重新运行',
     downloadAll: '全部下载',
     deleted: '已删除结果',
+    missing: '文件缺失',
+    missingHint: '文件已不在 {path}，在数据文件夹中也找不到。mizuoto output check 会列出所有缺失的文件。',
     took: '{s} 秒',
     seed: '种子 {seed}',
     kinds: { speech: '语音', design: '设计', preview: '预览', edit: '编辑', conversion: '转换', sample: '样例', line: '项目台词', project: '项目' },

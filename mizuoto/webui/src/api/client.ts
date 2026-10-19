@@ -93,7 +93,8 @@ export async function downloadOutputsZip(ids: string[]): Promise<void> {
   const response = await fetch(`${V1}/outputs/zip`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
-    body: JSON.stringify({ ids }),
+    // Outputs whose files are missing are listed in MISSING.txt rather than failing the whole download.
+    body: JSON.stringify({ ids, skip_missing: true }),
   });
   if (!response.ok) {
     let body: unknown = null;

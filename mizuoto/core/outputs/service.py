@@ -15,13 +15,18 @@ from mizuoto.core.events.models import OutputsAddedEvent, OutputsRemovedEvent
 from mizuoto.core.files import slugify, trash
 from mizuoto.core.outputs.models import Output, OutputPage, OutputQuery
 from mizuoto.core.settings import SettingsService
+from mizuoto.core.storage import StorageService
 
 
 class OutputService:
-    def __init__(self, settings: SettingsService, db: Database, events: EventBus) -> None:
+    """Output records keep their file's path relative to the data folder when it lies inside it (``core/storage``);
+    records hand it out absolute, as it is on disk now."""
+
+    def __init__(self, settings: SettingsService, db: Database, events: EventBus, storage: StorageService) -> None:
         self._settings = settings
         self._db = db
         self._events = events
+        self._storage = storage
 
     def new_path(self, name_parts: dict[str, str], fmt: str) -> Path:
         """A fresh file under ``outputs/<yyyy-mm>/`` named by ``outputs.naming``, never overwriting."""
@@ -50,7 +55,7 @@ class OutputService:
                 output.id,
                 output.kind,
                 output.job_id,
-                output.path,
+                self._storage.store(Path(output.path)),
                 output.name,
                 output.engine,
                 output.model,
@@ -75,17 +80,21 @@ class OutputService:
     def new_id() -> str:
         return new_id("o")
 
-    def get(self, output_id: str) -> Output:
+    def _fetch(self, output_id: str) -> Any:
         row = self._db.fetchone("SELECT * FROM outputs WHERE id = ?", (output_id,))
         if row is None:
             raise NotFoundError(f"Unknown output: {output_id}", {"kind": "output", "id": output_id})
-        return self._row(row)
+        return row
+
+    def get(self, output_id: str) -> Output:
+        return self._row(self._fetch(output_id))
 
     def path_of(self, output_id: str) -> Path:
-        out = self.get(output_id)
-        path = Path(out.path)
-        if not path.is_file():
-            raise NotFoundError(f"{out.name} is gone from {path.parent}", {"kind": "output", "id": output_id})
+        """The output's file; ``not_found`` with ``detail.reason`` ``file_missing`` when it is gone."""
+        row = self._fetch(output_id)
+        path = self._storage.find("output", row)
+        if path is None:
+            raise self._storage.missing_error("output", row)
         return path
 
     def list_outputs(self, query: OutputQuery | None = None) -> OutputPage:
@@ -125,23 +134,40 @@ class OutputService:
     def delete(self, ids: list[str]) -> list[str]:
         removed: list[str] = []
         for output_id in ids:
-            try:
-                out = self.get(output_id)
-            except NotFoundError:
+            row = self._db.fetchone("SELECT * FROM outputs WHERE id = ?", (output_id,))
+            if row is None:
                 continue
-            trash(Path(out.path), self._settings.data_dir / "trash")
+            # Only the file the record leads to now: a record whose file is gone has nothing to trash.
+            path = self._storage.find("output", row)
+            if path is not None:
+                trash(path, self._settings.data_dir / "trash")
             self._db.execute("DELETE FROM outputs WHERE id = ?", (output_id,))
             removed.append(output_id)
         if removed:
             self._events.publish(OutputsRemovedEvent(ids=removed))
         return removed
 
-    def zip(self, ids: list[str]) -> Iterator[bytes]:
-        """A zip of outputs, streamed as it is written (names made unique)."""
+    def zip(self, ids: list[str], skip_missing: bool = False) -> Iterator[bytes]:
+        """A zip of outputs, streamed as it is written (names made unique). Every file is found before the first byte:
+        a missing one is ``file_missing``, or with ``skip_missing`` listed in ``MISSING.txt`` inside the zip."""
+        found: list[tuple[Output, Path]] = []
+        missing: list[Output] = []
+        for output_id in ids:
+            out = self.get(output_id)
+            if out.missing:
+                missing.append(out)
+            else:
+                found.append((out, Path(out.path)))
+        if missing and not skip_missing:
+            error = self._storage.missing_error("output", self._fetch(missing[0].id))
+            error.detail["ids"] = [o.id for o in missing]
+            raise error
+        return self._zip_stream(found, missing)
+
+    @staticmethod
+    def _zip_stream(found: list[tuple[Output, Path]], missing: list[Output]) -> Iterator[bytes]:
         import io
         import zipfile
-
-        outs = [self.get(i) for i in ids]
 
         class _Sink(io.RawIOBase):
             def __init__(self) -> None:
@@ -157,26 +183,28 @@ class OutputService:
         sink = _Sink()
         used: set[str] = set()
         with zipfile.ZipFile(sink, "w", compression=zipfile.ZIP_STORED) as z:
-            for out in outs:
-                path = Path(out.path)
+            for out, path in found:
                 name = f"{out.name}{path.suffix}"
                 n = 2
                 while name in used:
                     name, n = f"{out.name}-{n}{path.suffix}", n + 1
                 used.add(name)
-                if path.is_file():
-                    z.write(path, name)
+                z.write(path, name)
                 yield from sink.chunks
                 sink.chunks.clear()
+            if missing:
+                lines = ["These outputs' files are missing (mizuoto output check lists them):", *(f"{o.id}\t{o.name}\t{o.path}" for o in missing)]
+                z.writestr("MISSING.txt", "\n".join(lines) + "\n")
         yield from sink.chunks
 
-    @staticmethod
-    def _row(r: Any) -> Output:
+    def _row(self, r: Any) -> Output:
+        path = self._storage.find("output", r)
         return Output(
             id=r["id"],
             kind=r["kind"],
             name=r["name"],
-            path=r["path"],
+            path=str(path or self._storage.resolve(r["path"])),
+            missing=path is None,
             format=r["format"] or "",
             sample_rate=r["sample_rate"] or 0,
             duration=r["duration"] or 0.0,

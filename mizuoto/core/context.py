@@ -25,6 +25,7 @@ from mizuoto.core.presets.service import PresetService
 from mizuoto.core.projects.service import ProjectService
 from mizuoto.core.remote.service import RemoteService
 from mizuoto.core.settings import SettingsService
+from mizuoto.core.storage import StorageService
 from mizuoto.core.training.service import TrainingService
 from mizuoto.core.tts.service import TtsService
 from mizuoto.core.voices.service import VoiceService
@@ -39,6 +40,7 @@ class Services:
     settings: SettingsService
     events: EventBus
     db: Database
+    storage: StorageService
     compute: ComputeService
     jobs: JobService
     engines: EngineRegistry
@@ -83,6 +85,10 @@ def build_services(
     settings = SettingsService(data_dir=data_dir, settings_path=settings_path, environ=environ, overrides=settings_overrides, config_dir=config_dir)
     events = LocalEventBus()
     db = Database(settings.data_dir / DB_FILE_NAME)
+    storage = StorageService(settings, db)
+    storage.events = events
+    # Records of files inside the data folder follow it: rewritten here when it is opened somewhere new.
+    storage.reconcile()
     compute = ComputeService(settings, events)
     jobs = JobService(settings, db, events, compute)
     engines = EngineRegistry(settings)
@@ -98,8 +104,8 @@ def build_services(
     models.before_remove = runtime.unload_model
     runtime.model_options = models.load_options
     models.events = events
-    audio = AudioService(settings, db)
-    outputs = OutputService(settings, db, events)
+    audio = AudioService(settings, db, storage)
+    outputs = OutputService(settings, db, events, storage)
     presets = PresetService(db, events, engines, models)
     asr = AsrService(settings, db, engines, models, runtime, audio, jobs)
     tts = TtsService(settings, engines, models, jobs, runtime, audio, outputs, asr)
@@ -120,6 +126,7 @@ def build_services(
         settings=settings,
         events=events,
         db=db,
+        storage=storage,
         compute=compute,
         jobs=jobs,
         engines=engines,

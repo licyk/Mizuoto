@@ -31,6 +31,8 @@ class Output(Record):
     """Timings, warnings and the request summary."""
     licence_tags: list[str] = Field(default_factory=list)
     favourite: bool = False
+    missing: bool = False
+    """The file is gone: neither at ``path`` nor anywhere it could have moved to."""
     created_at: str
 
 

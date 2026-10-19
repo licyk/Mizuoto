@@ -478,6 +478,7 @@ Hyperparameter names depend on the method; `mizuoto train methods <model>` lists
 | `output list` | List outputs, newest first | `--voice`; `-m, --model`; `-s, --search` (text contains); `--limit` (default 30, `[1, 500]`); `--json` |
 | `output info {output_id}` | Show an output and how it was made | `--json` |
 | `output delete {ids}...` | Delete outputs (their files go to the trash) | `-y, --yes` |
+| `output check` | Check that every output and audio file is where its record says (they are found again after the data folder moved) and list the missing ones; exits 1 when some are missing | `--fix` (rewrite the records of files found elsewhere); `--prune-missing` (delete the records of missing files); `--rebase OLD NEW` (records under folder `OLD` point under `NEW`); `--json` |
 
 ### `job`
 

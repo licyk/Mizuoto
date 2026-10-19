@@ -73,7 +73,12 @@ function downloadAll() {
     <EmptyState v-if="!outputs.length" :icon="icons.AudioWaveform" :title="emptyText || t('results.empty')" />
     <TransitionGroup :name="TRANSITIONS.list" tag="ul" class="list" aria-live="polite">
       <li v-for="(o, i) in outputs" :key="o.id" class="row" :style="staggerStyle(i)">
-        <IconButton :icon="player.isPlaying(o.id) ? icons.Pause : icons.Play" :label="player.isPlaying(o.id) ? t('results.pause') : t('results.play')" @click="player.play(trackOf(o))" />
+        <IconButton
+          :icon="player.isPlaying(o.id) ? icons.Pause : icons.Play"
+          :label="player.isPlaying(o.id) ? t('results.pause') : t('results.play')"
+          :disabled="o.missing"
+          @click="player.play(trackOf(o))"
+        />
         <div class="main">
           <div class="line">
             <span class="type-body-large name" :title="o.text ?? o.name">{{ o.text || o.name }}</span>
@@ -81,12 +86,14 @@ function downloadAll() {
           </div>
           <ResultWave :output="o" :progress="progressOf(o)" @seek="seek(o, $event)" />
           <div class="facts type-body-small muted">
+            <Badge v-if="o.missing" :value="t('results.missing')" tone="error" />
             <Badge v-if="o.favourite" :value="t('history.favourite')" tone="primary" />
             <Badge :value="o.model ?? ''" tone="neutral" />
             <span v-if="timings(o).total">{{ t('results.took', { s: timings(o).total!.toFixed(1) }) }}</span>
             <span v-if="timings(o).rtf">RTF {{ timings(o).rtf!.toFixed(2) }}</span>
             <span v-if="o.params?.seed !== undefined">{{ t('results.seed', { seed: String(o.params.seed) }) }}</span>
           </div>
+          <p v-if="o.missing" class="type-body-small warn">{{ t('results.missingHint', { path: o.path }) }}</p>
           <p v-for="w in warnings(o)" :key="w" class="type-body-small warn">{{ w }}</p>
           <p v-for="n in noticesOf(o)" :key="n" class="type-label-medium notice">{{ n }}</p>
         </div>

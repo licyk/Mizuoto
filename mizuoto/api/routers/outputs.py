@@ -11,6 +11,7 @@ from mizuoto.core.errors import NotFoundError
 from mizuoto.core.files import reveal
 from mizuoto.core.outputs.models import Output, OutputPage, OutputQuery
 from mizuoto.core.record import Record
+from mizuoto.core.storage import PathCheckReport, PathCheckRequest
 from mizuoto.core.tts.models import SpeakRequest
 
 router = APIRouter(prefix="/v1/outputs", tags=["outputs"], responses=ERROR_RESPONSES)
@@ -18,6 +19,12 @@ router = APIRouter(prefix="/v1/outputs", tags=["outputs"], responses=ERROR_RESPO
 
 class IdsRequest(Record):
     ids: list[str]
+
+
+class ZipRequest(Record):
+    ids: list[str]
+    skip_missing: bool = False
+    """Leave out outputs whose files are missing, listed in ``MISSING.txt``; otherwise they are an error."""
 
 
 class OutputPatch(Record):
@@ -61,10 +68,16 @@ def delete(services: ServicesDep, body: IdsRequest) -> list[str]:
 
 
 @router.post("/zip", operation_id="zip_outputs", response_class=StreamingResponse, responses={200: {"content": {"application/zip": {}}}})
-def zip_outputs(services: ServicesDep, body: IdsRequest) -> StreamingResponse:
+def zip_outputs(services: ServicesDep, body: ZipRequest) -> StreamingResponse:
     return StreamingResponse(
-        services.outputs.zip(body.ids), media_type="application/zip", headers={"Content-Disposition": content_disposition("attachment", "mizuoto-outputs.zip")}
+        services.outputs.zip(body.ids, body.skip_missing), media_type="application/zip", headers={"Content-Disposition": content_disposition("attachment", "mizuoto-outputs.zip")}
     )
+
+
+@router.post("/check", operation_id="check_output_files")
+def check_files(services: ServicesDep, body: PathCheckRequest) -> PathCheckReport:
+    """Where every recorded output and audio file is; with ``fix``, records rewritten to where the files are now."""
+    return services.storage.check(body)
 
 
 @router.get("/{output_id}", operation_id="get_output")

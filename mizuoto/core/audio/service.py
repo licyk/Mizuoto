@@ -23,6 +23,7 @@ from mizuoto.core.errors import InvalidPathError, NotFoundError, ValidationError
 from mizuoto.core.files import is_within
 from mizuoto.core.record import Record
 from mizuoto.core.settings import SettingsService
+from mizuoto.core.storage import StorageService
 
 
 class AudioFile(Record):
@@ -37,6 +38,8 @@ class AudioFile(Record):
     format: str
     size: int
     created_at: str
+    missing: bool = False
+    """The file is gone: neither at ``path`` nor anywhere it could have moved to."""
 
 
 class Peaks(Record):
@@ -73,9 +76,13 @@ UPLOAD_NAME = re.compile(r"[^\w.\- ()\[\]]+", re.UNICODE)
 
 
 class AudioService:
-    def __init__(self, settings: SettingsService, db: Database) -> None:
+    """Audio file records keep their path relative to the data folder when the file lies inside it (``core/storage``);
+    records hand it out absolute, as it is on disk now."""
+
+    def __init__(self, settings: SettingsService, db: Database, storage: StorageService) -> None:
         self._settings = settings
         self._db = db
+        self._storage = storage
 
     @property
     def refs_dir(self) -> Path:
@@ -107,10 +114,11 @@ class AudioService:
             raise
 
     def path_of(self, audio_id: str) -> Path:
-        audio = self.get(audio_id)
-        path = Path(audio.path)
-        if not path.is_file():
-            raise NotFoundError(f"{audio.name} is gone from {path.parent}", {"kind": "audio", "id": audio_id})
+        """The file's path; ``not_found`` with ``detail.reason`` ``file_missing`` when it is gone."""
+        row = self._fetch(audio_id)
+        path = self._storage.find("audio", row)
+        if path is None:
+            raise self._storage.missing_error("audio", row)
         return path
 
     # -- server paths (the API checks them; the command line is trusted) ----------------
@@ -162,7 +170,8 @@ class AudioService:
 
         points = max(MIN_POINTS, min(MAX_POINTS, int(points)))
         st = path.stat()
-        key = hashlib.sha1(f"{path.resolve()}|{st.st_size}|{st.st_mtime_ns}|{points}".encode()).hexdigest()
+        # Keyed by the path as a record keeps it, so the cache follows the data folder when it moves.
+        key = hashlib.sha1(f"{self._storage.store(path)}|{st.st_size}|{st.st_mtime_ns}|{points}".encode()).hexdigest()
         cache = self._settings.cache_dir / "peaks" / key[:2] / f"{key}.json"
         if cache.is_file():
             try:
@@ -182,9 +191,17 @@ class AudioService:
             raise NotFoundError(f"No such file: {path}", {"kind": "file", "id": str(path)})
         info = probe(path)
         sha = sha256_file(path)
-        row = self._db.fetchone("SELECT * FROM audio_files WHERE sha256 = ? AND path = ?", (sha, str(path)))
+        stored = self._storage.store(path)
+        row = self._db.fetchone("SELECT * FROM audio_files WHERE sha256 = ? AND path = ?", (sha, stored))
         if row is not None:
             return self._row(row)
+        size = path.stat().st_size
+        # The same file recorded where it no longer is (a data folder moved before its records were rewritten) is
+        # pointed here rather than recorded twice.
+        for row in self._db.fetchall("SELECT * FROM audio_files WHERE sha256 = ? AND size = ?", (sha, size)):
+            if not self._storage.resolve(row["path"]).is_file():
+                self._db.execute("UPDATE audio_files SET path = ? WHERE id = ?", (stored, row["id"]))
+                return self.get(row["id"])
         duration = info.duration
         if duration is None:
             samples, sr = decode(path)
@@ -199,7 +216,7 @@ class AudioService:
             channels=info.channels,
             duration=float(duration),
             format=info.codec,
-            size=path.stat().st_size,
+            size=size,
             created_at=now_iso(),
         )
         self._db.execute(
@@ -207,7 +224,7 @@ class AudioService:
             (
                 record.id,
                 record.name,
-                record.path,
+                stored,
                 record.sha256,
                 record.origin,
                 record.sample_rate,
@@ -220,17 +237,20 @@ class AudioService:
         )
         return record
 
-    def get(self, audio_id: str) -> AudioFile:
+    def _fetch(self, audio_id: str) -> Any:
         row = self._db.fetchone("SELECT * FROM audio_files WHERE id = ?", (audio_id,))
         if row is None:
             raise NotFoundError(f"Unknown audio file: {audio_id}", {"kind": "audio", "id": audio_id})
-        return self._row(row)
+        return row
+
+    def get(self, audio_id: str) -> AudioFile:
+        return self._row(self._fetch(audio_id))
 
     def canonical_wav(self, audio: AudioFile) -> Path:
         """Mono 16-bit WAV at the file's own rate, cached by content."""
         target = self.refs_dir / f"{audio.sha256}.wav"
         if not target.is_file():
-            samples, sr = decode(Path(audio.path))
+            samples, sr = decode(self.path_of(audio.id))
             encode(samples, sr, target, "wav")
         return target
 
@@ -240,16 +260,17 @@ class AudioService:
 
         target = self.refs_dir / f"{audio.sha256}-max{max_seconds:g}.wav"
         if not target.is_file():
-            samples, sr = decode(Path(audio.path))
+            samples, sr = decode(self.path_of(audio.id))
             encode(trim_to(samples, sr, max_seconds), sr, target, "wav")
         return self.register_path(target, origin="derived")
 
-    @staticmethod
-    def _row(r: Any) -> AudioFile:
+    def _row(self, r: Any) -> AudioFile:
+        path = self._storage.find("audio", r)
         return AudioFile(
             id=r["id"],
             name=r["name"],
-            path=r["path"],
+            path=str(path or self._storage.resolve(r["path"])),
+            missing=path is None,
             sha256=r["sha256"],
             origin=r["origin"],
             sample_rate=r["sample_rate"] or 0,

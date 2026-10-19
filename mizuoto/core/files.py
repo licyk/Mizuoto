@@ -10,7 +10,7 @@ import shutil
 import sys
 import unicodedata
 from collections.abc import Callable
-from pathlib import Path
+from pathlib import Path, PurePosixPath, PureWindowsPath
 
 from mizuoto.core.clock import new_id
 
@@ -59,6 +59,47 @@ def is_within(path: Path, roots: list[Path]) -> bool:
         if resolved == r or r in resolved.parents:
             return True
     return False
+
+
+def is_absolute_text(value: str) -> bool:
+    """Whether a recorded path is absolute on any platform (``/x``, ``C:\\x``, ``\\\\server\\share``): a database
+    written on Windows can be opened on Linux and the other way round."""
+    return PurePosixPath(value).is_absolute() or bool(PureWindowsPath(value).anchor)
+
+
+def to_stored(path: Path, base: Path) -> str:
+    """``path`` as the database records it: relative to ``base`` with ``/`` separators when it lies inside it, so the
+    record follows ``base`` when that folder moves, else absolute. ``base`` is resolved; ``path`` is tried as written
+    and resolved."""
+    for candidate in (path.absolute(), path.resolve()):
+        try:
+            rel = candidate.relative_to(base)
+        except ValueError:
+            continue
+        if rel.parts:
+            return rel.as_posix()
+    return str(path)
+
+
+def from_stored(value: str, base: Path) -> Path:
+    """A recorded path back on disk: a relative one under ``base``, an absolute one as it is."""
+    return Path(value) if is_absolute_text(value) else base.joinpath(*value.split("/"))
+
+
+def relocations(value: str, roots: list[Path], min_parts: int = 2) -> list[Path]:
+    """Where a file recorded at ``value`` may be now: its last parts (longest first, down to ``min_parts``) under each
+    of ``roots``. ``/old/mizuoto/outputs/2026-10/a.wav`` gives ``<root>/outputs/2026-10/a.wav``, then
+    ``<root>/2026-10/a.wav``…; either platform's separators are understood."""
+    parts = [p for p in re.split(r"[\\/]", value) if p and not p.endswith(":")]
+    seen: set[Path] = set()
+    found: list[Path] = []
+    for root in roots:
+        for start in range(len(parts) - min_parts + 1):
+            candidate = root.joinpath(*parts[start:])
+            if candidate not in seen:
+                seen.add(candidate)
+                found.append(candidate)
+    return found
 
 
 def windows_drives(listdrives: Callable[[], list[str]] | None = None) -> list[Path]:
