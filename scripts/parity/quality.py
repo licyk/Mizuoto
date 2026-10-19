@@ -2,7 +2,7 @@
 and the two compared against the tier's thresholds (site page ``development-testing``).
 
     <python> scripts/parity/quality.py run --impl native|reference|upstream [--device cuda:0] [--name NAME] [--only SET]
-        [--seeds 3] [--texts N] [--voice V] [--language zh] [--setting key=value] [--option key=value]
+        [--seeds 3] [--texts N] [--voice V] [--language zh] [--unset-language] [--setting key=value] [--option key=value]
         [--suite corpus/t4.json]
     <python> scripts/parity/quality.py score [--name NAME]... [--device cuda:0] [--only SET]
     <python> scripts/parity/quality.py compare [--a reference] [--b native] [--only SET] [--report out.md]
@@ -142,6 +142,8 @@ def cmd_run(args: argparse.Namespace) -> int:
             for n, (voice, text_id, seed) in enumerate(todo, 1):
                 language, text = suite["texts"][text_id]
                 request = {"model": spec["model"], "text": text, "language": language, "params": {"seed": seed}, "voice_spec": set_voices(suite, spec)[voice]}
+                if args.unset_language:  # the engine's default for a request without one; scored in the text's language
+                    del request["language"]
                 if options:
                     request["engine_options"] = options
                 case = {"id": f"t4-{key}-{stem(voice, text_id, seed)}", "request": request}
@@ -670,6 +672,7 @@ def main(argv: list[str]) -> int:
     run.add_argument("--option", action="append", help="An engine option for every request, key=value (an opt-in that is a request option); repeatable")
     run.add_argument("--voice", action="append", help="Only these voices of the set (a targeted run, e.g. more seeds for one voice)")
     run.add_argument("--language", help="Only the texts in this language")
+    run.add_argument("--unset-language", action="store_true", help="Send no language (the engine's default), scoring each clip in its text's language")
     run.add_argument("--setting", action="append", help="A setting for the whole run, key=value (an opt-in judged against the default); repeatable")
     run.add_argument("--suite", default=str(SUITE))
     score = sub.add_parser("score")

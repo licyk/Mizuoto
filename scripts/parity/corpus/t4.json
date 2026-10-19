@@ -41,6 +41,7 @@
     "gptsovits-v4-clone": {"model": "gptsovits/v4-base", "mode": "clone", "reference": "v1"},
     "indextts-v15-clone": {"model": "indextts/v1.5", "mode": "clone", "reference": "v1"},
     "indextts-v2-clone": {"model": "indextts/v2", "mode": "clone", "reference": "v1"},
+    "indextts-v25-clone": {"model": "indextts/v2.5", "mode": "clone", "reference": "v1"},
     "omnivoice-clone": {"model": "omnivoice/omnivoice", "mode": "clone", "reference": "v1"},
     "omnivoice-design": {"model": "omnivoice/omnivoice", "mode": "design", "reference": "v1", "voices": {"low-female": {"attributes": {"gender": "female", "pitch": "low pitch"}}, "young-male": {"attributes": {"gender": "male", "age": "young adult"}}, "elderly-british": {"attributes": {"gender": "male", "age": "elderly", "accent": "british accent"}}}},
     "voxcpm2-clone": {"model": "voxcpm/2", "mode": "clone", "reference": "upstream"},

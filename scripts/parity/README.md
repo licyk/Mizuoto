@@ -167,6 +167,6 @@ MIZUOTO_PARITY_DATA=~/.local/share/kodama $M/.venv/bin/python $M/scripts/parity/
 $M/.venv/bin/python $M/scripts/parity/quality.py compare --a reference --b native --report $W/reports/t4.md
 ```
 
-`--texts 1 --seeds 1` makes a quick run (six clips a set). A run resumes where it stopped; `perf/t4/run.sh` in the
+`--texts 1 --seeds 1` makes a quick run (six clips a set). `--unset-language` sends the requests without a language (the engine's default) while scoring each clip in its text's language: an engine's default judged against the language given, as for IndexTTS-2.5's `zhen` (two native runs, `--name` apart, compared with `compare --a … --b …`). A run resumes where it stopped; `perf/t4/run.sh` in the
 experiment workspace runs one side set by set with a guard for the GPU's other workload; the guard cannot tell this
 machine's processes apart (nvidia-smi gives host PIDs), so score on a GPU nothing is generating on.
