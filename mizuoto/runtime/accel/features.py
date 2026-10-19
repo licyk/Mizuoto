@@ -18,10 +18,17 @@ FEATURES = ("tf32", "fp16_accumulation", "cudnn_benchmark", "sdpa_reduced_precis
 def deterministic() -> None:
     """Deterministic kernels for this process (``training.deterministic``): torch picks the deterministic version of
     every operation that has one and warns where none exists; cuDNN stops benchmarking (it would choose by timing).
-    cuBLAS also needs ``CUBLAS_WORKSPACE_CONFIG`` set before CUDA starts, which the host puts in the stage's environment."""
+    cuBLAS also needs ``CUBLAS_WORKSPACE_CONFIG`` set before CUDA starts, which the host puts in the stage's environment.
+
+    torch would also fill every uninitialised tensor (``fill_uninitialized_memory``), a guard for code that reads memory
+    it never wrote. Native code writes or replaces all it allocates (weights are loaded or assigned over modules built
+    without initialisation), so the fill only made those allocations resident: Fish Speech's LoRA stage held 17 GB of
+    RAM instead of 0.4."""
     import torch
+    import torch.utils.deterministic
 
     torch.use_deterministic_algorithms(True, warn_only=True)
+    torch.utils.deterministic.fill_uninitialized_memory = False  # ty: ignore[unresolved-attribute]
     torch.backends.cudnn.benchmark = False
     log.info("training.deterministic: deterministic kernels")
 

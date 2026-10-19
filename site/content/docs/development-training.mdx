@@ -116,7 +116,7 @@ previous = out[stage.id] = hashlib.sha256(source.encode()).hexdigest()[:20]
 
 1. 它把真正的 stdout 留给事件，把文件描述符 1 指向 stderr，于是各种库打印的东西进入日志，而不会混进事件流。事件是带 `@mizuoto ` 前缀的 JSON 行（`mizuoto/core/jobs/jsonl.py`），`mizuoto` 日志记录器的记录会变成 `LogEvent`。
 2. 一个线程每 10 秒发一次 `HeartbeatEvent`（`HEARTBEAT_SECONDS`）。
-3. `stage_main` 给 Python、NumPy 和 torch 的生成器播种（`seed_everything`，用请求里的 `seed`，没有则为 1234；训练服务目前不传种子，所以每次运行都以 1234 播种，结果可以复现），在 `training.deterministic` 开启时启用确定性内核（`features.deterministic`，`CUBLAS_WORKSPACE_CONFIG` 由主机设置），并在 GPU 上、`training.attention = auto` 时改用 math 注意力内核，构建 `StageContext`，用 `load_trainer(request["trainer"])` 加载训练器并调用 `run_stage(stage, ctx)`；结果必须能序列化为 JSON，以 `ResultEvent` 送回。
+3. `stage_main` 给 Python、NumPy 和 torch 的生成器播种（`seed_everything`，用请求里的 `seed`，没有则为 1234；训练服务目前不传种子，所以每次运行都以 1234 播种，结果可以复现），在 `training.deterministic` 开启时启用确定性内核（`features.deterministic`，`CUBLAS_WORKSPACE_CONFIG` 由主机设置；torch 对未初始化内存的填充保持关闭，因为原生代码会写入它分配的全部内存，而填充会让从未使用的分配常驻内存：Fish Speech 的 LoRA 阶段因此多占 17 GB），并在 GPU 上、`training.attention = auto` 时改用 math 注意力内核，构建 `StageContext`，用 `load_trainer(request["trainer"])` 加载训练器并调用 `run_stage(stage, ctx)`；结果必须能序列化为 JSON，以 `ResultEvent` 送回。
 4. 失败映射为事件和退出码（`mizuoto.core.codes`）：`Cancelled` 或 SIGTERM → `EXIT_CANCELLED`（130）；`EngineError` → 带其错误码的 `ErrorEvent`；内存不足 → `compute_unavailable`；其他 → 把回溯作为日志行，并报 `engine_error`。
 
 `python -m mizuoto.training.stage --entry 模块:函数 <request.json>` 以同样的方式运行别的任务函数。
