@@ -39,7 +39,7 @@ icon: Radio
 ## 与上游一致的做法
 
 - **尺寸来自 yaml。** 各模块的尺寸取自模型自己的 yaml（HyperPyYAML 的标签当数据读取），而不是写在代码里。
-- **不用 onnxruntime 的语音 token 和 CAM++。** 语音分词器是 s3tokenizer 的 torch 模型，权重从 ONNX 文件读出；在测试语料上，v1、v2、v3 的编码都与 onnxruntime 相同。CAM++ 照搬导出的计算图（卷积后的 batch norm 已折叠，与导出时一样），与 onnxruntime 的相对误差约 1e-6，并非逐位一致。
+- **不用 onnxruntime 的语音 token 和 CAM++。** 语音分词器是 s3tokenizer 的 torch 模型，权重从 ONNX 文件读出；在测试语料上，v1、v2、v3 的编码都与 onnxruntime 相同。CAM++ 照搬导出的计算图（卷积后的 batch norm 已折叠，与导出时一样），与 onnxruntime 的相对误差约 1e-6，并非逐位一致。无论设备是什么，CAM++ 都在 CPU 上运行，与上游一致（上游只用 onnxruntime 的 CPU provider）：在 GPU 上，它的卷积让嵌入偏离 2.4e-4，而不是 5e-7。语音分词器在设备上运行，与上游一致（CUDA provider）。
 - **提示 mel** 在每个版本都是 24 kHz 的 Matcha mel；v2/v3 严格保持每个提示 token 对应两帧 mel。v3 丢弃长于五个的静音 token 串，并加上它的系统提示（`You are a helpful assistant.<|endofprompt|>`）。
 - **按 transformers 4.51 的方式运行 Qwen2。** CosyVoice 2/3 的语言模型原本跑在 transformers 4.51 上，那里的 SDPA 路径总是重复 KV 头，并让 q、k、v 连续（`QwenConfig.sdpa_gqa=False`）。
 - **噪声。** v2/v3 的 flow 噪声是上游以种子 0 生成的缓冲（前 1×80×15000 个正态抽样）。`randn_like(x)` 保留 `x` 的步长，所以当 `x` 是转置的（HiFT 的正弦源）时，抽样落入元素的顺序与 `randn(shape)` 不同：`nn.vocoders.hift.randn_like` 用生成器填充 `empty_like(x)`。
@@ -89,6 +89,8 @@ icon: Radio
 - 训练交叉加载用例（一种实现的导出由另一种实现说出）：57.4 dB 和 38.1 dB。
 
 契约套件通过（18 项测试）。
+
+在 GPU 上（RTX 3090，2026-10-19，逐阶段与 torch 2.8 上的上游对照）：把上游的 CAM++ 嵌入喂给 Mizuoto 时，v2 和 v3 的英文克隆都逐采样相同；这需要把 HiFT 的权重归一化在设备上按 F0 预测器的 dtype 折叠（上游每次调用都在设备上计算它）。两边各自计算嵌入时，v2 克隆也完全相同（它的 flow 吸收了 CAM++ 的 5e-7），v3 为 14.2 dB，与 CPU 上一样来自 CAM++ 的噪声。上游在它自己的 torch 2.3.1（cuDNN 8.9）上与它在 torch 2.8 上的结果在第一个卷积处就不同，所以对照采用 2.8。
 
 ## 限制
 

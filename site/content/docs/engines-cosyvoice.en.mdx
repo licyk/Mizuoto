@@ -39,7 +39,7 @@ Shared: `nn/codecs/s3tokenizer.py` (speech tokenizers v1–v3 from their ONNX fi
 ## What reproduces upstream
 
 - **Sizes from the yaml.** Module sizes come from the model's own yaml (HyperPyYAML's tags read as data), not from code.
-- **Speech tokens and CAM++ without onnxruntime.** The speech tokenizers are s3tokenizer's torch models with the weights read from the ONNX file; their codes equal onnxruntime's on the test corpus for v1, v2 and v3. CAM++ mirrors the exported graph (batch norms after convolutions folded, as the export folded them) and agrees with onnxruntime to about 1e-6 relative, not bit for bit.
+- **Speech tokens and CAM++ without onnxruntime.** The speech tokenizers are s3tokenizer's torch models with the weights read from the ONNX file; their codes equal onnxruntime's on the test corpus for v1, v2 and v3. CAM++ mirrors the exported graph (batch norms after convolutions folded, as the export folded them) and agrees with onnxruntime to about 1e-6 relative, not bit for bit. CAM++ runs on the CPU whatever the device, as upstream runs it (onnxruntime's CPU provider only): on a GPU its convolutions moved the embedding by 2.4e-4 instead of 5e-7. The speech tokenizer runs on the device, as upstream's (CUDA provider).
 - **The prompt mel** is Matcha's at 24 kHz for every version; v2/v3 keep exactly two mel frames per prompt token. v3 drops runs of more than five silent tokens and gets its system prompt (`You are a helpful assistant.<|endofprompt|>`).
 - **Qwen2 as transformers 4.51 ran it.** CosyVoice 2/3's language model ran on transformers 4.51, whose SDPA path always repeats the KV heads and makes q, k and v contiguous (`QwenConfig.sdpa_gqa=False`).
 - **Noise.** v2/v3's flow noise is upstream's seed-0 buffer (the first 1×80×15000 normal draws). `randn_like(x)` keeps `x`'s strides, so its draws land in another element order than `randn(shape)` when `x` is transposed (HiFT's sine source): `nn.vocoders.hift.randn_like` fills `empty_like(x)` from the generator.
@@ -89,6 +89,8 @@ The reference is upstream on torch 2.8 (on its own torch 2.3.1 it disagrees with
 - the training cross-load cases (one implementation's export spoken by the other): 57.4 and 38.1 dB.
 
 The contract suite passes (18 tests).
+
+On a GPU (an RTX 3090, 2026-10-19, stage by stage against upstream on torch 2.8): with upstream's CAM++ embedding fed to Mizuoto, the v2 and v3 English clones are identical sample for sample; that took HiFT's weight norm folded on the device in the F0 predictor's dtype (upstream computes it there at every call). Each side making its own embedding, the v2 clone is identical too (its flow absorbs CAM++'s 5e-7) and v3 is at 14.2 dB, which is CAM++'s noise as on the CPU. Upstream on its own torch 2.3.1 (cuDNN 8.9) differs from itself on torch 2.8 at the first convolution, so the comparison takes 2.8.
 
 ## Limitations
 

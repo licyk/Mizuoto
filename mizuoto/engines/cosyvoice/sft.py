@@ -94,7 +94,8 @@ RECIPES = {
 
 
 def load_feature_models(model_dir: Path, version: int, device: str) -> tuple[Any, Any]:
-    """The speech tokenizer and CAM++ from the model's ONNX files (converted as the engine converts them)."""
+    """The speech tokenizer (on ``device``) and CAM++ (on the CPU, as ``extract_embedding.py`` runs it) from the model's
+    ONNX files (converted as the engine converts them)."""
     from mizuoto.engines.cosyvoice.engine import LoadedCosyVoice
     from mizuoto.nn.codecs.s3tokenizer import S3Tokenizer
     from mizuoto.nn.codecs.s3tokenizer import state_dict_from_onnx as tokenizer_state
@@ -108,7 +109,7 @@ def load_feature_models(model_dir: Path, version: int, device: str) -> tuple[Any
     load_into(tokenizer, state, what="speech tokenizer")
     campplus = CAMPPlus(ops=ops.default)
     load_into(campplus, LoadedCosyVoice._onnx_weights(model_dir, "campplus.onnx", campplus_state), ignore=["*.num_batches_tracked"], what="CAM++")
-    return tokenizer.eval().to(device), campplus.eval().to(device)
+    return tokenizer.eval().to(device), campplus.eval()
 
 
 def utterance_features(wav: Path, tokenizer: Any, campplus: Any, device: str) -> tuple[list[int], list[float]]:
@@ -129,7 +130,7 @@ def utterance_features(wav: Path, tokenizer: Any, campplus: Any, device: str) ->
         tokens = codes[0, : int(lens[0])].flatten().tolist()
     feat = fbank(audio, num_mel_bins=80, dither=0, sample_frequency=16000)
     feat = feat - feat.mean(dim=0, keepdim=True)
-    embedding = campplus(feat.unsqueeze(dim=0).to(device)).flatten().tolist()
+    embedding = campplus(feat.unsqueeze(dim=0)).flatten().tolist()
     return tokens, embedding
 
 

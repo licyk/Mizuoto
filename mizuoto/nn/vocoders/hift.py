@@ -312,16 +312,21 @@ class HiFTGenerator(nn.Module):
     def ignorable() -> list[str]:
         return []
 
-    def fold(self, state: Mapping[str, torch.Tensor]) -> dict[str, torch.Tensor]:
-        """The checkpoint with weight norm folded (``generator.`` prefixes dropped); v3's F0 predictor in float64."""
+    def fold(self, state: Mapping[str, torch.Tensor], device: torch.device | str | None = None, f0_device: torch.device | str | None = None) -> dict[str, torch.Tensor]:
+        """The checkpoint with weight norm folded (``generator.`` prefixes dropped); v3's F0 predictor in float64.
+
+        Upstream keeps HiFT's weight norm and computes it at every call where the model runs, so each norm is computed on
+        ``device`` (the F0 predictor's on ``f0_device``, by default the same), as there (``fold_weight_norm``).
+        """
         from mizuoto.runtime.loading import fold_weight_norm
 
+        f0_device = device if f0_device is None else f0_device
         state = {k.replace("generator.", ""): v for k, v in state.items()}
         if not self.causal:
-            return fold_weight_norm(state)
+            return fold_weight_norm(state, device=device)
         f0 = {k: v for k, v in state.items() if k.startswith("f0_predictor.")}
-        rest = fold_weight_norm({k: v for k, v in state.items() if k not in f0})
-        rest.update(fold_weight_norm({k: v.double() for k, v in f0.items()}))
+        rest = fold_weight_norm({k: v for k, v in state.items() if k not in f0}, device=device)
+        rest.update(fold_weight_norm({k: v.double() for k, v in f0.items()}, device=f0_device))
         return rest
 
     def _stft(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:

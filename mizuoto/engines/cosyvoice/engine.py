@@ -195,7 +195,8 @@ class LoadedCosyVoice(LoadedEngine):
                 int(f0.get("cond_channels", 512)),
                 int(hift_cfg.get("nb_harmonics", 8)) + 1,
             )
-        load_into(self.hift, self.hift.fold(checkpoint("hift.pt")), what="CosyVoice vocoder")
+        f0_device = "cpu" if self.hift.causal and float64_device == "cpu" else spec.device
+        load_into(self.hift, self.hift.fold(checkpoint("hift.pt"), device=spec.device, f0_device=f0_device), what="CosyVoice vocoder")
         self.hift.eval()
         if self.hift.causal and float64_device == "cpu" and self.device.type != "cpu":
             pin_to_cpu(self.hift.f0_predictor)  # float64 on a device without it (MPS): the F0 predictor stays on the CPU
@@ -208,6 +209,8 @@ class LoadedCosyVoice(LoadedEngine):
         self.speech_tokenizer.eval()
         self.campplus = CAMPPlus(ops=ops.default)
         load_into(self.campplus, self._onnx_weights(folder, "campplus.onnx", campplus_state), ignore=["*.num_batches_tracked"], what="CAM++")
+        # On the CPU wherever the model runs: upstream runs campplus.onnx with onnxruntime's CPU provider only, and a
+        # GPU's convolutions give the embedding (and so the whole voice) other bits.
         self.campplus.eval()
 
         feat = config["feat_extractor"]
@@ -219,7 +222,7 @@ class LoadedCosyVoice(LoadedEngine):
         self.h_llm = ModelHandle(self.llm, name=f"{spec.model_id}:language model", load_device=spec.device, kind="sequence")
         self.h_flow = ModelHandle(torch.nn.ModuleList([self.flow, self.hift]), name=f"{spec.model_id}:flow and vocoder", load_device=spec.device)
         self.h_flow.mark(self.hift.f0_predictor, "fixed")  # HiFT reads its first layer's device to find where it runs
-        self.h_frontend = ModelHandle(torch.nn.ModuleList([self.speech_tokenizer, self.campplus]), name=f"{spec.model_id}:frontend", load_device=spec.device)
+        self.h_frontend = ModelHandle(self.speech_tokenizer, name=f"{spec.model_id}:frontend", load_device=spec.device)
         self.handles = [self.h_llm, self.h_flow, self.h_frontend]
         self.cuda_graphs = False
         self._graphs: Any = None
@@ -359,7 +362,7 @@ class LoadedCosyVoice(LoadedEngine):
 
         feat = fbank(self._load_wav(path, 16000), num_mel_bins=80, dither=0, sample_frequency=16000)
         feat = feat - feat.mean(dim=0, keepdim=True)
-        embedding = self.campplus(feat.unsqueeze(dim=0).to(self.device)).flatten().tolist()
+        embedding = self.campplus(feat.unsqueeze(dim=0)).flatten().tolist()
         return torch.tensor([embedding]).to(self.device)
 
     def _speech_feat(self, path: str) -> tuple[torch.Tensor, torch.Tensor]:
