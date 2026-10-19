@@ -248,7 +248,7 @@ help = "What the preview says (empty: a dataset clip's text)."
 type = "enum"
 default = "auto"
 choices = ["auto", "off", "blocks", "every:2", "every:4"]
-help = "Keep only each block's input and run it again in the backward pass: less GPU memory for about a third more time, the same results. auto follows Settings › Training › Memory."
+help = "Keep only each block's input and run it again in the backward pass: less GPU memory for more time a step (from a few percent to about twice as long), the same results. auto follows Settings › Training › Memory."
 
 [training.lora]
 title = "Fine-tune with LoRA"
@@ -364,4 +364,4 @@ help = "What the preview says (empty: a dataset clip's text)."
 type = "enum"
 default = "auto"
 choices = ["auto", "off", "blocks", "every:2", "every:4"]
-help = "Keep only each block's input and run it again in the backward pass: less GPU memory for about a third more time, the same results. auto follows Settings › Training › Memory."
+help = "Keep only each block's input and run it again in the backward pass: less GPU memory for more time a step (from a few percent to about twice as long), the same results. auto follows Settings › Training › Memory."

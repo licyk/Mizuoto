@@ -502,6 +502,25 @@ The copies themselves now run at 13.2 GB/s (98 % of the link, measured over the 
 
 The others were already bound by the copies (about 12.4 GB/s) and VoxCPM 1.5 lost 2.2×, so only Qwen3-TTS uses graphs while streamed; `meta.memory.streamed_mb` counts the replays' copies (within 2 % of the eager count).
 
+## Memory modes and a real out-of-memory
+
+The last gate of the memory work, measured on an RTX 3090 (2026-10-19): the G0 cases under `compute.vram_mode=high` and `none`, three runs each, against a fresh default round on the same GPU, and the contract suite under `none`.
+
+| Case | `auto`: warm, peak | `high` | `none`: warm, peak | Audio |
+| --- | --- | --- | --- | --- |
+| Qwen3-TTS Base / CustomVoice | 1.27 s, 8.3 GB / 0.82 s, 4.0 GB | the same | 30.3 s, 2.1 GB / 19.1 s, 1.0 GB | identical |
+| CosyVoice 2 / 3 | 1.05 s, 3.1 GB / 1.05 s, 7.4 GB | the same | 14.9 s, 0.8 GB / 12.4 s, 1.6 GB | identical |
+| F5-TTS | 0.91 s, 0.8 GB | the same | 2.06 s, 0.2 GB | identical |
+| Fish Speech S2 Pro | 3.23 s, 9.9 GB | the same | 106 s, 1.6 GB | identical |
+| GPT-SoVITS v2 / v4 | 0.64 s / 1.06 s | the same | 0.95 s / 2.34 s, 0.3 / 0.6 GB | identical |
+| IndexTTS 1.5 / 2 | 0.55 s / 1.94 s, 8.2 GB | the same | 7.7 s / 30.8 s, 1.5 GB | identical |
+| OmniVoice | 0.78 s, 2.0 GB | the same | 2.15 s, 0.6 GB | identical |
+| VoxCPM 1.5 / 2 | 0.97 s / 2.14 s | the same | 8.8 s / 23.6 s, 1.0 GB | identical |
+
+`none` streams every unit in every phase, so a model runs in a tenth to a fifth of its memory; an autoregressive one copies its streamed layers for each token, which is where its time goes, while the small ones (F5-TTS, OmniVoice, GPT-SoVITS) stay within about 2.5×. The contract suite under `none`, every installed model on `cuda:1`, the licence-gated ones included: 165 passed (3 skipped: models that do not stream), 3 h 20 min.
+
+**A real out-of-memory**, not the test's injected one: under an 8 or 12 GB cap with the allocator capped as well, a thread took the remaining memory while a request was generating, down to 64 KB fragments. Qwen3-TTS's talker and IndexTTS 2's GPT (at two moments) ran out in the allocator itself, ran again with half their weights streamed (`oom_retries`, the warning, `meta.memory.partial`: "capped at half its weights after running out of memory"), and gave the undisturbed run's audio sample for sample. Taken a moment later, after the talker had finished, the same squeeze made the codec decoder's placement see 218 MB free and the talker give up memory instead: no error, the same audio. (`compute.vram_limit_mb` alone tells the runtime, not the allocator: the squeeze then took the whole GPU, which is why the allocator was capped for this.)
+
 ## `torch.compile` on the CPU
 
 `compute.compile`, fp32, 8 threads; time of the compiled module, warm:

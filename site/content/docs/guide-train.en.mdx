@@ -142,9 +142,22 @@ A run is one **Train** job whose steps are the stages; its card shows under the 
 
 ## CPU and GPU
 
-- A fine-tune needs a GPU in practice; Fish Speech's LoRA recommends 24 GB of GPU memory.
+- A fine-tune needs a GPU in practice. The smallest card each one runs on, with its recipe's default batch, by **Memory** setting (the peaks measured on an RTX 3090, with the estimate's margin: a tenth more and 512 MB):
+
+| Fine-tune | Standard | Low | Lowest |
+| --- | --- | --- | --- |
+| CosyVoice 2 / 3, `llm` (2's `llm_flow` alike) | 12 GB | 12 GB | 12 GB |
+| F5-TTS `full` | 12 GB | 12 GB | 8 GB |
+| Fish Speech S2 Pro LoRA, batch 1 / 2 | 16 GB / 24 GB | 16 GB / 24 GB | 16 GB / 24 GB |
+| GPT-SoVITS `speaker` (batch 4) | 6 GB | 6 GB | 6 GB |
+| OmniVoice `full` | 16 GB | 16 GB | 6 GB |
+| OmniVoice LoRA | 12 GB | 4 GB | 4 GB |
+| Qwen3-TTS 1.7B `speaker` | 24 GB | 24 GB | 12 GB |
+| VoxCPM 0.5B `full` | 24 GB | 16 GB | 16 GB |
+| VoxCPM 0.5B / 1.5 / 2 LoRA (batch 16) | 12 GB / 12 GB / 24 GB | 4 GB / 6 GB / 12 GB | 4 GB / 6 GB / 12 GB |
+
 - Every engine also trains on a CPU, which is enough to check the whole run works with little data and few steps.
-- **Settings › Training** also has **Training precision**, **Checkpoints kept per run** and **Memory**: *Standard* trains as each recipe does; *Low* adds gradient checkpointing (each block of the model runs again in the backward pass instead of keeping its activations) and keeps what is not needed off the GPU, with the same results, about a third slower; *Lowest* also keeps the optimizer's state in RAM and streams LoRA's frozen weights from RAM, whose results differ slightly. A method's own **gradient_checkpointing** hyperparameter overrides it.
+- **Settings › Training** also has **Training precision**, **Checkpoints kept per run** and **Memory**: *Standard* trains as each recipe does; *Low* adds gradient checkpointing (each block of the model runs again in the backward pass instead of keeping its activations) and keeps what is not needed off the GPU, with the same results, slower by a few percent to twice the time (measured on an RTX 3090 a step: F5-TTS +6 %, VoxCPM +51 %, Qwen3-TTS +80 %, OmniVoice +104 %); *Lowest* also keeps the optimizer's state in RAM and streams LoRA's frozen weights from RAM, whose results differ slightly. A method's own **gradient_checkpointing** hyperparameter overrides it.
 - When you pick a method for a new experiment, the dialog shows roughly how much GPU memory a run needs with each Memory setting; a run whose estimate exceeds the GPU's free memory says so in its log, with the setting that would fit, or a smaller `batch_size` where no setting helps (Fish Speech's LoRA at its default batch of 4 needs more than a 24 GB card; 3 fits). On a GPU each logged step also reports **memory/peak_mb**, what it really used.
 
 ## Command line

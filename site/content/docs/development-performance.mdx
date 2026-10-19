@@ -502,6 +502,25 @@ v4 收益最小：它的 flow 和声码器占主导，而且在拥挤的 GPU 上
 
 其他模型原本就受复制限制（约 12.4 GB/s），VoxCPM 1.5 还慢了 2.2 倍，所以只有 Qwen3-TTS 在流式加载时用图；`meta.memory.streamed_mb` 计入重放中的复制（与 eager 时的计数相差不到 2 %）。
 
+## 显存模式与真实的显存不足
+
+显存工作的最后一道检验，在 RTX 3090 上测量（2026-10-19）：G0 用例在 `compute.vram_mode=high` 和 `none` 下各运行三次，与同一块 GPU 上新跑的默认一轮对照；以及 `none` 下的契约测试。
+
+| 用例 | `auto`：预热后耗时、峰值 | `high` | `none`：预热后耗时、峰值 | 音频 |
+| --- | --- | --- | --- | --- |
+| Qwen3-TTS Base / CustomVoice | 1.27 s、8.3 GB / 0.82 s、4.0 GB | 相同 | 30.3 s、2.1 GB / 19.1 s、1.0 GB | 相同 |
+| CosyVoice 2 / 3 | 1.05 s、3.1 GB / 1.05 s、7.4 GB | 相同 | 14.9 s、0.8 GB / 12.4 s、1.6 GB | 相同 |
+| F5-TTS | 0.91 s、0.8 GB | 相同 | 2.06 s、0.2 GB | 相同 |
+| Fish Speech S2 Pro | 3.23 s、9.9 GB | 相同 | 106 s、1.6 GB | 相同 |
+| GPT-SoVITS v2 / v4 | 0.64 s / 1.06 s | 相同 | 0.95 s / 2.34 s、0.3 / 0.6 GB | 相同 |
+| IndexTTS 1.5 / 2 | 0.55 s / 1.94 s、8.2 GB | 相同 | 7.7 s / 30.8 s、1.5 GB | 相同 |
+| OmniVoice | 0.78 s、2.0 GB | 相同 | 2.15 s、0.6 GB | 相同 |
+| VoxCPM 1.5 / 2 | 0.97 s / 2.14 s | 相同 | 8.8 s / 23.6 s、1.0 GB | 相同 |
+
+`none` 在每个阶段流式加载每个单元，所以模型只用其显存的十分之一到五分之一；自回归模型每个 token 都要复制一遍流式加载的层，时间主要花在这里，而较小的模型（F5-TTS、OmniVoice、GPT-SoVITS）慢不到约 2.5 倍。`none` 下的契约测试（在 `cuda:1` 上运行所有已安装的模型，包括需要接受许可的）：165 项通过（3 项跳过：不支持流式输出的模型），耗时 3 小时 20 分。
+
+**真实的显存不足**，而不是测试中注入的：在 8 或 12 GB 限额下（分配器也一并限额），一个线程在请求生成期间占满剩余显存，直到只剩 64 KB 的碎片。Qwen3-TTS 的 talker 和 IndexTTS 2 的 GPT（在两个时刻）都在分配器中真正用尽了显存，然后把一半权重改为流式加载后重新运行（`oom_retries`、警告，以及 `meta.memory.partial` 中的“capped at half its weights after running out of memory”），给出的音频与未受干扰的运行逐采样相同。如果晚一点才占满（talker 已经结束），编解码器解码器放置时只看到 218 MB 可用，于是由 talker 让出显存：没有报错，音频相同。（单独设置 `compute.vram_limit_mb` 只告知运行时，并不限制分配器：那样占满的就是整块 GPU，所以这次检验也限制了分配器。）
+
 ## 在 CPU 上的 `torch.compile`
 
 `compute.compile`，fp32，8 线程；被编译模块预热后的耗时：
