@@ -98,6 +98,12 @@ def test_flash_takes_causal_windows_and_one_sided_padding(fake_flash):
     dense = info.dense(3, 9, torch.device("cpu"))
     assert torch.allclose(optional.flash(q3, k3, v3, dense, False, None, True, 0.0, info), expected(q3, k3, v3, dense), atol=1e-5)
     assert fake_flash[-1] == ("kvcache", True, (-1, -1), [9, 9], [2, 0])
+    # one row of keys broadcast over a batch of two (GPT-SoVITS v4's DiT under guidance): one length per query row
+    keys = torch.tensor([[True] * 6 + [False] * 3])
+    info = MaskInfo(keys=keys, padding="right")
+    dense = info.dense(3, 9, torch.device("cpu"))
+    assert torch.allclose(optional.flash(q3, k3, v3, dense, False, None, True, 0.0, info), expected(q3, k3, v3, dense), atol=1e-5)
+    assert fake_flash[-1][3] == [6, 6]
 
 
 @pytest.fixture

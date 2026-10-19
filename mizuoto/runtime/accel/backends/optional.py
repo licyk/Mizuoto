@@ -127,6 +127,12 @@ def flash(
     qt, kt, vt = (t.transpose(1, 2) for t in (q, k, v))
     if mask is not None and info is not None and info.keys is not None:
         seqlens, leftpad = lengths(info)
+        batch = qt.shape[0]
+        if seqlens.shape[0] == 1 and batch > 1:  # one row of keys for every query (a mask broadcast over the batch)
+            seqlens = seqlens.expand(batch).contiguous()
+            leftpad = None if leftpad is None else leftpad.expand(batch).contiguous()
+        if kt.shape[0] == 1 and batch > 1:  # the cache takes one row per query
+            kt, vt = kt.expand(batch, *kt.shape[1:]), vt.expand(batch, *vt.shape[1:])
         kwargs: dict[str, Any] = {"cache_seqlens": seqlens, "softmax_scale": scale, "causal": causal, "window_size": window}
         if leftpad is not None:
             kwargs["cache_leftpad"] = leftpad
