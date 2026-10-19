@@ -6,7 +6,9 @@ as they are.
 Parity with transformers needs more than the same maths:
 - **RMSNorm** computes in float32 and casts back *before* multiplying by the weight.
 - **RoPE**: ``inv_freq`` is computed from int64 positions, as ``ROPE_INIT_FUNCTIONS["default"]`` does;
-  cos and sin are computed in float32 and cast to the activations' dtype.
+  cos and sin are computed in float32 and cast to the activations' dtype. ``inv_freq`` stays float32 when the
+  module is cast (``.to(bfloat16)``): ``from_pretrained(dtype=…)`` loads the weights in that dtype but leaves the
+  buffer it built in float32, and a rounded one turns late positions by other angles.
 - **Attention** calls SDPA as ``sdpa_attention_forward`` does. Without a mask it passes
   ``enable_gqa=True`` and ``is_causal`` for multi-token queries. With a mask it expands the KV heads
   (``repeat_kv``) and passes the mask with ``is_causal=False``. ``mask_for`` decides between the two as
@@ -105,7 +107,17 @@ def rope_inv_freq(theta: float, dim: int) -> torch.Tensor:
 class Rotary(nn.Module):
     def __init__(self, head_dim: int, theta: float) -> None:
         super().__init__()
+        self.head_dim, self.theta = head_dim, theta
         self.register_buffer("inv_freq", rope_inv_freq(theta, head_dim), persistent=False)
+
+    def _apply(self, fn: Any, recurse: bool = True) -> Rotary:
+        """Moves and casts as any module, but ``inv_freq`` comes back float32 (computed again, so a cast to bfloat16
+        and back loses nothing) on the device the cast put it on."""
+        super()._apply(fn, recurse)
+        inv_freq = self.get_buffer("inv_freq")
+        if inv_freq.dtype != torch.float32:
+            self.inv_freq = rope_inv_freq(self.theta, self.head_dim).to(inv_freq.device)
+        return self
 
     @torch.no_grad()
     def forward(self, x: torch.Tensor, position_ids: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
@@ -212,10 +224,13 @@ class Attention(nn.Module):
     def project(self, x: torch.Tensor, cos: torch.Tensor, sin: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """q, k (normed, rotated) and v, (batch, heads, length, head_dim).
 
-        Without autograd, Qwen3's q and k are normed and rotated together, their heads side by side (identical: each
-        head's norm and every element's rotation are computed alone; fewer, larger kernels)."""
+        Without autograd on the CPU, Qwen3's q and k are normed and rotated together, their heads side by side
+        (identical there: each head's norm and every element's rotation are computed alone; fewer, larger kernels). On
+        a GPU they are normed apart, as transformers does: CUDA sizes its reduction by the tensor, and over the joined
+        heads a norm's sum came out one step off now and then (one key in a Qwen3-TTS decode, then the voice). Fused
+        projections (``fuse``, an opt-in that already changes bits on a GPU) norm them together there too."""
         q, k, v = self._qkv(x)
-        if self.qk_norm and not torch.is_grad_enabled():
+        if self.qk_norm and not torch.is_grad_enabled() and (x.device.type == "cpu" or self.qkv_proj is not None):
             heads = q.shape[-2]
             qk = torch.cat((q, k), dim=-2)
             q_norm, k_norm = self.q_norm, self.k_norm
@@ -337,6 +352,7 @@ def mask_for(
     causal: bool = True,
     padding: str | None = None,
     padded: bool | None = None,
+    allow_skip: bool = True,
 ) -> Masked | None:
     """The 4-D boolean mask transformers passes to SDPA (True: attend), with its structure, or ``None`` when it skips
     it.
@@ -346,13 +362,18 @@ def mask_for(
     token or covers every key, and no sliding window applies within the length. ``padded`` says whether
     ``attention_mask`` has a 0 in its first ``past + query`` columns, when the caller knows; otherwise it is read from
     the device (which waits for it).
+
+    ``allow_skip=False`` always builds the mask, as ``create_causal_mask``'s ``allow_is_causal_skip`` does. transformers
+    4.57 turns it off when a model passes position ids without a padding mask or a cache: its packed-sequence check
+    (``find_packed_sequence_indices``) then always returns a tensor. On a GPU the mask and ``is_causal`` take other
+    kernels, so the choice changes bits.
     """
     kv_length = past_length + query_length
     if attention_mask is None:
         padded = False
     elif padded is None:
         padded = not bool(attention_mask[:, :kv_length].all())
-    if not padded and (query_length == 1 or kv_length == query_length) and (sliding_window is None or kv_length < sliding_window):
+    if allow_skip and not padded and (query_length == 1 or kv_length == query_length) and (sliding_window is None or kv_length < sliding_window):
         return None
     device = attention_mask.device if attention_mask is not None else torch.device("cpu")
     q_idx = torch.arange(past_length, kv_length, device=device)[:, None]

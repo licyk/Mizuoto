@@ -207,7 +207,7 @@ GPU 上的自回归模型每一步要启动几千个小内核（Qwen3-TTS：每 
 - **`multinomial1(probs, generator)`** 就是 `torch.multinomial` 自己的单样本算法 `argmax(p / Exp(1))`，只是去掉了它的两次合法性检查（每次都要等待设备）。在 CPU 和 CUDA 上得到同样的 id 和生成器状态；其他设备上调用 `torch.multinomial`。含 NaN 的概率记在一个张量里（`invalid`），调用方在那唯一一次等待时读取，届时抛出 `torch.multinomial` 的错误。
 - **`multinomial_draws(probs, n, generator)`**：不放回地抽取多个，`topk(p / Exp(1), n)`（IndexTTS 的 beam）。
 - 屏蔽掩码和 EOS 掩码每个设备只构造一次；`repetition_penalty_seen` 在已抽取 id 的掩码上施加惩罚，形状不再增长。
-- 共用的 Qwen 解码器在不需要 autograd 时把 q 和 k 一起归一化、一起旋转，并在设备上的自检表明与 float32 上转的归一化逐位相同时使用 `F.rms_norm`（`_fused_norm_exact`：在较新 torch 的 CUDA 上以 bf16/fp16 计算时，一个内核代替八个）。调用方知道没有填充时，`mask_for(padded=…)` 跳过它的设备检查。
+- 共用的 Qwen 解码器在不需要 autograd 时，在 CPU 上把 q 和 k 一起归一化、一起旋转（在 GPU 上与 transformers 一样分开进行，除非投影已融合：CUDA 按张量大小安排归约，拼接后的归一化偶尔在最后一位不同），并在设备上的自检表明与 float32 上转的归一化逐位相同时使用 `F.rms_norm`（`_fused_norm_exact`：在较新 torch 的 CUDA 上以 bf16/fp16 计算时，一个内核代替八个）。调用方知道没有填充时，`mask_for(padded=…)` 跳过它的设备检查。
 
 **合并投影**（`engines.qwen3tts.load_options.fused_projections`，关）在加载时把每层的 q/k/v 以及 gate/up 权重分别堆叠成一个线性层（`QwenDecoder.fuse`；是真正的 `ops.Linear`，仍可流式加载）。仅用于推理。cuBLAS 对更宽的矩阵会选用别的内核，所以在 CUDA 上结果不逐位相同；输出会列出 `fused_projections`。
 

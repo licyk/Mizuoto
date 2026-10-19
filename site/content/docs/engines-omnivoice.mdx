@@ -69,6 +69,8 @@ icon: Languages
 
 全部 4 个完整链路用例在 CPU 上以 fp32 与 0.1 逐采样相同：克隆、按属性设计、自带音色和微调后的模型。模块层面还包括音色提示的编码、分词器的解码、logits、`class_temperature`、`speed`、`duration`、批量以及长文本分块路径。另有两个用例让一种实现加载另一种实现导出的 LoRA，结果相同。契约套件通过（12 项）。
 
+在 GPU 上（RTX 3090，bf16，2026-10-19，与 0.1 对照），四个用例也逐采样相同：共用的 Qwen 解码器在转为 bf16 时让 RoPE 的 `inv_freq` 保持 float32，并像 transformers 一样把 q 和 k 分开归一化之后即是如此（见 [Qwen3-TTS](/docs/engines-qwen3tts#对照结果)）；速度不变（×1.01）。
+
 ## 限制
 
 - 每一步都是条件行和无条件行在整个序列上的完整前向；这个引擎没有 CUDA 图路径。

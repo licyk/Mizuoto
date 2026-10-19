@@ -164,7 +164,8 @@ class DecoderTransformer(nn.Module):
         x = self.input_proj(x)
         length = x.shape[1]
         positions = torch.arange(length, device=x.device).unsqueeze(0)
-        mask = mask_for(None, length, 0, sliding_window=self.window)
+        # Never skipped: upstream passes position ids without a padding mask or a cache (``mask_for``'s allow_skip).
+        mask = mask_for(None, length, 0, sliding_window=self.window, allow_skip=False)
         if mask is not None:
             mask = Masked(mask.dense.to(x.device).expand(x.shape[0], -1, -1, -1), mask.info)
         cos, sin = self.rotary_emb(x, positions)
@@ -411,7 +412,9 @@ class MimiEncoder(nn.Module):
 
 
 class MimiAttention(nn.Module):
-    """``MimiSdpaAttention``: KV heads expanded, SDPA without a mask is causal over the whole clip."""
+    """``MimiSdpaAttention``: KV heads expanded, causal over the whole clip. transformers 4.57 hands it a boolean causal
+    mask (``create_causal_mask`` does not drop it here) and makes q, k and v contiguous on CUDA when there is a mask;
+    SDPA is called the same way, since on a GPU a mask and ``is_causal`` pick other kernels."""
 
     def __init__(self, c: dict[str, Any], ops: Any = default_ops.default) -> None:
         super().__init__()
@@ -433,7 +436,10 @@ class MimiAttention(nn.Module):
         cos, sin = self.rotary_emb(v, positions)
         q, k = apply_rope(q, k, cos, sin)
         k, v = repeat_kv(k, self.heads // self.kv_heads), repeat_kv(v, self.heads // self.kv_heads)
-        out = attention(q, k, v, site=MIMI, causal=q_len > 1)
+        mask = torch.ones(q_len, q_len, dtype=torch.bool, device=x.device).tril()[None, None]
+        if x.device.type == "cuda":
+            q, k, v = q.contiguous(), k.contiguous(), v.contiguous()
+        out = attention(q, k, v, site=MIMI, mask=mask)
         return self.o_proj(out.transpose(1, 2).contiguous().view(bsz, q_len, -1))
 
 

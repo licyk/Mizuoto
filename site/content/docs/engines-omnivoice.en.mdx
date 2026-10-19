@@ -69,6 +69,8 @@ Methods `full` and `lora` (stages `tokens`, `train`, `export`; upstream's `extra
 
 Identical sample for sample to 0.1 on the CPU in fp32 in all four stack cases: cloning, design from attributes, its own voice and the fine-tuned model. At module level also the voice prompt's codes, the tokenizer's decode, the logits, `class_temperature`, `speed`, `duration`, batches and the chunked long-text path. Two more cases load each implementation's LoRA export in the other; identical. The contract suite passes (12 tests).
 
+On a GPU (an RTX 3090, bf16, 2026-10-19, against 0.1) the four cases are identical sample for sample too, once the shared Qwen decoder kept RoPE's `inv_freq` in float32 through the cast to bf16 and normed q and k apart, as transformers does (see [Qwen3-TTS](/docs/engines-qwen3tts#parity)); speed unchanged (×1.01).
+
 ## Limitations
 
 - Every step is a full forward of the conditional and unconditional rows over the whole sequence; there is no CUDA-graph path for this engine.
