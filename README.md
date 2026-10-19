@@ -42,7 +42,7 @@ output as its upstream project. Requests, voices, parameters, jobs and results l
 them. GPU memory is managed for all of them together: a model that does not fit loads partly, with the rest of its
 weights streamed from RAM.
 
-- **Repository:** <https://github.com/licyk/Mizuoto>
+- **Website:** <https://mizuoto.netlify.app>
 - **Documentation:** the site in [`site/`](site/content/docs/index.en.mdx) (English and Chinese;
   `python scripts/dev.py site-dev` serves it locally)
 

@@ -40,7 +40,7 @@ IndexTTS——共用一个网页界面、一个命令行和一套 HTTP 接口：
 所有引擎都在 Mizuoto 内实现，运行在同一个运行时（PyTorch）与同一个 Python 环境中，输出与其上游一致。无论由哪个引擎处理，
 请求、音色、参数、任务与结果的形式都相同。显存由所有引擎统一管理：放不下的模型部分加载，其余权重从内存流式加载。
 
-- **仓库：** <https://github.com/licyk/Mizuoto>
+- **官网：** <https://mizuoto.netlify.app>
 - **文档：** [`site/`](site/content/docs/index.mdx) 中的文档站点（中文与英文；`python scripts/dev.py site-dev` 可在本地预览）
 
 ## 功能
