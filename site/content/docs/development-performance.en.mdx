@@ -428,9 +428,37 @@ Measured on the free GPUs (2026-10-18) against the exact path of the code after 
 | F5-TTS clone-en | 0.98 → 0.92 s | ×1.06 | 10.9 → 3.7 s |
 | OmniVoice clone-en | 0.79 → 0.78 s | ×1.01 | 7.7 → 3.6 s |
 
-Native is at least as fast in every case, warm and first; each native case gave the same audio in its three runs. A first pass beside the capped contract suite below (with 10 GB of the host swapped) had OmniVoice 12 % slower and two native loads over 100 s: measure such comparisons on a quiet machine. Not compared: time to first audio, peak memory, and 0.1's optional accelerators (vLLM, TensorRT).
+Native is at least as fast in every case, warm and first; each native case gave the same audio in its three runs. A first pass beside the capped contract suite below (with 10 GB of the host swapped) had OmniVoice 12 % slower and two native loads over 100 s: measure such comparisons on a quiet machine. Time to first audio and peak memory: G8 below.
 
 **The contract suite on the GPU** ([testing](/docs/development-testing)), every installed model, the licence-gated ones included: **144 passed** on the whole `cuda:0` (126 in 52 minutes, and VoxCPM's 18 from its own data folder), and **144 passed** on `cuda:1` capped at 4 GB (`MIZUOTO_TEST_SETTINGS='{"compute": {"vram_limit_mb": 4096}}'`, less than the large models (Fish Speech S2 Pro, IndexTTS 2, Qwen3-TTS 1.7B) need, so they stream and load partly through the whole stack; 2 h 6 min). The slowest capped test is a long Qwen3-TTS request (the narrator fine-tune's seed test: 2,778 s alone against 322 s whole): an autoregressive model that streams copies its streamed layers once per token.
+
+## First audio and memory against 0.1 (G8)
+
+2026-10-19, one RTX 3090 (`cuda:0`) on a quiet machine, the G0 cases streamed (`perf/g8/` in the experiment workspace: `run.sh`, `single.sh`, `monitor.py`, which samples the card's used memory and the process tree's RAM every 0.2 s; 0.1's engine workers are counted with its host). Warm request and time to first audio are the best of runs 2–3; `stack.py` records `first_chunk_seconds`.
+
+| Case | Warm, 0.1 → native | First audio, 0.1 → native |
+| --- | --- | --- |
+| Qwen3-TTS base-clone-en | 6.38 → 1.52 s | 6.38 → 0.36 s |
+| Qwen3-TTS cv-en-aiden | 4.14 → 0.89 s | 4.13 → 0.32 s |
+| F5-TTS clone-en | 0.97 → 0.91 s | 0.97 → 0.91 s |
+| OmniVoice clone-en | 0.78 → 0.76 s | 0.78 → 0.76 s |
+| CosyVoice v2-clone-en | 2.93 → 1.64 s | 2.17 → 1.14 s |
+| CosyVoice v3-clone-en | 2.02 → 1.31 s | 1.98 → 1.30 s |
+| GPT-SoVITS v2-clone-zh | 1.10 → 0.44 s | 0.55 → 0.30 s |
+| GPT-SoVITS v4-clone-zh | 1.41 → 0.93 s | 1.41 → 0.93 s |
+| IndexTTS v1.5-clone-en | 1.26 → 0.53 s | 1.26 → 0.53 s |
+| IndexTTS v2-clone-en | 3.00 → 1.92 s | 2.99 → 1.91 s |
+
+First audio is never later than 0.1's; where 0.1 returned whole clips (Qwen3-TTS) it comes 12–18× sooner. Peak memory of one model per run (one case per stack), 0.1 → native → native with `compute.host_copies = off`:
+
+| Model | GPU MB | RAM MB (anonymous) |
+| --- | --- | --- |
+| Qwen3-TTS 1.7B CustomVoice | 4,493 → 4,495 → 4,487 | 1,558 → 5,235 → 4,244 |
+| CosyVoice 2 | 3,375 → 3,651 → 3,647 | 4,885 → 4,231 → 3,445 |
+| GPT-SoVITS v2 | 1,973 → 1,509 → 1,507 | 2,959 → 3,779 → 3,467 |
+| IndexTTS 2 | 9,337 → 6,907 → 6,889 | 7,459 → 8,537 → 8,318 |
+
+GPU memory is within 10 % of 0.1 or below it (CosyVoice 2 +8 %, GPT-SoVITS and IndexTTS a quarter less). RAM is higher where 0.1 loaded straight onto the GPU (transformers' `device_map`, Qwen3-TTS): Mizuoto builds every model in RAM for the model manager to place, and by default keeps it there as a host copy, so offloading costs no transfer ([memory](/docs/development-memory#host-copies-and-ram)); without host copies the peak is that staging. 0.1's optional accelerators (vLLM, TensorRT) are installed in none of its environments here and were not compared.
 
 ## Memory estimates calibrated
 
