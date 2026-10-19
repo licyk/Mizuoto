@@ -209,6 +209,18 @@ def test_model_spec_lists_what_the_ui_needs(services):
     assert "preset" in spec.voice_modes and spec.speakers[:1] == ["alto"]
 
 
+def test_a_field_the_request_does_not_have_is_ignored_and_said(services):
+    """An unknown top-level field (``options`` for ``engine_options``) still validates, as every record does, and the
+    plan's warnings name it, so a misspelt field does not silently give the defaults."""
+    body = req().model_dump()
+    body["options"] = {"fail": True}
+    request = SpeakRequest.model_validate(body)
+    assert request.ignored_fields == ["options"]
+    plan = services.tts.plan(request)
+    assert any("Ignored fields the request does not have: options" in w for w in plan.warnings)
+    assert all("Ignored" not in w for w in services.tts.plan(req()).warnings)
+
+
 def test_planning_never_refuses_on_estimated_gpu_memory(services):
     """A model always tries to load (ComfyUI's way): only a real allocation failure is an error. Planning does not ask
     for the devices' free memory, even with a full GPU and ``vram_mode = high``."""

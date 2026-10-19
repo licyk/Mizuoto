@@ -215,7 +215,7 @@ open("hello.mp3", "wb").write(audio)
 | `segmentation` | `engine`（默认）或 `mizuoto`：由谁切分长文本 |
 | `strict` | 是否拒绝模型不接受的参数；不填时用 `tts.strict_params` |
 
-`voice`、`voice_spec` 都不给时使用模型自带的音色（模型需支持）。只想检查请求而不运行，用 `POST /api/v1/tts/plan`，它返回分段、生效的参数和警告。
+`voice`、`voice_spec` 都不给时使用模型自带的音色（模型需支持）。只想检查请求而不运行，用 `POST /api/v1/tts/plan`，它返回分段、生效的参数和警告。请求中没有的顶层字段会被忽略（这样发送新版本字段的客户端仍能工作），并在警告中列出（“Ignored fields the request does not have: …”）：引擎选项应放在 `engine_options` 中，写成 `options` 会被忽略。音色转换和语音编辑会把这类字段记入日志。
 
 ### 上传一段音频并克隆
 

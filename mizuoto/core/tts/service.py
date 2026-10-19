@@ -293,6 +293,8 @@ class TtsService:
         variant = self._registry.variant(engine, info.variant)
         caps = set(variant.capabilities)
         warnings: list[str] = []
+        if req.ignored_fields:
+            warnings.append(f"Ignored fields the request does not have: {', '.join(req.ignored_fields)}")
 
         # text
         texts = [t for t in (req.texts or []) if t.strip()]
@@ -762,12 +764,16 @@ class TtsService:
 
     def convert(self, req: ConvertRequest, *, wait: bool = False, origin: str | None = None) -> Job:
         """Queue a voice conversion (``wait``: run it here and return it finished)."""
+        if req.ignored_fields:
+            logger.warning("Voice conversion: ignored fields the request does not have: %s", ", ".join(req.ignored_fields))
         self._prepare_convert(req)
         request = req.model_dump(mode="json")
         return self._jobs.run_now("convert", request, origin) if wait else self._jobs.submit("convert", request, origin)
 
     def edit(self, req: EditRequest, *, wait: bool = False, origin: str | None = None) -> Job:
         """Queue a speech edit (``wait``: run it here and return it finished)."""
+        if req.ignored_fields:
+            logger.warning("Speech edit: ignored fields the request does not have: %s", ", ".join(req.ignored_fields))
         self._prepare_edit(req)
         request = req.model_dump(mode="json")
         return self._jobs.run_now("edit", request, origin) if wait else self._jobs.submit("edit", request, origin)

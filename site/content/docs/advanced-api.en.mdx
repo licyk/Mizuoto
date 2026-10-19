@@ -215,7 +215,7 @@ The body is a `SpeakRequest`. Its main fields (`/docs` has all of them):
 | `segmentation` | `engine` (default) or `mizuoto`: who splits long text |
 | `strict` | Refuse parameters the model does not take; unset: `tts.strict_params` |
 
-With neither `voice` nor `voice_spec`, the model speaks in its own voice (if it has one). To check a request without running it, `POST /api/v1/tts/plan` returns the segments, the parameters that apply and the warnings.
+With neither `voice` nor `voice_spec`, the model speaks in its own voice (if it has one). To check a request without running it, `POST /api/v1/tts/plan` returns the segments, the parameters that apply and the warnings. A top-level field the request does not have is ignored, so that a client sending a newer version's field keeps working, and named in the warnings ("Ignored fields the request does not have: …"): engine options go in `engine_options`, and `options` there would be ignored. A conversion or an edit logs such fields.
 
 ### Upload a clip and clone it
 

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from pydantic import Field
+from pydantic import Field, PrivateAttr, model_validator
 
 from mizuoto.core.engines.models import VoiceMode
 from mizuoto.core.record import Record
@@ -76,7 +76,29 @@ class OutputSpec(Record):
     """Set by projects: the output is a take of one of this project's lines (kind ``line``)."""
 
 
-class SpeakRequest(Record):
+class _Request(Record):
+    """A request body. A field it does not have is ignored, as every record ignores one (a client sending a field of a
+    newer version keeps working), and remembered, so that the request says so (``ignored_fields``): a misspelt field,
+    ``options`` for ``engine_options`` say, would otherwise silently give the defaults."""
+
+    _ignored: list[str] = PrivateAttr(default_factory=list)
+
+    @model_validator(mode="wrap")
+    @classmethod
+    def _remember_ignored(cls, data: Any, handler: Any) -> Any:
+        record = handler(data)
+        if isinstance(data, dict):
+            known = set(cls.model_fields) | {f.alias for f in cls.model_fields.values() if f.alias}
+            record._ignored = sorted(str(k) for k in data if k not in known)
+        return record
+
+    @property
+    def ignored_fields(self) -> list[str]:
+        """The body's top-level fields this request does not have (and ignored)."""
+        return list(self._ignored)
+
+
+class SpeakRequest(_Request):
     model: str
     """``<engine>/<model>``, e.g. ``cosyvoice/cosyvoice3-0.5b``."""
     text: str = ""
@@ -151,7 +173,7 @@ class SourceInput(Record):
     path: str | None = None
 
 
-class ConvertRequest(Record):
+class ConvertRequest(_Request):
     """Say what a recording says in another voice (models with ``voice_conversion``)."""
 
     model: str
@@ -176,7 +198,7 @@ class EditSpanInput(Record):
     """Seconds the new speech lasts; None: as long as the span."""
 
 
-class EditRequest(Record):
+class EditRequest(_Request):
     """Replace spans of a recording with new speech in the same voice (models with ``speech_edit``)."""
 
     model: str
