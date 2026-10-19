@@ -50,7 +50,8 @@ ASSETS = {
 MAX_REFERENCE_SECONDS = 15
 W2V_LAYER = 17
 """The w2v-BERT hidden state IndexTTS-2 and 2.5 read (``hidden_states[17]``)."""
-CACHE_FORMAT_VERSION = 1
+CACHE_FORMAT_VERSION = 2
+"""2: IndexTTS-1.5's reference mel computed on the CPU (before, on the device: other bits on a GPU)."""
 TAIL_FADE_MS = 20.0
 CODES_PER_TOKEN = 24
 """Codes a text token is assumed to need at most, for the memory estimate (speech runs at ~5 a token)."""
@@ -66,6 +67,14 @@ def detect(model_dir: Path) -> str | None:
     if (model_dir / "bigvgan_generator.pth").is_file() and (model_dir / "gpt.pth").is_file():
         return "v1_5"
     return None
+
+
+def norm_on(sd: dict[str, Any], device: Any) -> dict[str, Any]:
+    """``sd`` with its weight-norm pairs (``weight_g``/``weight_v``, ``parametrizations.weight.original0/1``) on ``device``,
+    so ``fold_weight_norm`` computes each norm there: upstream removes BigVGAN's weight norm after moving it to the
+    GPU and computes the codec's and the CFM's there at every call, so on a GPU the GPU's reduction gives their bits."""
+    pairs = ("weight_g", "weight_v", "original0", "original1")
+    return {k: v.to(device) if k.rpartition(".")[2] in pairs else v for k, v in sd.items()}
 
 
 class IndexTtsEngine(Engine):
@@ -246,10 +255,15 @@ class LoadedIndexTts2(LoadedEngine):
         codec: Any
         if v25:
             codec = EnhancedCodec.from_config(cfg["semantic_codec"])
-            load_into(codec, fold_weight_norm(load_state_dict(folder / "codec.pth")["model"]), what="IndexTTS-2.5 codec")
+            load_into(codec, fold_weight_norm(norm_on(load_state_dict(folder / "codec.pth")["model"], spec.device)), what="IndexTTS-2.5 codec")
         else:
             codec = RepCodec.from_config(cfg["semantic_codec"])
-            load_into(codec, fold_weight_norm(load_state_dict(Path(assets["indextts/semantic-codec"]) / "model.safetensors")), ignore=CODEC_IGNORED, what="semantic codec")
+            load_into(
+                codec,
+                fold_weight_norm(norm_on(load_state_dict(Path(assets["indextts/semantic-codec"]) / "model.safetensors"), spec.device)),
+                ignore=CODEC_IGNORED,
+                what="semantic codec",
+            )
         self.semantic_codec = codec.eval()
 
         ctx.check_cancel()
@@ -257,7 +271,7 @@ class LoadedIndexTts2(LoadedEngine):
         net = load_state_dict(folder / cfg["s2mel_checkpoint"])["net"]
         s2 = cfg["s2mel"]
         cfm = CFM(DiTConfig.from_s2mel(s2))
-        load_into(cfm, fold_weight_norm(_strip_module(net["cfm"])), what="s2mel CFM")
+        load_into(cfm, fold_weight_norm(norm_on(_strip_module(net["cfm"]), spec.device)), what="s2mel CFM")
         lr = s2["length_regulator"]
         regulator = InterpolateRegulator(lr["channels"], lr["sampling_ratios"], lr["in_channels"], lr["content_codebook_size"])
         load_into(regulator, _strip_module(net["length_regulator"]), what="length regulator")
@@ -278,7 +292,7 @@ class LoadedIndexTts2(LoadedEngine):
         ctx.progress("loading:bigvgan", None)
         bv_dir = Path(assets["indextts/bigvgan"])
         bigvgan = BigVGAN(json.loads((bv_dir / "config.json").read_text(encoding="utf-8")))
-        load_into(bigvgan, fold_weight_norm(load_state_dict(bv_dir / "bigvgan_generator.pt")["generator"]), what="BigVGAN")
+        load_into(bigvgan, fold_weight_norm(norm_on(load_state_dict(bv_dir / "bigvgan_generator.pt")["generator"], spec.device)), what="BigVGAN")
         self.bigvgan = bigvgan.eval()
         self.cfm.compiled_estimator = compile_module(self.cfm.estimator, compile, f"{spec.model_id}:s2mel DiT")
         self.compiled_bigvgan = compile_module(self.bigvgan, compile, f"{spec.model_id}:bigvgan")
@@ -706,17 +720,18 @@ class LoadedIndexTts15(LoadedEngine):
         ctx.check_cancel()
         ctx.progress("loading:bigvgan", None)
         bigvgan = SpeakerBigVGAN(cfg["bigvgan"])
-        load_into(bigvgan, fold_weight_norm(load_state_dict(folder / cfg["bigvgan_checkpoint"])["generator"]), what="IndexTTS-1.5 BigVGAN")
+        load_into(bigvgan, fold_weight_norm(norm_on(load_state_dict(folder / cfg["bigvgan_checkpoint"])["generator"], spec.device)), what="IndexTTS-1.5 BigVGAN")
         self.bigvgan = bigvgan.eval()
         self.compiled_bigvgan = compile_module(self.bigvgan, compile, f"{spec.model_id}:bigvgan")
         self.tokenizer = TextTokenizer(folder / cfg["dataset"]["bpe_model"], TextNormalizer())
+        # upstream computes the reference's mel on the CPU and moves it to the device: a GPU's FFT rounds otherwise, and
+        # the difference (~1e-4) changed the codes the GPT draws (no weights, so nothing to place)
         self.mel = MelSpectrogram(sample_rate=24000, n_fft=1024, hop_length=256, power=1, n_mels=100)
         self.stop_mel_token = int(cfg["gpt"]["stop_mel_token"])
         name = spec.model_id
         self.h_gpt = ModelHandle(self.gpt, name=f"{name}:gpt", load_device=spec.device, kind="sequence")
-        self.h_mel = ModelHandle(self.mel, name=f"{name}:mel", load_device=spec.device)
         self.h_bigvgan = ModelHandle(self.bigvgan, name=f"{name}:bigvgan", load_device=spec.device)
-        self.handles = [self.h_gpt, self.h_bigvgan, self.h_mel]
+        self.handles = [self.h_gpt, self.h_bigvgan]
 
     def describe(self) -> Description:
         size = sum(h.size_bytes for h in self.handles) / 2**20
@@ -734,8 +749,7 @@ class LoadedIndexTts15(LoadedEngine):
         samples, rate = read_wav(path)
         audio = torch.mean(torch.from_numpy(samples)[None], dim=0, keepdim=True)
         audio = Resample(rate, 24000)(audio)
-        mel = ctx.run("mel", [self.h_mel], lambda: self.mel(audio.to(self.device)))
-        return torch.log(torch.clip(mel, min=1e-7))
+        return torch.log(torch.clip(self.mel(audio), min=1e-7)).to(self.device)  # on the CPU, as upstream
 
     def prepare_voice(self, voice: VoiceSpec, cache_dir: Path, ctx: RequestContext) -> VoiceCache | None:
         import torch

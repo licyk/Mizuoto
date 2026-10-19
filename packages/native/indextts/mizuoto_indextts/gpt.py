@@ -167,6 +167,13 @@ class GPT2Block(nn.Module):
         return x + self.mlp(self.ln_2(x))
 
 
+def wpe_zeros(embeds: torch.Tensor) -> torch.Tensor:
+    """Upstream's position embeddings (``null_position_embeddings``): zeros, which transformers' GPT-2 adds to the input
+    embeddings. They are made in torch's default dtype (float32), so a step's fp16 or bf16 embeddings come out float32
+    and the residual stream runs in float32 from there (the prompt already is); adding them also turns -0.0 into 0.0."""
+    return torch.zeros(embeds.shape, device=embeds.device)
+
+
 class GPT2Model(nn.Module):
     def __init__(self, dim: int, heads: int, layers: int, ops: Any) -> None:
         super().__init__()
@@ -174,8 +181,7 @@ class GPT2Model(nn.Module):
         self.ln_f = ops.LayerNorm(dim, eps=1e-5)
 
     def forward(self, embeds: torch.Tensor, caches: list[list[torch.Tensor]] | None = None) -> tuple[torch.Tensor, list[list[torch.Tensor]]]:
-        # wpe returns zeros: adding them is what upstream does (it turns -0.0 into 0.0)
-        x = embeds + torch.zeros(embeds.shape, dtype=embeds.dtype, device=embeds.device)
+        x = embeds + wpe_zeros(embeds)
         new = []
         for i, block in enumerate(self.h):
             x, kv = block(x, caches[i] if caches is not None else None)
@@ -303,7 +309,7 @@ class UnifiedVoice(nn.Module):
         logits = torch.zeros((emb.shape[0], self.mel_head.out_features), dtype=torch.float32, device=emb.device)
 
         def prologue() -> torch.Tensor:
-            return x + torch.zeros(x.shape, dtype=x.dtype, device=x.device)  # GPT2Model.forward's wpe zeros
+            return x + wpe_zeros(x)  # GPT2Model.forward's
 
         def attend(i: int, qkv: tuple[torch.Tensor, ...], caches: list[list[torch.Tensor]]) -> torch.Tensor:
             out, caches[i] = blocks[i].attn.attend(*qkv, caches[i])

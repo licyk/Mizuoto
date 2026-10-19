@@ -280,7 +280,7 @@ Peak MB is the request's peak allocation, every model loaded in the process incl
 | Case | 0.1 on the GPU | Native against 0.1 |
 | --- | --- | --- |
 | F5-TTS clone-en, fp16 | runs | **identical**, sample for sample |
-| IndexTTS v15-clone-en, fp16 GPT with a KV cache | runs | same length, 2.3 dB SNR: not identical. CUDA graphs off gives the native audio unchanged, so the difference is in the arithmetic, not the graphs; the cause is open |
+| IndexTTS v15-clone-en, fp16 GPT with a KV cache | runs | same length, 2.3 dB SNR: not identical (found 2026-10-19: the reference mel computed on the GPU, the null position embeddings in fp16, the weight norm folded on the CPU; fixed, now within one int16 step, see [IndexTTS](/docs/engines-indextts)). CUDA graphs off gives the native audio unchanged, so the difference is in the arithmetic, not the graphs; the cause is open |
 | Fish Speech clone-en, bf16 | **fails**: `Input type (float) and bias type (c10::BFloat16) should be the same` (the codec in bf16, the reference audio in fp32) | native runs ([Fish Speech](/docs/engines-fishspeech#deviations)) |
 
 **Training** on the GPU, `training.memory` `standard` → `low`:

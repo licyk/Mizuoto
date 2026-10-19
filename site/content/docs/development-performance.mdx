@@ -280,7 +280,7 @@ v4 收益最小：它的 flow 和声码器占主导，而且在拥挤的 GPU 上
 | 用例 | 0.1 在 GPU 上 | 原生与 0.1 比较 |
 | --- | --- | --- |
 | F5-TTS clone-en，fp16 | 正常运行 | **逐样本相同** |
-| IndexTTS v15-clone-en，fp16 GPT 带 KV 缓存 | 正常运行 | 长度相同，SNR 2.3 dB：不相同。关闭 CUDA Graph 后原生音频不变，所以差异出在运算上而不是 Graph；原因待查 |
+| IndexTTS v15-clone-en，fp16 GPT 带 KV 缓存 | 正常运行 | 长度相同，SNR 2.3 dB：不相同（2026-10-19 查明：参考 mel 在 GPU 上计算、空位置编码为 fp16、权重归一化在 CPU 上折叠；均已修正，现在相差不超过一个 int16 刻度，见 [IndexTTS](/docs/engines-indextts)）。关闭 CUDA Graph 后原生音频不变，所以差异出在运算上而不是 Graph；原因待查 |
 | Fish Speech clone-en，bf16 | **失败**：`Input type (float) and bias type (c10::BFloat16) should be the same`（编解码器是 bf16，参考音频是 fp32） | 原生正常运行（[Fish Speech](/docs/engines-fishspeech#有意的差异)） |
 
 **GPU 上的训练**，`training.memory` 从 `standard` 到 `low`：
