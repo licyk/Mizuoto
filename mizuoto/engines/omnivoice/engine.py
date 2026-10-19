@@ -235,8 +235,11 @@ class LoadedOmniVoice(LoadedEngine):
         config = json.loads((folder / "config.json").read_text(encoding="utf-8"))
         ctx.progress("loading:weights", None)
         model = OmniVoiceModel(config, ops.default)
+        # Cast before loading (the parameters are still unwritten): the same values as loading in float32 and casting
+        # after, without a float32 copy of the weights.
+        model.to(dtype=self.dtype)
         load_into(model, load_state_dict(folder / "model.safetensors"), what="OmniVoice model")
-        model.to(dtype=self.dtype).eval()
+        model.eval()
         self.model = model
 
         ctx.check_cancel()

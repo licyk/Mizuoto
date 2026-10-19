@@ -167,6 +167,9 @@ class LoadedQwen3Tts(LoadedEngine):
         if self.config.model_type == "base":
             self.speaker_encoder = SpeakerEncoder(self.config.speaker_encoder, ops.default)
             model.add_module("speaker_encoder", self.speaker_encoder)
+        # Cast before loading (the parameters are still unwritten): the checkpoint is copied straight into the dtype the
+        # model runs in, the same values as loading in float32 and casting after, without a float32 copy of 1.7B weights.
+        model.to(dtype=self.dtype)
         state = load_state_dict(folder / "model.safetensors")
         load_into(model, state, what="Qwen3-TTS model")
         del state
@@ -175,19 +178,20 @@ class LoadedQwen3Tts(LoadedEngine):
         if self.fused_projections:
             self.talker.model.fuse()
             self.talker.code_predictor.model.fuse()
-        model.to(dtype=self.dtype).eval()
+        model.eval()
         self.model = model
 
         ctx.check_cancel()
         ctx.progress("loading:speech tokenizer", None)
         codec_config = json.loads((folder / "speech_tokenizer" / "config.json").read_text(encoding="utf-8"))
         codec = SpeechTokenizer(codec_config, ops.default, with_encoder=self.config.model_type == "base")
+        codec.to(dtype=self.dtype)  # cast before loading, as the model
         codec_state = load_state_dict(folder / "speech_tokenizer" / "model.safetensors")
         if codec.encoder is None:
             codec_state = {k: v for k, v in codec_state.items() if not k.startswith("encoder.")}
         load_into(codec, codec_state, what="Qwen3-TTS speech tokenizer")
         del codec_state
-        codec.to(dtype=self.dtype).eval()
+        codec.eval()
         self.codec = codec
 
         self.tokenizer = load_bpe(folder, mistral_fix=_mistral_fix(folder))

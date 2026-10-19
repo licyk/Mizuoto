@@ -113,6 +113,7 @@ Copies are made outside inference mode, in the weights' own dtype, so a streamed
 
 - With host copies (`compute.host_copies`: `auto` keeps them while free RAM stays above `compute.ram_reserve_mb`; `on`; `off`), a parameter placed on the device keeps its host tensor, so offloading it costs no transfer: the device is a cache over RAM. A partly loaded component always keeps them (its streamed units rest there). Buffers are always copied back (a module may update one in place).
 - Unloading frees everything without copying anything back.
+- Loading never holds a float32 copy of a model that runs in half precision: an engine casts the model before it copies the checkpoint in (its parameters are still unwritten, so the cast costs nothing), the same values as loading in float32 and casting after. Qwen3-TTS 1.7B's load fell from 7.4 to 4.2 GB of RAM (11.1 to 5.5 GB resident, host copies off, 2026-10-19); F5-TTS, VoxCPM, Fish Speech and OmniVoice load this way too. Safetensors checkpoints are memory-mapped, so their pages count as resident while read but are page cache the system can drop.
 - A weight that changes after placement goes through the handle (`handle.replace(module)`: a voice's own GPT-SoVITS weights), so a host copy is never stale.
 - `compute.ram_reserve_mb` (empty: the larger of 2 GB and a tenth of the RAM): below it the runtime service drops the host copies of wholly loaded components first, then unloads idle models, least recently used first, never pinned or busy ones (`RuntimeService.relieve_ram`).
 

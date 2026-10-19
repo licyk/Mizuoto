@@ -113,6 +113,7 @@ audio = ctx.run("codec decoder", [self.h_decoder], decode, self._decoder_memory(
 
 - 有主机副本时（`compute.host_copies`：`auto` 在空闲内存高于 `compute.ram_reserve_mb` 时保留；`on`；`off`），放到设备上的参数保留其主机张量，把它移出设备不需要任何传输：设备显存成了内存之上的一层缓存。部分加载的组件总是保留主机副本（流式单元就放在那里）。缓冲区总是复制回来（模块可能原地更新它）。
 - 卸载时直接释放所有内容，不复制回来。
+- 以半精度运行的模型在加载时从不持有 float32 副本：引擎先转换模型的 dtype，再把检查点复制进去（此时参数尚未写入，转换不花任何代价），结果与先以 float32 加载再转换完全相同。Qwen3-TTS 1.7B 加载时的内存由 7.4 GB 降到 4.2 GB（常驻由 11.1 GB 降到 5.5 GB，关闭主机副本，2026-10-19）；F5-TTS、VoxCPM、Fish Speech 和 OmniVoice 也这样加载。safetensors 检查点通过内存映射读取，读取时它们的页面计入常驻内存，但属于系统可以回收的页缓存。
 - 放置之后会改变的权重通过句柄修改（`handle.replace(module)`：音色自己的 GPT-SoVITS 权重），所以主机副本不会过时。
 - `compute.ram_reserve_mb`（留空：2 GB 与内存十分之一中较大者）：空闲内存低于它时，运行时服务先丢弃整体加载的组件的主机副本，再按最久未用卸载空闲模型，从不卸载固定的或忙碌的模型（`RuntimeService.relieve_ram`）。
 
