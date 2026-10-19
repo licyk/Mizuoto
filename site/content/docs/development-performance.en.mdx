@@ -166,6 +166,15 @@ The decoding loop at the 1.7B model's sizes, random weights, 4 or 8 of its 28 ta
 
 3–4 % faster, level with qwen-tts-webui within the noise of the shared GPU (±1 ms between rounds).
 
+**The real 1.7B Base model** (2026-10-19, a quiet RTX 3090, torch 2.8.0+cu128, voice cloning in Chinese and English through the whole stack, four runs each, two interleaved rounds; best ms per frame, median real-time factor, peak memory):
+
+| | Exact (default) | `fused_projections` | qwen-tts-webui, its fused fast path |
+| --- | --- | --- | --- |
+| clone-zh | 17.00–17.06 ms, RTF 0.213, 4.03 GB | 16.21–16.24 ms, 0.203, 4.03 GB | 16.23–16.31 ms, 0.203, 4.58 GB |
+| clone-en | 17.12–17.17 ms, RTF 0.214, 4.03 GB | 16.23–16.25 ms, 0.203, 4.03 GB | 16.29–16.32 ms, 0.204, 4.64 GB |
+
+The exact path is 5 % behind qwen-tts-webui, the fused one level with it, both in 12 % less memory; the exact path's audio repeats sample for sample between rounds.
+
 ### Fish Speech
 
 The decoding loop with the real fast transformer, 2 or 4 of its 36 slow layers, random weights, 60 frames (S2 Pro, 11 GB, did not fit); ms per frame, torch 2.8:
