@@ -134,7 +134,7 @@ jobs:
           python scripts/dev.py typecheck-py --python-version "${{ matrix.python }}" --python-platform "$platform" mizuoto tests scripts
       - name: Tests
         if: ${{ !cancelled() && steps.environment.outcome == 'success' }}
-        run: python -m pytest -q -rs tests  # -rs: skip reasons in the log (a skipped bf16 probe names the CPU)
+        run: python -m pytest -rs tests  # -rs: skip reasons in the log (a skipped bf16 probe names the CPU)
 
   gated:
     # A licence-gated engine's package on Mizuoto at this commit: lint, its tests' types, and its tests.
@@ -176,7 +176,7 @@ jobs:
           python scripts/dev.py typecheck-py --python-version "${{ matrix.python }}" --python-platform "$platform" "packages/native/${{ matrix.engine }}"
       - name: Tests
         if: ${{ !cancelled() && steps.environment.outcome == 'success' }}
-        run: python -m pytest -q "packages/native/${{ matrix.engine }}/tests"
+        run: python -m pytest "packages/native/${{ matrix.engine }}/tests"
 
   oldest-mizuoto:
     # A gated engine's package on the oldest Mizuoto its pyproject.toml allows, from PyPI: it must not use what that
@@ -211,7 +211,7 @@ jobs:
           ln -s "$GITHUB_WORKSPACE/tests" "$RUNNER_TEMP/paths/tests"
           cd "$RUNNER_TEMP"
           python -c "import mizuoto; print('mizuoto', mizuoto.VERSION, 'from', mizuoto.__file__)"
-          PYTHONPATH="$RUNNER_TEMP/paths" python -m pytest -q -o pythonpath= -c "$GITHUB_WORKSPACE/pyproject.toml" --rootdir "$GITHUB_WORKSPACE" \
+          PYTHONPATH="$RUNNER_TEMP/paths" python -m pytest -o pythonpath= -c "$GITHUB_WORKSPACE/pyproject.toml" --rootdir "$GITHUB_WORKSPACE" \
             -k "not version_and_mizuoto_range" "$GITHUB_WORKSPACE/packages/native/${{ matrix.engine }}/tests"
 
   torch:
@@ -239,7 +239,7 @@ jobs:
           uv pip install ${{ needs.scope.outputs.editables }} pytest httpx tomli
           python -c "import torch; print('torch', torch.__version__)"
       - name: Tests
-        run: python -m pytest -q ${{ needs.scope.outputs.test_paths }}
+        run: python -m pytest ${{ needs.scope.outputs.test_paths }}
 
   web:
     name: Web UI
