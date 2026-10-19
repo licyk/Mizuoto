@@ -58,7 +58,7 @@ Method `lora` (stages `tokens`, `train`, `export`): upstream's `extract_vq`, `bu
 - **Kept**: upstream's training forward does not scale the codebook embeddings by 1/√11 as inference does; the warm-up makes the first step's learning rate 0 and `B` starts at zero, so the first two steps give the same loss.
 - **Padding.** The collator pads with `<|end_of_text|>`, which S2's vocabulary lacks: upstream pads with 0, and so does Mizuoto.
 - **The export** is upstream's flat `dual_ar` form (`config.json` + `model.pth`), which both 0.1 and Mizuoto load. The final validation pass is skipped (it changes nothing that is kept).
-- `training.memory`: upstream's per-layer checkpointing stays as it is; under `bf16-true` the LoRA layers' frozen copies are made in bfloat16 directly (the same values, about 9 GB less RAM), and the export's key order is read from a model built on the meta device.
+- `training.memory`: upstream's per-layer checkpointing stays as it is; under `bf16-true` the LoRA layers keep the checkpoint's own bfloat16 tensors as their frozen weights (memory-mapped from the safetensors files, no copy: the same values), and the export's key order is read from a model built on the meta device. Measured on S2 Pro (2026-10-19, an RTX 3090): the training stage's process holds 0.4 GB of its own memory while loading (8.9 GB with bfloat16 copies, 17 GB with float32 ones) and peaks at 5 GB resident; the export holds the merged weights, 9 GB, beside the mapped checkpoint (page cache).
 
 ## Parity
 

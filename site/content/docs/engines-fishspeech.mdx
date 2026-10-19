@@ -58,7 +58,7 @@ Fish Audio S2 Pro（[fishaudio/fish-speech](https://github.com/fishaudio/fish-sp
 - **保留**：上游的训练前向不像推理那样把码本嵌入乘以 1/√11；预热让第一步的学习率为 0，`B` 从零开始，所以前两步的损失相同。
 - **填充。** 整理器用 `<|end_of_text|>` 填充，而 S2 的词表里没有它：上游实际以 0 填充，Mizuoto 也是。
 - **导出**是上游扁平的 `dual_ar` 形式（`config.json` + `model.pth`），0.1 和 Mizuoto 都能加载。最后一轮验证被跳过（它不改变任何保留下来的东西）。
-- `training.memory`：上游的逐层检查点保持原样；在 `bf16-true` 下，LoRA 层冻结的副本直接以 bfloat16 生成（数值相同，内存少约 9 GB），导出的键顺序从一个在 meta 设备上构建的模型中读取。
+- `training.memory`：上游的逐层检查点保持原样；在 `bf16-true` 下，LoRA 层直接把检查点自己的 bfloat16 张量当作冻结的权重（从 safetensors 文件内存映射，不复制：数值相同），导出的键顺序从一个在 meta 设备上构建的模型中读取。在 S2 Pro 上实测（2026-10-19，RTX 3090）：训练阶段的进程加载时只占 0.4 GB 自有内存（用 bfloat16 副本时为 8.9 GB，用 float32 副本时为 17 GB），常驻峰值 5 GB；导出阶段持有合并后的权重 9 GB，另有映射的检查点（页缓存）。
 
 ## 对照结果
 

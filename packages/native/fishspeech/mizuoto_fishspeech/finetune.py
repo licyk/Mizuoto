@@ -140,13 +140,23 @@ def init_draws(c: ModelArgs, draws: Draws) -> None:
 # -- LoRA ---------------------------------------------------------------------------------------
 
 
+def _frozen(layer: nn.Module, weight: torch.Tensor) -> None:
+    """The LoRA layer's frozen weight: the base's own tensor when it already has the layer's dtype (bf16-true: the
+    checkpoint's bf16 tensors, memory-mapped, so no 8.6 GB copy is made of them), else a copy, as loralib makes one."""
+    own = layer.get_parameter("weight")
+    if weight.dtype == own.dtype and weight.shape == own.shape:
+        layer.weight = nn.Parameter(weight.detach(), requires_grad=False)
+    else:
+        own.copy_(weight)
+
+
 class LoraLinear(ops.Linear):
     """loralib's ``Linear`` (``merge_weights``, no ``fan_in_fan_out``): parameters ``weight``, ``bias``, ``lora_A``, ``lora_B``."""
 
     def __init__(self, base: nn.Linear, config: LoraConfig, a: torch.Tensor, b: torch.Tensor, dtype: torch.dtype | None = None) -> None:
         super().__init__(base.in_features, base.out_features, bias=base.bias is not None, dtype=dtype)
         with torch.no_grad():
-            self.weight.copy_(base.weight)
+            _frozen(self, base.weight)
             if self.bias is not None and base.bias is not None:
                 self.bias.copy_(base.bias)
         self.lora_A = nn.Parameter(a)
@@ -167,7 +177,7 @@ class LoraEmbedding(ops.Embedding):
     def __init__(self, base: nn.Embedding, config: LoraConfig, a: torch.Tensor, b: torch.Tensor, dtype: torch.dtype | None = None) -> None:
         super().__init__(base.num_embeddings, base.embedding_dim, padding_idx=base.padding_idx, dtype=dtype)
         with torch.no_grad():
-            self.weight.copy_(base.weight)
+            _frozen(self, base.weight)
         self.lora_A = nn.Parameter(a)
         self.lora_B = nn.Parameter(b)
         self.scaling = config.alpha / config.r
