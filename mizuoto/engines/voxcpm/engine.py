@@ -203,7 +203,8 @@ class LoadedVoxCpm(LoadedEngine):
         if not vae_path.is_file():
             raise EngineError(f"{folder} has no audiovae.safetensors or audiovae.pth", code=codes.MODEL_MISSING)
         vae = AudioVAE(self.config.vae)
-        load_into(vae, fold_weight_norm(unwrap(load_state_dict(vae_path), "state_dict")), what="AudioVAE")
+        # Folded where it runs: upstream recomputes the weight norm at every forward on the model's device.
+        load_into(vae, fold_weight_norm(unwrap(load_state_dict(vae_path), "state_dict"), device=spec.device), what="AudioVAE")
         self.vae: AudioVAE = vae.eval()
 
         self.tokenizer: VoxCpmTokenizer = VoxCpmTokenizer(folder)

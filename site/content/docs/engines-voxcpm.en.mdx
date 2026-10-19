@@ -46,7 +46,7 @@ Shared: `runtime/ops.py`, `runtime/loading.py` (weight norm folded), `runtime/gr
 - **The tokenizer** is what transformers 5.3's `LlamaTokenizer` builds from the vocabulary, ignoring the file's own pipeline: no normaliser, `Metaspace` with `prepend_scheme="always"` and no split, no unknown token in the BPE, and the config's special tokens added in id order (a token missing from the vocabulary gets the next free id, so VoxCPM2's `<|im_end|>` is 73442, not the file's 73440). The raw `tokenizer.json` gives other ids for text with leading blanks or after a special token. Upstream's wrapper then splits multi-character Han tokens into characters; a character outside the vocabulary is `<unk>`.
 - **The normaliser** is wetext 0.1.2's: the text stripped before tagging and after each FST, and with `remove_erhua` also text with 儿 and no digit handled. Its FSTs differ from those of wetext 0.0.4 (CosyVoice's asset) and of WeTextProcessing (IndexTTS), so they ship with the engine. Numbers are spelled by `inflect`; Mizuoto's 7.3.1 and upstream's 7.5.0 give the same words on the corpus.
 - **Decoding.** VoxCPM2 drops the decoded context patches (the prompt's last `min(3, n)`) from the front; the first generation drops `2 × patch × hop` samples whenever there is any prompt audio, as upstream does whatever the prompt's length. Streaming yields one chunk per patch: VoxCPM2 through the stateful causal decoder, the first generation by decoding the last three patches and keeping the newest.
-- **Snake** computes upstream's operations in upstream's order, as a plain function (upstream scripts it: see Deviations); weight norm is folded with `torch._weight_norm`, the call upstream's hook makes at each forward.
+- **Snake** computes upstream's operations in upstream's order, as a plain function (upstream scripts it: see Deviations); weight norm is folded with `torch._weight_norm`, the call upstream's hook makes at each forward, on the device the VAE runs on (a GPU's reduction gives other bits than the CPU's).
 
 ## Deviations
 
@@ -82,6 +82,7 @@ Methods `full` and `lora` (`train.py`, the maths in `sft.py`), upstream's `train
 - **Through the stack**, 27 cases (every voice mode, normalisation, a forced retry, streaming, several segments, other steps and guidance, fp32 through `engines.voxcpm.dtype`): all identical in audio and behaviour (applied parameters, warnings, voice mode, segments, streamed chunk lengths).
 - **Training**: VoxCPM-0.5B full, VoxCPM-0.5B LoRA and VoxCPM2 LoRA are identical to upstream's script at every step (both losses, the gradient norm, the learning rate), and so are the saved weights. Each export speaks identically when upstream loads it and when Mizuoto does.
 - The contract suite passes (18 tests across the three models).
+- **On a GPU** (an RTX 3090, 2026-10-19, against upstream's package, each case in a fresh process): the language models, the local encoder, the DiT and the latents are identical; with Snake scripted as upstream's (an experiment), the zero-shot v1.5 fp32, v2 zero-shot and v2 clone cases are identical sample for sample. As shipped (Snake eager) they are 72–76 dB from upstream, as upstream is from itself across process histories (74.5 dB for v1.5 fp32 zero-shot; a v2 clone even changed length).
 
 ## Limitations
 

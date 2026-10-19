@@ -46,7 +46,7 @@ OpenBMB 的无离散分词语音合成（[OpenBMB/VoxCPM](https://github.com/Ope
 - **分词器**是 transformers 5.3 的 `LlamaTokenizer` 从词表构建出来的那个，忽略文件自带的流水线：没有 normalizer，`Metaspace` 使用 `prepend_scheme="always"` 且不拆分，BPE 中没有未知 token，配置中的特殊 token 按 id 顺序添加（词表中没有的 token 取下一个空闲 id，所以 VoxCPM2 的 `<|im_end|>` 是 73442，而不是文件中的 73440）。直接使用 `tokenizer.json` 时，以空白开头或位于特殊 token 之后的文本会得到不同的 id。随后上游的包装把多字汉字 token 拆成单字；词表之外的字为 `<unk>`。
 - **文本规范化**采用 wetext 0.1.2 的做法：在标注前和每个 FST 之后去掉首尾空白，开启 `remove_erhua` 时也处理含“儿”但不含数字的文本。它的 FST 与 wetext 0.0.4（CosyVoice 的共享资源）和 WeTextProcessing（IndexTTS）的都不同，所以随引擎提供。数字由 `inflect` 读出；Mizuoto 的 7.3.1 与上游的 7.5.0 在语料上给出相同的词。
 - **解码。** VoxCPM2 从开头去掉解码出的上下文块（提示的最后 `min(3, n)` 块）；第一代只要有提示音频就去掉 `2 × patch × hop` 个采样，与上游一样不管提示多长。流式时每块输出一段：VoxCPM2 经有状态的因果解码器，第一代则解码最后三块并保留最新的一块。
-- **Snake** 按上游的顺序计算上游的运算，是一个普通函数（上游用 TorchScript 编译它：见有意的差异）；权重归一化用 `torch._weight_norm` 折叠，即上游钩子在每次前向时做的调用。
+- **Snake** 按上游的顺序计算上游的运算，是一个普通函数（上游用 TorchScript 编译它：见有意的差异）；权重归一化用 `torch._weight_norm` 折叠，即上游钩子在每次前向时做的调用，并在 VAE 运行的设备上进行（GPU 的归约与 CPU 给出的比特不同）。
 
 ## 有意的差异
 
@@ -82,6 +82,7 @@ OpenBMB 的无离散分词语音合成（[OpenBMB/VoxCPM](https://github.com/Ope
 - **完整链路**，27 个用例（每种音色方式、文本规范化、强制重试、流式、多段、其他步数和引导值、通过 `engines.voxcpm.dtype` 设为 fp32）：音频和行为（实际参数、警告、音色方式、分段、流式分块长度）全部完全相同。
 - **训练**：VoxCPM-0.5B 全量、VoxCPM-0.5B LoRA 和 VoxCPM2 LoRA 在每一步都与上游脚本相同（两项损失、梯度范数、学习率），保存的权重也相同。每个导出结果无论由上游还是 Mizuoto 加载，朗读结果都相同。
 - 契约套件全部通过（三个模型共 18 项测试）。
+- **在 GPU 上**（RTX 3090，2026-10-19，与上游的包对照，每个用例在新进程中运行）：语言模型、局部编码器、DiT 和潜变量都相同；把 Snake 像上游那样脚本化（仅作实验）后，v1.5 fp32 零样本、v2 零样本和 v2 克隆用例都逐采样相同。按发布的做法（Snake 即时执行）与上游相差 72–76 dB，与上游在不同进程历史下与自己的差别相当（v1.5 fp32 零样本为 74.5 dB；一个 v2 克隆甚至长度都变了）。
 
 ## 限制
 

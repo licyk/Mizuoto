@@ -5,7 +5,8 @@ A DAC-like causal codec: Snake activations, weight-normed causal convolutions (l
 convolutions on the decoder's input, residual units with dilations 1, 3, 9. The encoder's ``mu`` is the latent.
 
 - Weight norm (``torch.nn.utils.weight_norm``, recomputed by upstream at each forward) is folded once at load with
-  the same ``torch._weight_norm`` call (``runtime.loading.fold_weight_norm``).
+  the same ``torch._weight_norm`` call (``runtime.loading.fold_weight_norm``), on the device the VAE runs on, so a
+  GPU's reduction gives the bits upstream's does there.
 - Snake is the TorchScript function upstream scripts.
 - A causal convolution pads ``2 × padding`` on the left. v2 subtracts ``output_padding`` (``stride % 2`` in the
   encoder's down-sampling convolutions); v1's convolution has no such argument.

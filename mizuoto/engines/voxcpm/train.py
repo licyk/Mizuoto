@@ -183,7 +183,7 @@ class VoxCpmTrainer(Trainer):
         for layer in layers:
             layer.generator = device_gen
         vae_path = model_dir / "audiovae.safetensors" if (model_dir / "audiovae.safetensors").is_file() else model_dir / "audiovae.pth"
-        load_into(vae, fold_weight_norm(unwrap(load_state_dict(vae_path), "state_dict")), what="AudioVAE")
+        load_into(vae, fold_weight_norm(unwrap(load_state_dict(vae_path), "state_dict"), device=device), what="AudioVAE")  # as upstream computes it, on the device
         weights = model_dir / "model.safetensors" if (model_dir / "model.safetensors").is_file() else model_dir / "pytorch_model.bin"
         load_into(model, unwrap(load_state_dict(weights), "state_dict"), ignore=["*.lora_A", "*.lora_B"] if lora else (), what="VoxCPM model")
         vae.requires_grad_(False)
