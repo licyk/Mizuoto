@@ -69,6 +69,20 @@ def detect(model_dir: Path) -> str | None:
     return None
 
 
+def guess_language(text: str) -> str:
+    """IndexTTS-2.5's language for a request without one (or with one it lacks), from the text's script: kana → ja,
+    Han → zh, letters only Spanish has → es, otherwise en. Upstream sends "zhen" there, which is no language token of
+    the model (the tokenizer spells ``<|zhen|>`` out and ``lang_to_token`` falls back to ``common``); judged by T4 on
+    the 2.5 clone set it made English 10× and Chinese 2–3× less intelligible than the language itself."""
+    if any(0x3040 <= ord(ch) <= 0x30FF for ch in text):
+        return "ja"
+    if any(0x4E00 <= ord(ch) <= 0x9FFF or 0x3400 <= ord(ch) <= 0x4DBF for ch in text):
+        return "zh"
+    if any(ch in "ñÑ¿¡" for ch in text):
+        return "es"
+    return "en"
+
+
 def norm_on(sd: dict[str, Any], device: Any) -> dict[str, Any]:
     """``sd`` with its weight-norm pairs (``weight_g``/``weight_v``, ``parametrizations.weight.original0/1``) on ``device``,
     so ``fold_weight_norm`` computes each norm there: upstream removes BigVGAN's weight norm after moving it to the
@@ -620,7 +634,7 @@ class LoadedIndexTts2(LoadedEngine):
         lang: str | None = None
         duration_factor = 1.0
         if self.variant == "v2_5":
-            lang = task.language if task.language in ("zh", "en", "ja", "es") else "zhen"
+            lang = task.language if task.language in ("zh", "en", "ja", "es") else guess_language(task.text)
             ctx.applied["lang"] = lang
             if p.get("speed") is not None:
                 duration_factor = 1.0 / float(p["speed"])

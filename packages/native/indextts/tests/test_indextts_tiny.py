@@ -517,3 +517,14 @@ def test_the_beam_caches_hold_what_reordering_and_concatenating_would():
             assert torch.equal(out, want_out)
             assert all(a.is_contiguous() and torch.equal(a, b) for a, b in zip(caches[i], plain[i]))
     assert caches.buffer.shape[4] == length + steps
+
+
+def test_a_request_without_a_language_speaks_the_texts_own():
+    from mizuoto_indextts.engine import guess_language
+
+    assert guess_language("今天天气很好。") == "zh"
+    assert guess_language("今天 we go to the park.") == "zh"  # Chinese with English words: the Chinese front end
+    assert guess_language("こんにちは、世界。") == "ja"
+    assert guess_language("¿Qué tal, señor?") == "es"
+    assert guess_language("The rain had stopped.") == "en"
+    assert guess_language("1234") == "en"
