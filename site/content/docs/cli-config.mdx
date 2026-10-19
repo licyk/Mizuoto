@@ -248,6 +248,7 @@ fp16 = true
 | `training.attention` | `auto` | 训练如何计算注意力：`auto`（完全按各配方）、`fast` 或带反向传播的后端（`sdpa`、`math`、`sdpa_flash`、`sdpa_efficient`、`sdpa_cudnn`、`flash`、`xformers`） | **训练** › **注意力** |
 | `training.keep_checkpoints` | `3` | 每次运行保留的检查点数 | **训练** › **每次运行保留的检查点数** |
 | `training.previews` | `true` | 导出阶段用训练结果合成一段数据集中的句子 | **训练** › **训练后合成试听** |
+| `training.deterministic` | `false` | 每个阶段都使用确定性的 GPU 内核，使微调在 GPU 上精确复现（更慢；CPU 上总是能复现） | **训练** › **在 GPU 上精确复现微调** |
 
 ### `outputs`：结果
 

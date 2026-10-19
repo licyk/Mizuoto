@@ -241,6 +241,7 @@ const previewShown = ref(true);
               <TextField type="number" :min="1" :model-value="s.training.keep_checkpoints" :label="t('settings.keepCheckpoints')" @change="patch({ training: { keep_checkpoints: Number($event) } })" />
             </div>
             <Switch :model-value="s.training.previews" :label="t('settings.trainPreviews')" :supporting-text="t('settings.trainPreviewsHint')" @update:model-value="patch({ training: { previews: $event } })" />
+            <Switch :model-value="s.training.deterministic" :label="t('settings.trainDeterministic')" :supporting-text="t('settings.trainDeterministicHint')" @update:model-value="patch({ training: { deterministic: $event } })" />
           </template>
           <template v-else-if="section === 'downloads'">
             <SelectField :model-value="s.downloads.source" :label="t('settings.source')" :options="sourceOptions" @update:model-value="patch({ downloads: { source: $event } })" />

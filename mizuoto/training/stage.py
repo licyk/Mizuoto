@@ -63,8 +63,18 @@ def stage_main(request: dict[str, Any], emitter: Emitter) -> None:
         done = features.apply(list(request["fast"]))
         if "fp16_accumulation" in done:
             ctx.log("compute.fast fp16_accumulation: training may be numerically unstable (NaN losses)", "warning")
-    if ctx.attention != "auto":
-        ctx.use_attention(ctx.attention)
+    attention = ctx.attention
+    if request.get("deterministic"):  # after compute.fast: it wins over cudnn_benchmark
+        from mizuoto.runtime.accel import features
+
+        features.deterministic()
+        if attention == "auto" and ctx.device.startswith("cuda"):
+            # SDPA's fused backward passes on a GPU accumulate in a varying order (deterministic mode only warns): the
+            # math kernel's does not (Fish Speech's LoRA repeated only with it)
+            attention = "math"
+            ctx.log("training.deterministic: attention with the math kernel")
+    if attention != "auto":
+        ctx.use_attention(attention)
     if ctx.device.startswith("cuda:"):
         import torch
 

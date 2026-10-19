@@ -15,6 +15,17 @@ log = logging.getLogger("mizuoto.runtime.accel")
 FEATURES = ("tf32", "fp16_accumulation", "cudnn_benchmark", "sdpa_reduced_precision")
 
 
+def deterministic() -> None:
+    """Deterministic kernels for this process (``training.deterministic``): torch picks the deterministic version of
+    every operation that has one and warns where none exists; cuDNN stops benchmarking (it would choose by timing).
+    cuBLAS also needs ``CUBLAS_WORKSPACE_CONFIG`` set before CUDA starts, which the host puts in the stage's environment."""
+    import torch
+
+    torch.use_deterministic_algorithms(True, warn_only=True)
+    torch.backends.cudnn.benchmark = False
+    log.info("training.deterministic: deterministic kernels")
+
+
 def apply(features: list[str]) -> list[str]:
     """Turn ``features`` on for this process; returns those this torch has."""
     import torch

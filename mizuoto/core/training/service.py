@@ -431,6 +431,9 @@ class TrainingService:
         # the lowest preset's gigabytes of optimizer state in RAM stall on huge pages (cpu.py); other stages gain from them
         huge_pages = self._settings.settings.training.memory != "lowest"
         env = {**cpu.child_env(compute.cpu_allocator, compute.cpu_threads, huge_pages=huge_pages), **allocator_env(compute.cuda_allocator)}
+        deterministic = self._settings.settings.training.deterministic
+        if deterministic:  # cuBLAS's deterministic workspaces, read when CUDA starts in the stage
+            env["CUBLAS_WORKSPACE_CONFIG"] = ":4096:8"
         target = host_target(STAGE_MODULE, cwd=workdir, env=env)
         current = self.fingerprints(exp)
         hyperparams = self._effective(exp, method)
@@ -473,6 +476,7 @@ class TrainingService:
                 "attention": self._settings.settings.training.attention,
                 "attention_strict": self._settings.settings.compute.attention_strict,
                 "fast": list(self._settings.settings.compute.fast),
+                "deterministic": deterministic,
                 "hyperparams": hyperparams,
                 "language": exp.language,
                 "results": {s.id: s.result for s in exp.stages if s.status == "done"},

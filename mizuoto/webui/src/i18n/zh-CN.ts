@@ -512,6 +512,8 @@ export default {
     keepCheckpoints: '每次运行保留的检查点数',
     trainPreviews: '训练后合成试听',
     trainPreviewsHint: '导出阶段用训练结果合成一段数据集中的句子',
+    trainDeterministic: '在 GPU 上精确复现微调',
+    trainDeterministicHint: '使用确定性的 GPU 内核：同样的运行每次得到相同的权重；更慢',
     language: '语言',
     languageAuto: '自动（{language}）',
     openBrowser: '服务器启动时打开浏览器',

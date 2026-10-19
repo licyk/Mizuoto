@@ -202,13 +202,16 @@ class TrainingSettings(Record):
     precision: Literal["auto", "fp32", "fp16", "bf16"] = "auto"
     memory: Literal["standard", "low", "lowest"] = "standard"
     """How a fine-tune spends GPU memory: ``standard`` follows each engine's recipe exactly; ``low`` adds gradient
-    checkpointing (the same results, about a third slower); ``lowest`` also what changes results slightly. A method's
-    own hyperparameters (``gradient_checkpointing``) win."""
+    checkpointing (the same results, a few percent to about twice as long a step); ``lowest`` also what changes results
+    slightly. A method's own hyperparameters (``gradient_checkpointing``) win."""
     attention: TrainingAttention = "auto"
     """How trainers compute attention: ``auto`` follows each recipe exactly; ``fast`` or a backend's name uses faster
     kernels with a backward pass (results change slightly)."""
     keep_checkpoints: int = Field(default=3, ge=1)
     previews: bool = True
+    deterministic: bool = False
+    """Repeat a fine-tune on a GPU exactly: torch's deterministic kernels in every stage (GPU kernels that sum with
+    atomics, as many backward passes do, otherwise give other last bits each run). Slower; the CPU always repeats."""
 
 
 class OutputSettings(Record):

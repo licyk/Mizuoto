@@ -110,9 +110,9 @@ Enforced by `tests/test_architecture.py`; the reasons are on `development-archit
 - Errors are `core/errors.py` only, codes are `mizuoto.core.codes`; CLI hints ride in `detail["hint"]`.
 - **Native code changes no process-wide state**: randomness only from `ctx.generator_for(device)` / `ctx.rng`; no
   `os.environ`, cwd, `sys.path`, `torch.backends` or `sdpa_kernel` changes, no `logging.basicConfig`; no draws while
-  loading (`ops` layers skip initialisation). Only `runtime/accel/features.py` sets `compute.fast`'s flags, called by
-  the host and the training stage. The contract suite checks requests leave the process state alone
-  (`mizuoto.snapshot`).
+  loading (`ops` layers skip initialisation). Only `runtime/accel/features.py` sets `compute.fast`'s flags and
+  `training.deterministic`'s, called by the host and the training stage. The contract suite checks requests leave the
+  process state alone (`mizuoto.snapshot`).
 - Every attention computation in native code goes through `mizuoto.runtime.accel.attention(…, site=…)`; SDPA and its
   aten kernels are forbidden elsewhere. An autoregressive model's site sets `approx_ok=False`: quantised kernels
   (SageAttention) made them generate without end on a GPU.

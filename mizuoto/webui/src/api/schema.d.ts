@@ -5048,6 +5048,11 @@ export interface components {
              * @default true
              */
             previews: boolean;
+            /**
+             * Deterministic
+             * @default false
+             */
+            deterministic: boolean;
         };
         /** TrainingStage */
         TrainingStage: {

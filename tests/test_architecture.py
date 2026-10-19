@@ -72,7 +72,10 @@ FORBIDDEN_CALLS = {
     "torch.nn.attention.sdpa_kernel": "switches SDPA's kernels for every thread",
 }
 PROCESS_FLAGS = "mizuoto/runtime/accel/features.py"
-"""The one place native code may set torch's process-wide speed switches (``compute.fast``), called by the host."""
+"""The one place native code may set torch's process-wide switches (``compute.fast``, ``training.deterministic``), called by
+the host and the training stage."""
+PROCESS_FLAG_CALLS = {"torch.use_deterministic_algorithms"}
+"""The forbidden calls ``PROCESS_FLAGS`` may make."""
 
 
 def _stdlib() -> set[str]:
@@ -215,7 +218,11 @@ def _global_state_changes(paths: list[Path]) -> list[str]:
         for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
             if not isinstance(node, ast.stmt | ast.expr):
                 continue
-            if isinstance(node, ast.Call) and (name := _dotted(node.func)) in FORBIDDEN_CALLS:
+            if (
+                isinstance(node, ast.Call)
+                and (name := _dotted(node.func)) in FORBIDDEN_CALLS
+                and not (name in PROCESS_FLAG_CALLS and path.relative_to(ROOT).as_posix() == PROCESS_FLAGS)
+            ):
                 bad.append(f"{path.relative_to(ROOT)}:{node.lineno}: {name} {FORBIDDEN_CALLS[name]}")
             if (
                 isinstance(node, ast.Call)

@@ -512,6 +512,8 @@ export default {
     keepCheckpoints: 'Checkpoints kept per run',
     trainPreviews: 'Speak a preview after training',
     trainPreviewsHint: 'The export stage tries what was trained on a dataset clip',
+    trainDeterministic: 'Repeat fine-tunes exactly on a GPU',
+    trainDeterministicHint: 'Deterministic GPU kernels: the same run gives the same weights every time; slower',
     language: 'Language',
     languageAuto: 'Auto ({language})',
     openBrowser: 'Open the browser when the server starts',

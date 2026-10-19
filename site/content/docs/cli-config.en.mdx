@@ -248,6 +248,7 @@ fp16 = true
 | `training.attention` | `auto` | How trainers compute attention: `auto` (each recipe exactly), `fast` or a backend with a backward pass (`sdpa`, `math`, `sdpa_flash`, `sdpa_efficient`, `sdpa_cudnn`, `flash`, `xformers`) | **Training** › **Attention** |
 | `training.keep_checkpoints` | `3` | Checkpoints kept per run | **Training** › **Checkpoints kept per run** |
 | `training.previews` | `true` | The export stage speaks a dataset clip's text with what was trained | **Training** › **Speak a preview after training** |
+| `training.deterministic` | `false` | Deterministic GPU kernels in every stage, so a fine-tune repeats exactly on a GPU (slower; the CPU always repeats) | **Training** › **Repeat fine-tunes exactly on a GPU** |
 
 ### `outputs`
 
