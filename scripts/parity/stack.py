@@ -173,6 +173,7 @@ def run_case(s: Any, case: dict[str, Any], table: dict[str, Any]) -> tuple[Any, 
         s.settings.update(settings)
     started = time.perf_counter()
     chunks: list[int] = []
+    first: list[float] = []
     try:
         if kind == "speak":
             req = SpeakRequest.model_validate(body)
@@ -180,7 +181,7 @@ def run_case(s: Any, case: dict[str, Any], table: dict[str, Any]) -> tuple[Any, 
             sink = None
             if case.get("stream"):  # the audio as it is made; the stored output is still the whole
                 sink = StreamSink()
-                sink.chunk = lambda samples, rate, segment: chunks.append(len(samples))
+                sink.chunk = lambda samples, rate, segment: (chunks.append(len(samples)), first.append(time.perf_counter()) if not first else None)
             job = s.tts.speak(req, wait=True, stream=sink)
         elif kind == "convert":
             req = ConvertRequest.model_validate(body)
@@ -199,6 +200,7 @@ def run_case(s: Any, case: dict[str, Any], table: dict[str, Any]) -> tuple[Any, 
         record["plan"] = plan.model_dump(mode="json")
     if case.get("stream"):
         record["stream_chunks"] = chunks
+        record["first_chunk_seconds"] = first[0] - started if first else None
     if job.state != "completed":
         return None, record
     out = s.outputs.get(job.result["output_id"])
@@ -270,11 +272,15 @@ def cmd_run(args: argparse.Namespace) -> int:
                 if path is not None and args.repeat > 1:
                     first = path.read_bytes()
                     walls, identical = [record["wall_seconds"]], True
+                    firsts = [record.get("first_chunk_seconds")]
                     for _ in range(args.repeat - 1):
                         again, again_record = run_case(s, case, table)
                         walls.append(again_record["wall_seconds"])
+                        firsts.append(again_record.get("first_chunk_seconds"))
                         identical = identical and again is not None and again.read_bytes() == first
                     record["wall_seconds_runs"] = walls
+                    if case.get("stream"):
+                        record["first_chunk_seconds_runs"] = firsts
                     record["repeat_identical"] = identical
             except Exception as exc:  # recorded, so one bad case does not stop the corpus
                 path, record = None, _exception_record(case, exc)

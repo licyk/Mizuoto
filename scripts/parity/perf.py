@@ -506,10 +506,15 @@ def _warm(record: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _records(folder: Path) -> list[Path]:
+    """A round's case records (``<engine>-<case>.json``), without the profiles' ``.gpu.json`` and ``.trace.json``."""
+    return [p for p in sorted(folder.glob("*.json")) if not p.name.endswith((".gpu.json", ".trace.json"))]
+
+
 def cmd_compare(args: argparse.Namespace) -> int:
     rows = []
     a_dir, b_dir = PERF / args.a, PERF / args.b
-    for path in sorted(b_dir.glob("*.json")):
+    for path in _records(b_dir):
         other = a_dir / path.name
         if not other.exists():
             continue
@@ -549,7 +554,7 @@ def cmd_compare(args: argparse.Namespace) -> int:
 
 def cmd_show(args: argparse.Namespace) -> int:
     """Each case's warm phases of one name, longest first."""
-    for path in sorted((PERF / args.name).glob("*.json")):
+    for path in _records(PERF / args.name):
         record = json.loads(path.read_text(encoding="utf-8"))
         w = _warm(record)
         if not w:

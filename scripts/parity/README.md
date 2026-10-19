@@ -43,7 +43,7 @@ CUDA_VISIBLE_DEVICES= $W/native-env/bin/python scripts/parity/stack.py run scrip
   the transcript: language, text and timestamped segments, exactly). Voices name corpus clips as `{"ref": "<id>"}` (and
   `"transcript": null` to drop the transcript); a source clip is `{"source_ref": "<id>"}`.
   `settings` holds per-case settings, restored after the case.
-  `stream: true` runs the case with a stream sink and records the streamed chunks' lengths (compared as
+  `stream: true` runs the case with a stream sink and records the streamed chunks' lengths and the time from the request to its first chunk (`first_chunk_seconds`, not compared) (the lengths are compared as
   behaviour). `voices` names library voices to copy into the run's data folder (without their caches), from the
   workspace's `voices/` or else the real data folder: `narrator-tuned` is the narrator with GPT-SoVITS v2Pro
   weights perturbed by 2 % seeded noise, saved as upstream saves fine-tunes (the SoVITS file tagged `05`).
