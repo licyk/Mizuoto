@@ -233,3 +233,15 @@ def test_dataset_and_train(runner, tmp_path):
     assert [s["status"] for s in exp["stages"]] == ["done", "stale", "stale"]
     assert runner.invoke(app, ["train", "delete", "dummy/t1", "-y"]).exit_code == 0
     assert runner.invoke(app, ["dataset", "delete", "tones", "-y"]).exit_code == 0
+
+
+def test_data_dir_option_before_or_after_the_command(runner, tmp_path):
+    """``--data-dir`` at any level points the command at another data directory, as the environment variable does."""
+    app = get_app()
+    for args, folder in ((["--data-dir", str(tmp_path / "a"), "config", "path"], "a"), (["config", "path", "--data-dir", str(tmp_path / "b")], "b")):
+        r = runner.invoke(app, args)
+        assert r.exit_code == 0, r.output
+        assert r.output.strip().endswith(str(tmp_path / folder / "settings.toml")), r.output
+    r = runner.invoke(app, [*["output", "list", "--json"], "--data-dir", str(tmp_path / "c")])
+    assert r.exit_code == 0, r.output
+    assert (tmp_path / "c" / "mizuoto.db").is_file() and not (tmp_path / "data" / "mizuoto.db").exists()

@@ -11,6 +11,7 @@ Every command takes these options; the tables leave them out:
 | Option | Meaning |
 | --- | --- |
 | `--debug` | Print debug logs |
+| `--data-dir DIR` | Use this data directory instead of `MIZUOTO_DATA_DIR` or the default; before or after the command's name (`webui` has its own, the same) |
 | `--help` | Show the help and exit |
 
 Many commands also take `--json`, which prints JSON in the shape the HTTP API returns; the tables list it. Arguments written `{name}` are required, `[name]` optional. Repeatable options (`--ref`, `-p`…) may be given several times. `key=value` values are parsed as JSON (numbers, `true`/`false`), else taken as text.
