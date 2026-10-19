@@ -43,7 +43,7 @@ command line sit over one core, and every engine runs natively in the same Pytho
   sample for sample on the CPU (fp32, same seed). The reference is 0.1, the engine-worker release that ran upstream's
   code in one environment per engine (git tag `v1-engine-workers`). VoxCPM, which 0.1 never had, is checked against
   upstream's own package.
-- Each distribution has its own version and is checked and released on its own: `mizuoto/version.py` (0.2.7; the
+- Each distribution has its own version and is checked and released on its own: `mizuoto/version.py` (0.2.8; the
   web UI's `package.json` follows by hand) and `packages/native/<id>/mizuoto_<id>/version.py`. A push to main that
   changes a version file releases that distribution; tags are `v<version>` and `mizuoto-<id>-v<version>`. A gated
   package names the Mizuoto versions it works with (`mizuoto>=0.2.0,<0.3` in its `pyproject.toml`): raise the lower
