@@ -4,7 +4,7 @@ Runs through the whole stack (plan → job → runtime → engine) for every ins
 every available engine, and checks what an integrated engine must do: load and describe as its
 manifest says; speak in every voice mode it declares, audibly, at its rate, for about as long as the
 text needs, saying the text (word error rate by the ASR engine, when installed); repeat itself
-under a seed; split two segments; stop when cancelled; and leave no residue in the process.
+under a seed; split two segments; stream as its variant says; stop when cancelled; and leave no residue in the process.
 
     python scripts/dev.py test-engines [engine…]
 
@@ -239,6 +239,35 @@ def test_seed_repeats_and_segments(services, model, reference):
     plan = job.result["plan"]
     assert plan["segmented_by"] == "engine" or len(plan["segments"]) == 2
     assert out.meta["segments"] == len(plan["segments"])
+
+
+@pytest.mark.parametrize("model", MODELS)
+def test_streaming_sends_the_audio_as_it_is_made(services, model, reference):
+    """A streamed request: the sink hears the variant's granularity, gets the audio in pieces (more than one for one
+    segment when the model streams tokens), and the stored output is those pieces joined."""
+    import numpy as np
+
+    from mizuoto.core.audio.io import decode
+    from mizuoto.core.tts.service import StreamSink
+
+    info = services.models.get(model)
+    variant = services.engines.variant(info.engine, info.variant)
+    if "stream_audio" not in variant.capabilities:
+        pytest.skip("the model does not stream")
+    mode = voice_modes(services, model)[0]
+    started: list[tuple[int, str | None]] = []
+    pieces: list[Any] = []
+    sink = StreamSink()
+    sink.start = lambda rate, granularity: started.append((rate, granularity))
+    sink.chunk = lambda samples, rate, segment: pieces.append(np.asarray(samples, dtype=np.float32).copy())
+    job = services.tts.speak(request(services, model, mode, TEXTS["en"][0], "en", reference), wait=True, stream=sink)
+    assert job.state == "completed", job.error
+    assert started == [(variant.sample_rate, variant.stream_granularity)]
+    if variant.stream_granularity == "token":
+        assert len(pieces) > 1
+    samples, _ = decode(Path(services.outputs.get(job.result["output_id"]).path))
+    joined = np.concatenate(pieces)
+    assert joined.shape == samples.shape and np.allclose(joined, samples, atol=1e-4)
 
 
 @pytest.mark.parametrize("model", MODELS)

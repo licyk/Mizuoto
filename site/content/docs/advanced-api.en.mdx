@@ -300,7 +300,7 @@ Hear the audio as it is made. The protocol:
 
 A binary message is always audio; everything else is JSON text. The whole audio is still stored as a result (`output_id`). The client may send `{"type": "cancel"}` at any time.
 
-`granularity` says how fine the audio arrives: `token` as the model emits tokens (CosyVoice), `segment` once per segment, `emulated` when the model does not stream and Mizuoto splits the text to emulate it.
+`granularity` says how fine the audio arrives: `token` as the model emits tokens (CosyVoice, VoxCPM, Qwen3-TTS), `segment` once per segment, `emulated` when the model does not stream and Mizuoto splits the text to emulate it.
 
 **Streaming text**: with a model that has **Streaming text** (CosyVoice 2 and 3), set `"text_stream": true`; `text` is only the beginning. Send the rest as `{"type": "text", "text": "…"}` messages and `{"type": "flush"}` after the last. Leaving before the flush cancels the job.
 

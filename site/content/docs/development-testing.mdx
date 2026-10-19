@@ -122,6 +122,7 @@ MIZUOTO_TEST_DEVICE=cpu python scripts/dev.py test-engines cosyvoice
 | `test_load_and_describe` | 加载后的 `describe` 与清单一致：采样率、预设说话人 |
 | `test_every_voice_mode_speaks_the_text` | 声明的每种音色模式，中英文都能发声（RMS &gt; 0.01）、采样率正确、时长与文本相称；装了 ASR 时词错误率 &lt; 0.35 |
 | `test_seed_repeats_and_segments` | 同一个种子逐采样复现；放不进一段的两句话切成两段（或由引擎自己处理长文本） |
+| `test_streaming_sends_the_audio_as_it_is_made` | 能流式输出的模型：接收端得到其变体的粒度；按 token 流式输出时，一段会分成多块到达；存储的输出就是这些块拼起来的结果 |
 | `test_cancel_stops_the_engine` | 生成中途取消，任务在 30 秒内变为 `cancelled`，模型仍在加载状态，下一个请求正常发声 |
 | `test_no_residue` | 进程级状态（工作目录、环境变量、`sys.path`、随机数生成器、torch 标志、日志处理器、警告过滤器）的摘要在多次请求前后相同，通过 `mizuoto.snapshot` 操作获取 |
 

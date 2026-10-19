@@ -10,6 +10,10 @@ the CPU in fp32 gives the same audio:
 - the codes are decoded in upstream's chunks, and the reference's share is cut after a joint decode
   when cloning in context.
 
+A streamed request (one text) decodes the frames as they come: the codec's decoder is causal, so decoding each of
+upstream's chunks frame by frame from its usual start gives its samples again (``codec.DecodeStream``), and the audio
+is the non-streamed request's up to rounding.
+
 The tokenizer is ``mizuoto.text``'s BPE with transformers' "Mistral regex" split, which upstream's
 processor applies (its config names transformers 4.57.3).
 """
@@ -35,6 +39,10 @@ SAMPLE_RATE = 24000
 FRAME_RATE = 12.5
 FRAMES_PER_TOKEN = 16
 """Frames a text token is assumed to need at most, for the memory estimate (speech runs at ~3–4 a token)."""
+STREAM_FIRST = 4
+"""A streamed request's first audio comes after this many frames (0.32 s of speech)…"""
+STREAM_EVERY = 12
+"""…and then every this many (about a second)."""
 PROMPT_POSITIONS = 32
 """The talker prompt's positions besides its texts and reference codes (role, special and codec embeddings)."""
 LANGUAGE_NAMES = {
@@ -378,22 +386,33 @@ class LoadedQwen3Tts(LoadedEngine):
             ctx.applied["non_streaming_mode"] = kwargs["non_streaming_mode"]
         ctx.progress("generating", None)
         self._validate_languages(languages)
+        stream = task.stream and len(texts) == 1
         if self.variant == "base":
             prompt = self._cached_prompt(task.voice) or self._prompt(task.voice, ctx)
             ctx.applied["voice_prompt"] = "x_vector" if prompt[0]["x_vector_only_mode"] else "in_context"
-            wavs = self._clone(texts, languages, prompt, kwargs.get("non_streaming_mode", False), merged, ctx)
+            wavs = self._clone(texts, languages, prompt, kwargs.get("non_streaming_mode", False), merged, ctx, stream)
         elif self.variant.startswith("custom_voice"):
             if not task.voice.preset:
                 raise EngineError("A CustomVoice model needs a preset speaker", code=codes.INVALID_INPUT)
             instruct = task.style.instruct if self.variant == "custom_voice" else None
             if instruct:
                 ctx.applied["instruct"] = instruct
-            wavs = self._custom_voice(texts, task.voice.preset, languages, instruct, kwargs.get("non_streaming_mode", True), merged, ctx)
+            wavs = self._custom_voice(texts, task.voice.preset, languages, instruct, kwargs.get("non_streaming_mode", True), merged, ctx, stream)
         else:
             description = (task.voice.description or "").strip()
             if not description:
                 raise EngineError("A VoiceDesign model needs a voice description", code=codes.INVALID_INPUT)
-            wavs = self._voice_design(texts, description, languages, kwargs.get("non_streaming_mode", True), merged, ctx)
+            wavs = self._voice_design(texts, description, languages, kwargs.get("non_streaming_mode", True), merged, ctx, stream)
+        if stream:  # pieces of one segment as they are decoded, the last one marked final
+            pending = None
+            for wav in wavs:
+                samples = np.clip(np.asarray(wav, dtype=np.float32).reshape(-1), -1.0, 1.0)
+                if samples.size:
+                    if pending is not None:
+                        yield AudioChunk(samples=pending, sample_rate=SAMPLE_RATE, segment=task.segment)
+                    pending = samples
+            yield AudioChunk(samples=pending if pending is not None else np.zeros(0, dtype=np.float32), sample_rate=SAMPLE_RATE, segment=task.segment, final=True)
+            return
         ctx.check_cancel()
         for index, wav in enumerate(wavs):
             samples = np.clip(np.asarray(wav, dtype=np.float32).reshape(-1), -1.0, 1.0)
@@ -423,7 +442,10 @@ class LoadedQwen3Tts(LoadedEngine):
     def _instruct(text: str) -> str:
         return f"<|im_start|>user\n{text}<|im_end|>\n"
 
-    def _clone(self, texts: list[str], languages: list[str], items: list[dict[str, Any]], non_streaming: bool, merged: dict[str, Any], ctx: RequestContext) -> list[Any]:
+    def _clone(
+        self, texts: list[str], languages: list[str], items: list[dict[str, Any]], non_streaming: bool, merged: dict[str, Any], ctx: RequestContext, stream: bool = False
+    ) -> Any:
+        """The clips' audio (arrays), or with ``stream`` one text's audio as it is decoded (an iterator of arrays)."""
         if len(items) == 1 and len(texts) > 1:
             items = items * len(texts)
         input_ids = [self._tokenize(self._assistant(t)) for t in texts]
@@ -434,7 +456,10 @@ class LoadedQwen3Tts(LoadedEngine):
             "x_vector_only_mode": [it["x_vector_only_mode"] for it in items],
             "icl_mode": [it["icl_mode"] for it in items],
         }
-        codes_list = self._generate(input_ids, None, ref_ids, prompt, languages, None, non_streaming, merged, ctx)
+        args = (None, ref_ids, prompt, languages, None, non_streaming, merged, ctx)
+        if stream:
+            return self._stream(input_ids, args, prompt["ref_code"][0])
+        codes_list = self._generate(input_ids, *args)
         for_decode = []
         for i, c in enumerate(codes_list):
             ref_code = prompt["ref_code"][i]
@@ -459,8 +484,16 @@ class LoadedQwen3Tts(LoadedEngine):
         return torch.cat([ref_code.to(codes_.device), codes_], dim=0)
 
     def _custom_voice(
-        self, texts: list[str], speaker: str, languages: list[str], instruct: str | None, non_streaming: bool, merged: dict[str, Any], ctx: RequestContext
-    ) -> list[Any]:
+        self,
+        texts: list[str],
+        speaker: str,
+        languages: list[str],
+        instruct: str | None,
+        non_streaming: bool,
+        merged: dict[str, Any],
+        ctx: RequestContext,
+        stream: bool = False,
+    ) -> Any:
         speakers = [speaker] * len(texts)
         supported = {s.lower() for s in self.config.talker.speaker_ids}
         bad = [s for s in speakers if s and s.lower() not in supported]
@@ -471,14 +504,40 @@ class LoadedQwen3Tts(LoadedEngine):
         instructs = [instruct] * len(texts) if instruct is not None else [""] * len(texts)
         input_ids = [self._tokenize(self._assistant(t)) for t in texts]
         instruct_ids = [None if not ins else self._tokenize(self._instruct(ins)) for ins in instructs]
-        codes_list = self._generate(input_ids, instruct_ids, None, None, languages, speakers, non_streaming, merged, ctx)
-        return [w.cpu().numpy() for w in self._decode(codes_list, ctx)]
+        args = (instruct_ids, None, None, languages, speakers, non_streaming, merged, ctx)
+        if stream:
+            return self._stream(input_ids, args, None)
+        return [w.cpu().numpy() for w in self._decode(self._generate(input_ids, *args), ctx)]
 
-    def _voice_design(self, texts: list[str], description: str, languages: list[str], non_streaming: bool, merged: dict[str, Any], ctx: RequestContext) -> list[Any]:
+    def _voice_design(
+        self, texts: list[str], description: str, languages: list[str], non_streaming: bool, merged: dict[str, Any], ctx: RequestContext, stream: bool = False
+    ) -> Any:
         input_ids = [self._tokenize(self._assistant(t)) for t in texts]
         instruct_ids = [self._tokenize(self._instruct(description)) for _ in texts]
-        codes_list = self._generate(input_ids, instruct_ids, None, None, languages, None, non_streaming, merged, ctx)
-        return [w.cpu().numpy() for w in self._decode(codes_list, ctx)]
+        args = (instruct_ids, None, None, languages, None, non_streaming, merged, ctx)
+        if stream:
+            return self._stream(input_ids, args, None)
+        return [w.cpu().numpy() for w in self._decode(self._generate(input_ids, *args), ctx)]
+
+    def _stream(self, input_ids: list[torch.Tensor], args: tuple[Any, ...], prefix: torch.Tensor | None) -> Iterator[Any]:
+        """One text's audio as it is generated: the talker and the codec's decoder placed together, the frames decoded
+        ``STREAM_FIRST`` and then every ``STREAM_EVERY`` at a time (``codec.DecodeStream``). ``prefix`` is the reference's
+        codes when cloning in context, decoded with the rest but not returned."""
+        from mizuoto.engines.qwen3tts.codec import CHUNK, LEFT_CONTEXT, DecodeStream
+
+        merged, ctx = args[-2], args[-1]
+        positions = self._talker_positions(input_ids, args[0], args[1], args[2], int(merged.get("max_new_tokens") or 8192))
+        memory = self._generation_memory(1, positions) + self._codec_memory((CHUNK + LEFT_CONTEXT) * 1920)
+        ctx.applied["stream"] = "frames"
+        with ctx.use([self.h_talker, self.h_decoder], memory):
+            decode = DecodeStream(self.codec.decoder, None if prefix is None else prefix.to(self.device))
+            wanted = STREAM_FIRST
+            for frame in self._generate_codes(input_ids, *args, frames=True):
+                decode.push(frame[0])
+                if decode.frames - decode.done >= wanted:
+                    yield decode.audio().cpu().numpy()
+                    wanted = STREAM_EVERY
+            yield decode.audio().cpu().numpy()
 
     def _decode(self, codes_list: list[Any], ctx: RequestContext) -> list[Any]:
         memory = self._codec_memory(max(int(c.shape[0]) for c in codes_list) * 1920 * len(codes_list))
@@ -502,8 +561,10 @@ class LoadedQwen3Tts(LoadedEngine):
         non_streaming: bool,
         merged: dict[str, Any],
         ctx: RequestContext,
-    ) -> list[torch.Tensor]:
-        """Upstream ``Qwen3TTSForConditionalGeneration.generate``: build each prompt, then run the talker."""
+        frames: bool = False,
+    ) -> Any:
+        """Upstream ``Qwen3TTSForConditionalGeneration.generate``: build each prompt, then run the talker. Returns each
+        row's codes, or with ``frames`` an iterator of the frames as they are drawn ((rows, 16) each)."""
         import torch
 
         c = self.config.talker
@@ -580,6 +641,8 @@ class LoadedQwen3Tts(LoadedEngine):
             trailing.append(trail)
         assert tts_pad is not None
         joined = [torch.cat([e for e in parts if e is not None], dim=1) for parts in embeds]
+        if frames:
+            return self._frames(joined, trailing, tts_pad, merged, ctx)
         return self._talk(joined, trailing, tts_pad, merged, ctx)
 
     def _icl_prompt(
@@ -610,7 +673,22 @@ class LoadedQwen3Tts(LoadedEngine):
         return text_embed + codec, tts_pad
 
     def _talk(self, embeds: list[torch.Tensor], trailing: list[torch.Tensor], tts_pad: torch.Tensor, merged: dict[str, Any], ctx: RequestContext) -> list[torch.Tensor]:
-        """The talker's generation (transformers' ``_sample`` with upstream's forward), batched with left padding."""
+        """The talker's generation, every frame of it: each row's codes up to its end of speech."""
+        import torch
+
+        frames = list(self._frames(embeds, trailing, tts_pad, merged, ctx))
+        if not frames:
+            return [torch.empty((0, self.config.talker.num_code_groups), dtype=torch.long, device=self.device) for _ in embeds]
+        codes_ = torch.stack(frames, dim=1)
+        first = codes_[:, :, 0]
+        is_stop = first == self.config.talker.codec_eos_id
+        stop_indices = torch.argmax(is_stop.int(), dim=1)
+        lengths_out = torch.where(is_stop.any(dim=1), stop_indices, codes_.shape[1])
+        return [codes_[i, : int(n)] for i, n in enumerate(lengths_out)]
+
+    def _frames(self, embeds: list[torch.Tensor], trailing: list[torch.Tensor], tts_pad: torch.Tensor, merged: dict[str, Any], ctx: RequestContext) -> Iterator[torch.Tensor]:
+        """The talker's generation (transformers' ``_sample`` with upstream's forward), batched with left padding: each
+        frame's (rows, 16) codes as it is drawn (a finished row's are its end-of-speech code's)."""
         import torch
         from torch.nn.utils.rnn import pad_sequence
 
@@ -665,7 +743,6 @@ class LoadedQwen3Tts(LoadedEngine):
         if decoder.graphs is not None:
             ctx.applied["cuda_graphs"] = True
 
-        frames: list[torch.Tensor] = []
         step = 0
         drawn = 0
         with decoder.run(ctx.generator_for(dev), logits[:, -1, :], hidden[:, -1:, :]):
@@ -683,7 +760,7 @@ class LoadedQwen3Tts(LoadedEngine):
                 # the next forward: this frame's other codebooks, then the talker on their embeddings
                 decoder.trail.copy_(trailing_t[:, step].unsqueeze(1) if step < trailing_t.shape[1] else tts_pad.expand_as(decoder.trail))
                 decoder.predict()
-                frames.append(decoder.frame.clone())
+                yield decoder.frame.clone()
                 step += 1
                 past = cache.length
                 decoder.positions.copy_(rope_deltas + past)
@@ -693,15 +770,6 @@ class LoadedQwen3Tts(LoadedEngine):
             self._graphs_failed = True
         elif decoder.graphs is not None:
             self.h_talker.replayed(step)  # each step's graphs copied the streamed layers (none when wholly loaded)
-
-        if not frames:
-            return [torch.empty((0, c.num_code_groups), dtype=torch.long, device=dev) for _ in range(batch)]
-        codes_ = torch.stack(frames, dim=1)
-        first = codes_[:, :, 0]
-        is_stop = first == c.codec_eos_id
-        stop_indices = torch.argmax(is_stop.int(), dim=1)
-        lengths_out = torch.where(is_stop.any(dim=1), stop_indices, codes_.shape[1])
-        return [codes_[i, : int(n)] for i, n in enumerate(lengths_out)]
 
     def _decoder(self, batch: int, talker_sampling: Any, sub_sampling: Any) -> Any:
         """The frame loop's decoder: with CUDA graphs (cached, up to two batch sizes or sampling settings) when they may

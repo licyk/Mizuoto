@@ -11,6 +11,7 @@ import json
 import threading
 from pathlib import Path
 
+import numpy as np
 import pytest
 
 torch = pytest.importorskip("torch")
@@ -157,6 +158,40 @@ def speak(loaded, seed: int | None = 3, speaker: str = "alto", ctx: RequestConte
     with torch.inference_mode():
         chunks = list(loaded.synthesize(task, ctx))
     return chunks, ctx
+
+
+def test_a_streamed_request_gives_the_audio_piece_by_piece(loaded):
+    """task.stream: the frames are decoded as they come (codec.DecodeStream), in several pieces, the last final, and
+    together they are the request's audio without streaming."""
+    want = speak(loaded)[0][0].samples
+    task = SynthesisTask(text="Hello there.", language="en", voice=VoiceSpec(preset="alto"), style=StyleSpec(instruct="calm"), params={"seed": 3}, stream=True)
+    with torch.inference_mode():
+        chunks = list(loaded.synthesize(task, RequestContext("s", seed=3)))
+    assert len(chunks) >= 2 and chunks[-1].final and not any(c.final for c in chunks[:-1])
+    got = np.concatenate([c.samples for c in chunks])
+    assert got.shape == want.shape and np.allclose(got, want, atol=1e-6)
+
+
+def test_the_decode_stream_gives_the_chunked_decode_frame_by_frame(loaded):
+    """DecodeStream over upstream's chunk grid (300 frames, 25 of context): the samples chunked_decode gives, frame by
+    frame and across chunk boundaries, without the prefix's (the reference's codes when cloning in context)."""
+    from mizuoto.engines.qwen3tts.codec import DecodeStream
+
+    decoder = loaded.codec.decoder
+    g = torch.Generator().manual_seed(0)
+    codes = torch.randint(0, decoder.config["codebook_size"], (700, 16), generator=g)
+    prefix = 37
+    with torch.inference_mode():
+        want = decoder.chunked_decode(codes.T.unsqueeze(0))[0, 0, prefix * 1920 :].float()
+        stream = DecodeStream(decoder, codes[:prefix])
+        pieces = []
+        for n, frame in enumerate(codes[prefix:], 1):
+            stream.push(frame)
+            if n % 13 == 0:
+                pieces.append(stream.audio())
+        pieces.append(stream.audio())
+    got = torch.cat(pieces)
+    assert got.shape == want.shape and torch.allclose(got, want, atol=1e-6)
 
 
 def test_describe_lists_the_speakers(loaded):

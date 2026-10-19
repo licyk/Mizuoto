@@ -123,6 +123,7 @@ MIZUOTO_TEST_DEVICE=cpu python scripts/dev.py test-engines cosyvoice
 | `test_load_and_describe` | `describe` after loading matches the manifest: sample rate, preset speakers |
 | `test_every_voice_mode_speaks_the_text` | Every declared voice mode, in English and Chinese, is audible (RMS &gt; 0.01), at the right rate, about as long as the text needs; with ASR installed, word error rate &lt; 0.35 |
 | `test_seed_repeats_and_segments` | The same seed repeats sample for sample; two sentences that do not fit one segment become two segments (or the engine handles long text itself) |
+| `test_streaming_sends_the_audio_as_it_is_made` | A model that streams: the sink hears its variant's granularity, gets more than one piece of one segment when it streams tokens, and the stored output is the pieces joined |
 | `test_cancel_stops_the_engine` | Cancelled mid-generation, the job is `cancelled` within 30 s, the model is still loaded, and the next request speaks normally |
 | `test_no_residue` | Digests of the process-wide state (working folder, environment, `sys.path`, RNGs, torch flags, log handlers, warning filters) are the same before and after many requests, taken with the `mizuoto.snapshot` op |
 

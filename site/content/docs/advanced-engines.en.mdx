@@ -22,7 +22,7 @@ How each engine is implemented, and how exactly it reproduces its upstream proje
 
 | Engine (id) | Models | Sample rate | Languages | Best at | Training | Licence |
 | --- | --- | --- | --- | --- | --- | --- |
-| Qwen3-TTS (`qwen3tts`) | 1.7B / 0.6B Base and CustomVoice, 1.7B VoiceDesign | 24 kHz | 10 | cloning, preset speakers with instructions, voices from a description | a speaker | Apache-2.0 |
+| Qwen3-TTS (`qwen3tts`) | 1.7B / 0.6B Base and CustomVoice, 1.7B VoiceDesign | 24 kHz | 10 | cloning, preset speakers with instructions, voices from a description, frame-level streaming | a speaker | Apache-2.0 |
 | CosyVoice (`cosyvoice`) | Fun-CosyVoice 3 0.5B, CosyVoice 2 0.5B, 300M / SFT / Instruct | 22.05 / 24 kHz | zh en ja ko yue (more in v3) | token-level streaming, streamed text input, voice conversion, instructions | LLM, LLM + flow | Apache-2.0 |
 | F5-TTS (`f5tts`) | F5-TTS v1 Base, F5-TTS Base, E2-TTS Base | 24 kHz | zh, en | exact duration, speech editing | full fine-tune | MIT code, CC-BY-NC-4.0 weights |
 | GPT-SoVITS (`gptsovits`) | v2, v2Pro, v2ProPlus, v4, v5 Turbo | 32 / 48 kHz | zh en ja ko yue | few-shot cloning from 3–10 s, a voice's own weights | a voice's weights | MIT |
@@ -71,7 +71,7 @@ Alibaba Qwen's 12 Hz speech LLM. Best for: high-quality cloning in ten languages
 | `qwen3tts/0.6b-custom-voice` | CustomVoice 0.6B (preset speakers) | 2.4 GB | 4 GB | |
 | `qwen3tts/1.7b-voice-design` | VoiceDesign (voice from a description) | 4.3 GB | 6.5 GB | yes |
 
-- **Capabilities**: Base has **Clone a voice** and **Clone without a transcript**; CustomVoice has **Preset speakers** and **Instructions** (the 0.6B has no instructions: upstream drops them silently, so Mizuoto does not declare them); VoiceDesign has **Design from a description**. Every variant has **Batches** (up to 8) and **Seed**.
+- **Capabilities**: Base has **Clone a voice** and **Clone without a transcript**; CustomVoice has **Preset speakers** and **Instructions** (the 0.6B has no instructions: upstream drops them silently, so Mizuoto does not declare them); VoiceDesign has **Design from a description**. Every variant has **Streaming** (frame by frame, the first audio after about 0.3 s on a GPU), **Batches** (up to 8) and **Seed**.
 - **Preset speakers**: aiden, dylan, eric, ono_anna, ryan, serena, sohee, uncle_fu, vivian.
 - **Languages**: zh, en, de, it, pt, es, ja, ko, fr, ru.
 - **Reference clips**: 1–30 s, at least 16 kHz (3–20 s works best). With the clip's transcript it follows the voice more closely.

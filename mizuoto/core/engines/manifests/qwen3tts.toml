@@ -20,7 +20,8 @@ url = "https://github.com/QwenLM/Qwen3-TTS/blob/main/LICENSE"
 [variants.base]
 title = "Base (voice cloning)"
 sample_rate = 24000
-capabilities = ["clone", "clone_no_transcript", "batch", "seed"]
+capabilities = ["clone", "clone_no_transcript", "batch", "seed", "stream_audio"]
+stream_granularity = "token"
 max_batch = 8
 
 [variants.base.reference]
@@ -31,7 +32,8 @@ min_sample_rate = 16000
 [variants.custom_voice]
 title = "CustomVoice (preset speakers, instructions)"
 sample_rate = 24000
-capabilities = ["preset_speaker", "instruct", "batch", "seed"]
+capabilities = ["preset_speaker", "instruct", "batch", "seed", "stream_audio"]
+stream_granularity = "token"
 speakers = ["aiden", "dylan", "eric", "ono_anna", "ryan", "serena", "sohee", "uncle_fu", "vivian"]
 max_batch = 8
 
@@ -39,14 +41,16 @@ max_batch = 8
 # The 0.6B CustomVoice model drops instructions silently upstream, so it does not declare them.
 title = "CustomVoice 0.6B (preset speakers)"
 sample_rate = 24000
-capabilities = ["preset_speaker", "batch", "seed"]
+capabilities = ["preset_speaker", "batch", "seed", "stream_audio"]
+stream_granularity = "token"
 speakers = ["aiden", "dylan", "eric", "ono_anna", "ryan", "serena", "sohee", "uncle_fu", "vivian"]
 max_batch = 8
 
 [variants.voice_design]
 title = "VoiceDesign (voice from a description)"
 sample_rate = 24000
-capabilities = ["voice_design_freeform", "batch", "seed"]
+capabilities = ["voice_design_freeform", "batch", "seed", "stream_audio"]
+stream_granularity = "token"
 max_batch = 8
 
 # -- common parameters ----------------------------------------------------------------

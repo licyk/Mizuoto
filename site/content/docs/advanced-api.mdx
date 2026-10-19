@@ -300,7 +300,7 @@ sio.wait()
 
 二进制消息一定是音频，其他消息都是 JSON 文本。整段结果仍然照常保存为一个结果（`output_id`）。客户端随时可以发送 `{"type": "cancel"}` 取消。
 
-`granularity` 说明音频有多“细”：`token` 是模型逐 token 输出（CosyVoice），`segment` 是每段一次，`emulated` 是模型本身不分段输出、由 Mizuoto 切分文本来模拟。
+`granularity` 说明音频有多“细”：`token` 是模型逐 token 输出（CosyVoice、VoxCPM、Qwen3-TTS），`segment` 是每段一次，`emulated` 是模型本身不分段输出、由 Mizuoto 切分文本来模拟。
 
 **流式文本输入**：模型支持 **流式文本输入**（CosyVoice 2 和 3）时，请求中设 `"text_stream": true`，`text` 只是开头；之后发送 `{"type": "text", "text": "…"}` 追加文本，最后发送 `{"type": "flush"}`。在 `flush` 之前断开连接会取消任务。
 

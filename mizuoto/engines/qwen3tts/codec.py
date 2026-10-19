@@ -24,6 +24,10 @@ from mizuoto.runtime.accel import Masked, Site, attention
 from mizuoto.runtime.lm.qwen import RMSNorm, Rotary, apply_rope, hf_sdpa, mask_for
 
 MIMI = Site("qwen3tts.mimi")
+CHUNK = 300
+"""Upstream decodes the codes in chunks of this many frames…"""
+LEFT_CONTEXT = 25
+"""…each decoded with this many frames before it and their samples dropped."""
 
 # -- shared ----------------------------------------------------------------------------------------
 
@@ -288,7 +292,7 @@ class Decoder(nn.Module):
             wav = b(wav)
         return wav.clamp(min=-1, max=1)
 
-    def chunked_decode(self, codes: torch.Tensor, chunk_size: int = 300, left_context_size: int = 25, check: Any = None) -> torch.Tensor:
+    def chunked_decode(self, codes: torch.Tensor, chunk_size: int = CHUNK, left_context_size: int = LEFT_CONTEXT, check: Any = None) -> torch.Tensor:
         wavs = []
         start = 0
         while start < codes.shape[-1]:
@@ -300,6 +304,50 @@ class Decoder(nn.Module):
             wavs.append(wav[..., context * self.total_upsample :])
             start = end
         return torch.cat(wavs, dim=-1)
+
+
+class DecodeStream:
+    """``Decoder.chunked_decode`` as the frames arrive, for streamed audio.
+
+    The decoder is causal throughout (causal convolutions, transposed convolutions trimmed on the right, a causal
+    sliding-window transformer), so within one of upstream's chunks the samples of a frame depend only on the codes from
+    the chunk's left context up to that frame. Decoding the chunk's frames so far, from the same start, therefore gives
+    the samples ``chunked_decode`` gives for them, up to rounding (another length can take other kernels): each
+    ``audio`` decodes the current chunk's prefix again and returns the samples not returned before. The redundant work
+    is the decoder's: about ``CHUNK / (2 · every)`` decodes of a chunk instead of one.
+
+    ``prefix`` is codes decoded with the rest but not returned (the reference's, when cloning in context; upstream cuts
+    their share after the joint decode)."""
+
+    def __init__(self, decoder: Decoder, prefix: torch.Tensor | None = None) -> None:
+        self.decoder = decoder
+        self.codes: list[torch.Tensor] = [] if prefix is None else list(prefix.unbind(0))
+        self.done = len(self.codes)
+        """Frames whose samples were returned (or are the prefix's)."""
+
+    @property
+    def frames(self) -> int:
+        return len(self.codes)
+
+    def push(self, frame: torch.Tensor) -> None:
+        """One frame's (16,) codes."""
+        self.codes.append(frame)
+
+    def audio(self) -> torch.Tensor:
+        """The (samples,) float32 audio of the frames pushed since the last call."""
+        n = len(self.codes)
+        out = []
+        m = self.done
+        while m < n:
+            start = (m // CHUNK) * CHUNK
+            end = min(start + CHUNK, n)
+            context = LEFT_CONTEXT if start - LEFT_CONTEXT > 0 else start
+            codes = torch.stack(self.codes[start - context : end], dim=1).unsqueeze(0).clamp(min=0)
+            wav = self.decoder(codes)[0, 0]
+            out.append(wav[(m - start + context) * self.decoder.total_upsample :])
+            m = end
+        self.done = n
+        return torch.cat(out).to(torch.float32) if out else torch.zeros(0, dtype=torch.float32)
 
 
 # -- encoder (transformers' MimiModel encode path) -------------------------------------------------

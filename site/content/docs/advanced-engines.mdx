@@ -22,7 +22,7 @@ Web UI 中，**模型** › **引擎** 列出每个引擎的可用状态、设�
 
 | 引擎（id） | 模型 | 采样率 | 语言 | 擅长 | 训练 | 许可 |
 | --- | --- | --- | --- | --- | --- | --- |
-| Qwen3-TTS（`qwen3tts`） | 1.7B / 0.6B 的 Base、CustomVoice，1.7B VoiceDesign | 24 kHz | 10 种 | 克隆、带指令的预置说话人、按描述设计音色 | 说话人微调 | Apache-2.0 |
+| Qwen3-TTS（`qwen3tts`） | 1.7B / 0.6B 的 Base、CustomVoice，1.7B VoiceDesign | 24 kHz | 10 种 | 克隆、带指令的预置说话人、按描述设计音色、逐帧流式输出 | 说话人微调 | Apache-2.0 |
 | CosyVoice（`cosyvoice`） | Fun-CosyVoice 3 0.5B、CosyVoice 2 0.5B、300M / SFT / Instruct | 22.05 / 24 kHz | 中英日韩粤（v3 更多） | 逐 token 流式输出、流式文本输入、音色转换、指令 | LLM、LLM + flow | Apache-2.0 |
 | F5-TTS（`f5tts`） | F5-TTS v1 Base、F5-TTS Base、E2-TTS Base | 24 kHz | 中、英 | 精确时长、语音编辑 | 全量微调 | 代码 MIT，权重 CC-BY-NC-4.0 |
 | GPT-SoVITS（`gptsovits`） | v2、v2Pro、v2ProPlus、v4、v5 Turbo | 32 / 48 kHz | 中英日韩粤 | 3–10 秒少样本克隆，音色专属权重 | 音色权重 | MIT |
@@ -71,7 +71,7 @@ Web UI 中，**模型** › **引擎** 列出每个引擎的可用状态、设�
 | `qwen3tts/0.6b-custom-voice` | CustomVoice 0.6B（预置说话人） | 2.4 GB | 4 GB | |
 | `qwen3tts/1.7b-voice-design` | VoiceDesign（按描述设计） | 4.3 GB | 6.5 GB | 是 |
 
-- **能力**：Base 有 **克隆音色**、**无文本克隆**；CustomVoice 有 **预置说话人**、**指令**（0.6B 没有指令：上游会静默忽略，所以 Mizuoto 不声明）；VoiceDesign 有 **按描述设计**。所有变体都支持 **批量**（每批最多 8 条）和 **种子**。
+- **能力**：Base 有 **克隆音色**、**无文本克隆**；CustomVoice 有 **预置说话人**、**指令**（0.6B 没有指令：上游会静默忽略，所以 Mizuoto 不声明）；VoiceDesign 有 **按描述设计**。所有变体都支持 **流式输出**（逐帧，在 GPU 上约 0.3 秒后输出第一段音频）、**批量**（每批最多 8 条）和 **种子**。
 - **预置说话人**：aiden、dylan、eric、ono_anna、ryan、serena、sohee、uncle_fu、vivian。
 - **语言**：zh、en、de、it、pt、es、ja、ko、fr、ru。
 - **参考音频**：1–30 秒，采样率至少 16 kHz（推荐 3–20 秒）。带上文本时更贴近原音色。
