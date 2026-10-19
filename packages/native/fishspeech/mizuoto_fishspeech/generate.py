@@ -275,7 +275,7 @@ class Decoder:
         from mizuoto.runtime.graphs import LayerSteps
 
         model = self.model
-        layers = list(model.layers)
+        layers: list[Any] = list(model.layers)
         rope: list[Any] = [None]
 
         def prologue() -> torch.Tensor:

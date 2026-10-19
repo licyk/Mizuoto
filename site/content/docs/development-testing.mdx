@@ -256,7 +256,7 @@ $W/native-env/bin/python scripts/parity/compare.py qwen3tts --a reference --b na
 | 作业 | 环境 | 步骤 |
 | --- | --- | --- |
 | `host` | Ubuntu、Windows、macOS × Python 3.10、3.11、3.12、3.13 | 从 CPU 索引 `uv pip install torch`，再装 `-e . pytest pytest-cov ruff ty httpx tomli`（只有 Mizuoto）；每个组合都运行 `dev.py lint`（整个仓库）、`dev.py typecheck-py --python-version <该组合> --python-platform <该组合> mizuoto tests scripts`（标准库的类型存根随 Python 版本和平台而不同）和 `python -m pytest -q tests`；三者中一个失败，其余照常运行 |
-| `gated` | 范围内的每个包 × Ubuntu、Windows、macOS × Python 3.10、3.13 | `-e . -e packages/native/<id>`；对 `packages/native/<id>` 运行 `ruff check` 和 `ruff format --check`，对它的 `tests/` 运行 `typecheck-py` 和 `pytest` |
+| `gated` | 范围内的每个包 × Ubuntu、Windows、macOS × Python 3.10、3.13 | `-e . -e packages/native/<id>`；对 `packages/native/<id>`（源码和测试）运行 `ruff check`、`ruff format --check` 和 `typecheck-py`，对它的 `tests/` 运行 `pytest` |
 | `oldest-mizuoto` | 范围内的每个包，Ubuntu、Python 3.12 | 用该包 `pyproject.toml` 允许的最旧 Mizuoto（`python scripts/ci.py lower-bound <id>`，来自 PyPI）测试它：测试在源码目录之外运行，`PYTHONPATH` 上只有 `tests/`，所以 `import mizuoto` 找到的是已发布的那个（不含范围检查，它比较的是范围与本次提交的 Mizuoto） |
 | `torch` | Ubuntu、Python 3.12，torch 2.8.0 和最新版 | 用 Mizuoto 支持的最旧和最新的 torch 跑范围内的测试，发现 torch 的接口变化 |
 | `web` | Ubuntu、Python 3.11、bun | `dev.py web-install`、`dev.py test-web`、`dev.py typegen-check` |

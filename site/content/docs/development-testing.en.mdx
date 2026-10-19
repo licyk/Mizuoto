@@ -257,7 +257,7 @@ A new branch, a manual run, a list the compare API cuts short (300 files) or a f
 | Job | Environment | Steps |
 | --- | --- | --- |
 | `host` | Ubuntu, Windows, macOS × Python 3.10, 3.11, 3.12, 3.13 | `uv pip install torch` from the CPU index, then `-e . pytest pytest-cov ruff ty httpx tomli` (Mizuoto alone); in every cell `dev.py lint` (the whole repository), `dev.py typecheck-py --python-version <cell> --python-platform <cell> mizuoto tests scripts` (the standard library's stubs differ between Pythons and platforms) and `python -m pytest -q tests`; each of the three runs even when another failed |
-| `gated` | each package in scope × Ubuntu, Windows, macOS × Python 3.10, 3.13 | `-e . -e packages/native/<id>`; `ruff check` and `ruff format --check` of `packages/native/<id>`, `typecheck-py` and `pytest` of its `tests/` |
+| `gated` | each package in scope × Ubuntu, Windows, macOS × Python 3.10, 3.13 | `-e . -e packages/native/<id>`; `ruff check`, `ruff format --check` and `typecheck-py` of `packages/native/<id>` (sources and tests), `pytest` of its `tests/` |
 | `oldest-mizuoto` | each package in scope, Ubuntu, Python 3.12 | The package on the oldest Mizuoto its `pyproject.toml` allows (`python scripts/ci.py lower-bound <id>`), from PyPI: its tests run outside the checkout, with only `tests/` on `PYTHONPATH`, so `import mizuoto` finds the released one (the range check, which compares the range with Mizuoto at this commit, is left out) |
 | `torch` | Ubuntu, Python 3.12, torch 2.8.0 and the latest release | The tests in scope against the oldest torch Mizuoto supports and the newest, to catch torch's API drift |
 | `web` | Ubuntu, Python 3.11, bun | `dev.py web-install`, `dev.py test-web`, `dev.py typegen-check` |

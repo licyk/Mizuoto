@@ -264,7 +264,7 @@ class LoadedIndexTts2(LoadedEngine):
                 ignore=CODEC_IGNORED,
                 what="semantic codec",
             )
-        self.semantic_codec = codec.eval()
+        self.semantic_codec: Any = codec.eval()
 
         ctx.check_cancel()
         ctx.progress("loading:s2mel", None)
@@ -282,7 +282,8 @@ class LoadedIndexTts2(LoadedEngine):
             load_into(gpt_layer, _strip_module(net["gpt_layer"]), what="gpt layer")
             self.gpt_layer = gpt_layer.eval()
         del net
-        self.cfm, self.regulator = cfm.eval(), regulator.eval()
+        self.cfm = cfm.eval()
+        self.regulator: Any = regulator.eval()
 
         ctx.progress("loading:campplus", None)
         campplus = CAMPPlus(feat_dim=80, embedding_size=192)
@@ -316,7 +317,7 @@ class LoadedIndexTts2(LoadedEngine):
 
         sp = s2["preprocess_params"]["spect_params"]
         fmax = sp.get("fmax", "None")
-        self.mel_args = {
+        self.mel_args: dict[str, Any] = {
             "n_fft": sp["n_fft"],
             "num_mels": sp["n_mels"],
             "sampling_rate": s2["preprocess_params"]["sr"],

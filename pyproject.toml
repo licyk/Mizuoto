@@ -153,7 +153,7 @@ extra-paths = ["packages/native/fishspeech", "packages/native/indextts"]
 
 [tool.ty.analysis]
 # Optional packages (the extras), and those the parity scripts import only inside the reference environments.
-allowed-unresolved-imports = ["torch", "torch.**", "transformers", "transformers.**", "soxr", "jieba", "jieba.**", "opencc", "wordsegment", "budoux", "fasttext", "ToJyutping", "pyopenjtalk", "jamo", "mecab", "voxcpm", "voxcpm.**"]
+allowed-unresolved-imports = ["torch", "torch.**", "transformers", "transformers.**", "soxr", "jieba", "jieba.**", "opencc", "wordsegment", "budoux", "fasttext", "ToJyutping", "pyopenjtalk", "jamo", "mecab", "voxcpm", "voxcpm.**", "fugashi"]
 
 [tool.ty.rules]
 # torch.nn.Module declares `forward: Callable[..., Any]`, a writable attribute, so every module's `def forward` is
@@ -165,8 +165,8 @@ output-format = "concise"
 error-on-warning = true
 
 [tool.ty.src]
-# The gated packages' tests; their sources are read through extra-paths, not checked themselves yet.
-include = ["mizuoto", "tests", "scripts", "packages/native/fishspeech/tests", "packages/native/indextts/tests"]
+# The gated packages too (sources and tests); extra-paths lets the rest import them.
+include = ["mizuoto", "tests", "scripts", "packages/native"]
 exclude = ["mizuoto/webui/dist", "mizuoto/webui/node_modules"]
 
 [tool.pytest.ini_options]

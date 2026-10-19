@@ -240,7 +240,8 @@ class PerceiverResampler(nn.Module):
     def forward(self, x: torch.Tensor, mask: torch.Tensor | None = None) -> torch.Tensor:
         x = self.proj_context(x)
         latents = self.latents.unsqueeze(0).expand(x.shape[0], -1, -1)
-        for attn, ff in self.layers:  # type: ignore[misc]
+        pairs: list[Any] = list(self.layers)
+        for attn, ff in pairs:
             latents = attn(latents, x, mask) + latents
             latents = ff(latents) + latents
         return self.norm(latents)

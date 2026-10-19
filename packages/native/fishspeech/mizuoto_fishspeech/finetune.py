@@ -155,9 +155,9 @@ class LoraLinear(ops.Linear):
         self.lora_dropout: nn.Module = nn.Dropout(p=config.dropout) if config.dropout > 0 else nn.Identity()
         self.weight.requires_grad = False
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        result = F.linear(x, self.weight, bias=self.bias)
-        result += (self.lora_dropout(x) @ self.lora_A.transpose(0, 1) @ self.lora_B.transpose(0, 1)) * self.scaling
+    def forward(self, input: torch.Tensor) -> torch.Tensor:
+        result = F.linear(input, self.weight, bias=self.bias)
+        result += (self.lora_dropout(input) @ self.lora_A.transpose(0, 1) @ self.lora_B.transpose(0, 1)) * self.scaling
         return result
 
 
@@ -173,9 +173,9 @@ class LoraEmbedding(ops.Embedding):
         self.scaling = config.alpha / config.r
         self.weight.requires_grad = False
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        result = F.embedding(x, self.weight, self.padding_idx, self.max_norm, self.norm_type, self.scale_grad_by_freq, self.sparse)
-        after_a = F.embedding(x, self.lora_A.transpose(0, 1), self.padding_idx, self.max_norm, self.norm_type, self.scale_grad_by_freq, self.sparse)
+    def forward(self, input: torch.Tensor) -> torch.Tensor:
+        result = F.embedding(input, self.weight, self.padding_idx, self.max_norm, self.norm_type, self.scale_grad_by_freq, self.sparse)
+        after_a = F.embedding(input, self.lora_A.transpose(0, 1), self.padding_idx, self.max_norm, self.norm_type, self.scale_grad_by_freq, self.sparse)
         result += (after_a @ self.lora_B.transpose(0, 1)) * self.scaling
         return result
 

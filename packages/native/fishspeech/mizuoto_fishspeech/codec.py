@@ -46,9 +46,10 @@ class WN(nn.Module):
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         conv: Any = self.__dict__["_conv"]
+        bias: torch.Tensor | None = self._parameters.get("bias")  # None when the convolution has none
         if isinstance(conv, nn.ConvTranspose1d):
-            return F.conv_transpose1d(x, self.weight(), self.bias, conv.stride, conv.padding, conv.output_padding, conv.groups, conv.dilation)
-        return F.conv1d(x, self.weight(), self.bias, conv.stride, conv.padding, conv.dilation, conv.groups)
+            return F.conv_transpose1d(x, self.weight(), bias, conv.stride, conv.padding, conv.output_padding, conv.groups, conv.dilation)
+        return F.conv1d(x, self.weight(), bias, conv.stride, conv.padding, conv.dilation, conv.groups)
 
 
 def snake(x: torch.Tensor, alpha: torch.Tensor) -> torch.Tensor:
@@ -353,8 +354,9 @@ class ResidualVectorQuantize(nn.Module):
         z_q: Any = 0
         residual = z
         codes = []
-        for i, q in enumerate(self.quantizers):
-            z_q_i, idx = q.encode(residual)  # type: ignore[operator]
+        quantizers: list[Any] = list(self.quantizers)
+        for i, q in enumerate(quantizers):
+            z_q_i, idx = q.encode(residual)
             mask = torch.full((z.shape[0],), fill_value=i, device=z.device) < len(self.quantizers)
             z_q = z_q + z_q_i * mask[:, None, None]
             residual = residual - z_q_i

@@ -40,7 +40,7 @@ TOKENIZER_FILES = ("tokenizer.json", "tokenizer_config.json", "special_tokens_ma
 """The tokenizer as the base model ships it (upstream saves it again with transformers' ``save_pretrained``)."""
 PAD_TOKEN = "<|end_of_text|>"
 """The collator's padding token; S2's vocabulary lacks it, so upstream pads with 0 (``F.pad(value=None)``)."""
-OPTIMIZER = {"weight_decay": 0.0, "betas": (0.9, 0.95), "eps": 1e-5}
+OPTIMIZER: dict[str, Any] = {"weight_decay": 0.0, "betas": (0.9, 0.95), "eps": 1e-5}
 """``text2semantic_finetune.yaml``'s AdamW."""
 CLIP_NORM = 1.0
 

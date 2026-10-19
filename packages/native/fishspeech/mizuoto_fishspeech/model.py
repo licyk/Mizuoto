@@ -21,7 +21,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass, replace
-from typing import Any
+from typing import Any, cast
 
 import torch
 from torch import nn
@@ -363,7 +363,7 @@ SLOW = Site("fishspeech.slow", approx_ok=False)  # autoregressive: quantised att
 """The slow transformer's prefill and training: SDPA with a boolean mask."""
 STEP = Site("fishspeech.step", reference=sdpa_math, approx_ok=False)
 """Its decoding steps: SDPA's math kernel, as upstream pins it (``sdpa_kernel(MATH)``)."""
-FAST = Site("fishspeech.fast", reference=lambda q, k, v, mask, causal, scale, gqa, dropout: eq_attention(q, k, v, mask), approx_ok=False)
+FAST = Site("fishspeech.fast", reference=lambda q, k, v, mask, causal, scale, gqa, dropout: eq_attention(q, k, v, cast(torch.Tensor, mask)), approx_ok=False)
 """The fast transformer: upstream's hand-written softmax over ten positions."""
 
 

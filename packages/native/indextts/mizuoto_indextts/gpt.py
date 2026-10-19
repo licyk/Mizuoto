@@ -304,7 +304,7 @@ class UnifiedVoice(nn.Module):
         from mizuoto.runtime.device import is_oom
         from mizuoto.runtime.graphs import LayerSteps
 
-        blocks = list(self.gpt.h)
+        blocks: list[Any] = list(self.gpt.h)
         x = torch.zeros_like(emb)
         logits = torch.zeros((emb.shape[0], self.mel_head.out_features), dtype=torch.float32, device=emb.device)
 

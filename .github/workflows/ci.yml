@@ -173,7 +173,7 @@ jobs:
         if: ${{ !cancelled() && steps.environment.outcome == 'success' }}
         run: |
           platform=$(python -c "import sys; print({'win32': 'win32', 'darwin': 'darwin'}.get(sys.platform, 'linux'))")
-          python scripts/dev.py typecheck-py --python-version "${{ matrix.python }}" --python-platform "$platform" "packages/native/${{ matrix.engine }}/tests"
+          python scripts/dev.py typecheck-py --python-version "${{ matrix.python }}" --python-platform "$platform" "packages/native/${{ matrix.engine }}"
       - name: Tests
         if: ${{ !cancelled() && steps.environment.outcome == 'success' }}
         run: python -m pytest -q "packages/native/${{ matrix.engine }}/tests"
