@@ -409,19 +409,27 @@ def test_a_phase_that_runs_out_of_memory_runs_again_identically(loaded, monkeypa
     assert check_oom_retry(loaded, run, loaded.model.base_lm.layers[0], monkeypatch) == {"language model": 1}
 
 
-def _cpu_bf16_matmul_works() -> bool:
-    """Whether torch's bfloat16 matrix products run on this CPU: some hosted Windows runners stop the process with an
-    illegal instruction inside them (torch 2.14.1's CPU wheel), so the probe runs in a process of its own."""
+def _cpu_bf16_matmul_failure() -> str | None:
+    """Why torch's bfloat16 matrix products do not run on this CPU, or None when they do: some hosted Windows runners
+    stop the process with an illegal instruction inside them (torch 2.14.1's CPU wheel), so the probe runs in a process
+    of its own. The reason names the CPU and torch's capability level, for a report to torch."""
+    import platform
     import subprocess
     import sys
 
     probe = "import torch; x = torch.randn(5, 64).bfloat16(); w = torch.randn(128, 64).bfloat16(); torch.nn.functional.linear(x, w); torch.nn.functional.linear(x[:1], w)"
-    return subprocess.run([sys.executable, "-c", probe], capture_output=True, timeout=120).returncode == 0
+    code = subprocess.run([sys.executable, "-c", probe], capture_output=True, timeout=120).returncode
+    if code == 0:
+        return None
+    capability = torch.backends.cpu.get_cpu_capability() if hasattr(torch.backends.cpu, "get_cpu_capability") else "?"
+    cpu = platform.processor() or platform.machine()
+    return f"bfloat16 products crash torch {torch.__version__} on this CPU (exit {code:#x}; {cpu}; capability {capability})"
 
 
-@pytest.mark.parametrize(
-    "dtype", [torch.float32, pytest.param(torch.bfloat16, marks=pytest.mark.skipif(not _cpu_bf16_matmul_works(), reason="bfloat16 products crash torch on this CPU"))]
-)
+_BF16_FAILURE = _cpu_bf16_matmul_failure()
+
+
+@pytest.mark.parametrize("dtype", [torch.float32, pytest.param(torch.bfloat16, marks=pytest.mark.skipif(_BF16_FAILURE is not None, reason=str(_BF16_FAILURE)))])
 def test_steps_attend_over_the_filled_blocks_of_the_cache_as_over_all_of_it(dtype, monkeypatch):
     """On the CPU a step reads the static cache only up to the next ``ATTEND_BLOCK`` multiple past the
     current length (mask kept). Every step's output equals upstream's attention over the whole cache, across blocks."""

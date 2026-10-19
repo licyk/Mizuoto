@@ -134,7 +134,7 @@ jobs:
           python scripts/dev.py typecheck-py --python-version "${{ matrix.python }}" --python-platform "$platform" mizuoto tests scripts
       - name: Tests
         if: ${{ !cancelled() && steps.environment.outcome == 'success' }}
-        run: python -m pytest -q tests
+        run: python -m pytest -q -rs tests  # -rs: skip reasons in the log (a skipped bf16 probe names the CPU)
 
   gated:
     # A licence-gated engine's package on Mizuoto at this commit: lint, its tests' types, and its tests.
