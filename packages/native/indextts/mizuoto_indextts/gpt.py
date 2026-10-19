@@ -66,8 +66,8 @@ class GPT2Attention(nn.Module):
         self.c_proj = Conv1D(dim, dim)
         self.dim, self.heads, self.head_dim = dim, heads, dim // heads
 
-    def forward(self, x: torch.Tensor, cache: list[torch.Tensor] | None) -> tuple[torch.Tensor, list[torch.Tensor]]:
-        out, kv = self.attend(*self.project(x), cache)
+    def forward(self, x: torch.Tensor, cache: list[torch.Tensor] | None, mask: torch.Tensor | None = None) -> tuple[torch.Tensor, list[torch.Tensor]]:
+        out, kv = self.attend(*self.project(x), cache, mask)
         return self.c_proj(out), kv
 
     def project(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
@@ -77,7 +77,9 @@ class GPT2Attention(nn.Module):
         v = v.view(*v.shape[:-1], -1, self.head_dim).transpose(1, 2)
         return q, k, v
 
-    def attend(self, q: torch.Tensor, k: torch.Tensor, v: torch.Tensor, cache: list[torch.Tensor] | None) -> tuple[torch.Tensor, list[torch.Tensor]]:
+    def attend(
+        self, q: torch.Tensor, k: torch.Tensor, v: torch.Tensor, cache: list[torch.Tensor] | None, mask: torch.Tensor | None = None
+    ) -> tuple[torch.Tensor, list[torch.Tensor]]:
         """The cache and attention, before ``c_proj``: (rows, length, dim), and the keys and values so far."""
         if isinstance(cache, _Grown):  # a BeamCaches layer: the last position is this step's
             cache[0][:, :, -1:].copy_(k)
@@ -85,8 +87,9 @@ class GPT2Attention(nn.Module):
             k, v = cache
         elif cache is not None:
             k, v = torch.cat([cache[0], k], dim=-2), torch.cat([cache[1], v], dim=-2)
-        is_causal = q.shape[-2] > 1
-        out = attention(q.contiguous(), k.contiguous(), v.contiguous(), site=SITE, causal=is_causal)
+        # transformers' SDPA path: causal without a mask; with left padding, its additive mask instead (``padding_masks``)
+        is_causal = q.shape[-2] > 1 and mask is None
+        out = attention(q.contiguous(), k.contiguous(), v.contiguous(), site=SITE, mask=mask, causal=is_causal)
         out = out.transpose(1, 2).contiguous()
         return out.reshape(*out.shape[:-2], -1).contiguous(), [k, v]
 
@@ -152,8 +155,8 @@ class GPT2Block(nn.Module):
         self.ln_2 = ops.LayerNorm(dim, eps=1e-5)
         self.mlp = GPT2MLP(dim)
 
-    def forward(self, x: torch.Tensor, cache: list[torch.Tensor] | None) -> tuple[torch.Tensor, list[torch.Tensor]]:
-        attn, kv = self.attn(self.ln_1(x), cache)
+    def forward(self, x: torch.Tensor, cache: list[torch.Tensor] | None, mask: torch.Tensor | None = None) -> tuple[torch.Tensor, list[torch.Tensor]]:
+        attn, kv = self.attn(self.ln_1(x), cache, mask)
         x = attn + x
         return x + self.mlp(self.ln_2(x)), kv
 
@@ -180,11 +183,11 @@ class GPT2Model(nn.Module):
         self.h = nn.ModuleList(GPT2Block(dim, heads, ops) for _ in range(layers))
         self.ln_f = ops.LayerNorm(dim, eps=1e-5)
 
-    def forward(self, embeds: torch.Tensor, caches: list[list[torch.Tensor]] | None = None) -> tuple[torch.Tensor, list[list[torch.Tensor]]]:
+    def forward(self, embeds: torch.Tensor, caches: list[list[torch.Tensor]] | None = None, mask: torch.Tensor | None = None) -> tuple[torch.Tensor, list[list[torch.Tensor]]]:
         x = embeds + wpe_zeros(embeds)
         new = []
         for i, block in enumerate(self.h):
-            x, kv = block(x, caches[i] if caches is not None else None)
+            x, kv = block(x, caches[i] if caches is not None else None, mask)
             new.append(kv)
         return self.ln_f(x), new
 
@@ -284,20 +287,20 @@ class UnifiedVoice(nn.Module):
             self._graphs, self._steps, self._step_ports = graphs, None, None
         self.graphed = graphs is not None
 
-    def step_logits(self, emb: torch.Tensor, caches: list[list[torch.Tensor]]) -> torch.Tensor:
+    def step_logits(self, emb: torch.Tensor, caches: list[list[torch.Tensor]], mask: torch.Tensor | None = None) -> torch.Tensor:
         """A one-token step of every beam: the last position's mel logits in float32, (beams, codes); ``caches`` is
         updated. Eagerly, or as graphs around each layer's attention, which replay the same kernels."""
         if self._graphs is not None and self._steps is None:
             self._steps = self._capture_steps(emb)
         if self._steps is None:
-            hidden, new = self.gpt(emb, caches)
+            hidden, new = self.gpt(emb, caches, mask)
             caches[:] = new
             return self.logits(hidden)[:, -1, :].clone().float()
         assert self._step_ports is not None
         x, logits = self._step_ports
         x.copy_(emb)
         with torch.cuda.device(self._graphs.device):
-            self._steps(caches)
+            self._steps(caches, mask)
         return logits
 
     def _capture_steps(self, emb: torch.Tensor) -> Any:
@@ -311,8 +314,8 @@ class UnifiedVoice(nn.Module):
         def prologue() -> torch.Tensor:
             return x + wpe_zeros(x)  # GPT2Model.forward's
 
-        def attend(i: int, qkv: tuple[torch.Tensor, ...], caches: list[list[torch.Tensor]]) -> torch.Tensor:
-            out, caches[i] = blocks[i].attn.attend(*qkv, caches[i])
+        def attend(i: int, qkv: tuple[torch.Tensor, ...], caches: list[list[torch.Tensor]], mask: torch.Tensor | None) -> torch.Tensor:
+            out, caches[i] = blocks[i].attn.attend(*qkv, caches[i], mask)
             return out
 
         def epilogue(h: torch.Tensor) -> None:
@@ -379,10 +382,13 @@ class UnifiedVoice(nn.Module):
 
     # -- generation ----------------------------------------------------------------------------------
 
-    def prompt(self, conds: torch.Tensor, text: torch.Tensor, lang: torch.Tensor | None = None) -> torch.Tensor:
-        """``prepare_gpt_inputs`` for one text: ``[conds][start text… stop]`` embeddings, (1, s, dim).
+    def prompt(self, conds: torch.Tensor, text: torch.Tensor, lang: torch.Tensor | None = None) -> tuple[torch.Tensor, int]:
+        """``prepare_gpt_inputs`` for one text: ``[pad][conds][start text… stop]`` embeddings, (1, s, dim), and the pad's
+        length.
 
-        Every start and stop id is dropped from the text first, as upstream does (2.5's tiktoken ids 0 and 1 too)."""
+        Every start and stop id is dropped from the text first, as upstream does (2.5's tiktoken ids 0 and 1 too); the
+        prompt is then left-padded with zeros to the length the text had plus two (so a text that came with a start or
+        stop id gets a padded position, which the attention masks out: ``padding_masks``)."""
         c = self.c
         tokens = text[0][(text[0] != c.stop_text_token) & (text[0] != c.start_text_token)]
         tokens = F.pad(F.pad(tokens, (1, 0), value=c.start_text_token), (0, 1), value=c.stop_text_token)
@@ -390,7 +396,11 @@ class UnifiedVoice(nn.Module):
         text_emb = self.text_embedding(tokens) + self.text_pos_embedding.emb(pos)
         if lang is not None and c.spk_cond_mode == "campplus":
             text_emb += self.lang_embedding(lang[0])
-        return torch.stack([torch.cat([conds.squeeze(0), text_emb])], dim=0)
+        pad = text.shape[1] + 2 - tokens.size(-1)
+        parts = [conds.squeeze(0), text_emb]
+        if pad > 0:
+            parts.insert(0, torch.zeros((pad, conds.size(-1)), dtype=text_emb.dtype, device=text.device))
+        return torch.stack([torch.cat(parts)], dim=0), max(pad, 0)
 
     def logits(self, x: torch.Tensor) -> torch.Tensor:
         return self.mel_head(self.final_norm(x))
@@ -449,14 +459,33 @@ class _Hypotheses:
         return self.worst_score >= best_sum_logprobs / (cur_len - prompt_len) ** self.length_penalty
 
 
+def padding_masks(emb: torch.Tensor, pad: int, keys: int = 0) -> tuple[torch.Tensor, torch.Tensor]:
+    """transformers' additive SDPA masks (4.52's ``_prepare_4d_causal_attention_mask_for_sdpa``) for rows whose first
+    ``pad`` positions are padding, in the embeddings' dtype, as it makes them: the prefill's (rows, 1, L, L), causal, the
+    padding masked with the dtype's minimum, its own rows (masking every key) unmasked as ``-0.0``
+    (``_unmask_unattended``); a step's (rows, 1, 1, ``keys``), the padding masked and the rest ``-0.0``. The same tensors
+    give SDPA the same call, and on a GPU the same kernel, as upstream's."""
+    rows, length, dtype, device = emb.shape[0], emb.shape[1], emb.dtype, emb.device
+    low = torch.finfo(dtype).min
+    prefill = torch.zeros((length, length), dtype=dtype, device=device)
+    prefill.masked_fill_(torch.ones((length, length), dtype=torch.bool, device=device).triu(1), low)
+    prefill[:, :pad] = low
+    prefill[:pad] = prefill[:pad] * 0.0  # the padding's own rows: min × 0 = -0.0, as transformers multiplies them
+    step = torch.full((rows, 1, 1, keys), -0.0, dtype=dtype, device=device)
+    step[..., :pad] = low
+    return prefill.expand(rows, 1, length, length).contiguous(), step
+
+
 def beam_sample(
     model: UnifiedVoice,
     prompt: torch.Tensor,
     s: BeamSampling,
     generator: torch.Generator,
     check: Callable[[], None] | None = None,
+    pad: int = 0,
 ) -> torch.Tensor:
-    """``inference_model.generate(...)`` for one prompt: the generated codes (1, n), ending in the stop token when one was drawn."""
+    """``inference_model.generate(...)`` for one prompt: the generated codes (1, n), ending in the stop token when one was
+    drawn. ``pad``: the prompt's left padding (``UnifiedVoice.prompt``), masked out as transformers masks it."""
     c = model.c
     n, device = s.num_beams, prompt.device
     mel_len = prompt.shape[1]
@@ -480,12 +509,12 @@ def beam_sample(
         if caches is None:
             start = model.mel_embedding(ids[:, mel_len:]) + model.mel_pos_embedding(ids[:, mel_len:])
             emb = torch.cat([prompt.repeat_interleave(n, 0), start], dim=1)
-            hidden, new_caches = model.gpt(emb, caches)
+            hidden, new_caches = model.gpt(emb, caches, padding_masks(emb, pad)[0] if pad else None)
             caches = BeamCaches(new_caches, max_length) if s.kv_cache else None
             logits = model.logits(hidden)[:, -1, :].clone().float()
         else:
             emb = model.mel_embedding(ids[:, -1:]) + model.mel_pos_embedding.fixed(ids.shape[1] - mel_len, device)
-            logits = model.step_logits(emb, caches)
+            logits = model.step_logits(emb, caches, padding_masks(emb, pad, ids.shape[1])[1] if pad else None)
         scores = F.log_softmax(logits, dim=-1)
         scores = repetition_penalty(scores, ids, s.repetition_penalty)
         scores = scores / s.temperature

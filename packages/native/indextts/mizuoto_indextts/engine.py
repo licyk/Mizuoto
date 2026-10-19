@@ -501,7 +501,8 @@ class LoadedIndexTts2(LoadedEngine):
         def sample() -> torch.Tensor:
             with half:
                 conds = self.gpt._conds(speech_latent, emovec, 1)
-                return beam_sample(self.gpt, self.gpt.prompt(conds, text, lang), sampling, g, ctx.check_cancel)
+                prompt, pad = self.gpt.prompt(conds, text, lang)
+                return beam_sample(self.gpt, prompt, sampling, g, ctx.check_cancel, pad=pad)
 
         out = ctx.run("gpt", [self.h_gpt], sample, self._gpt_memory(sampling, int(text.shape[-1])))
         if self.gpt.graphed and not self.gpt.graphs_failed:
@@ -835,7 +836,8 @@ class LoadedIndexTts15(LoadedEngine):
                 def sample(text: torch.Tensor = text) -> tuple[torch.Tensor, torch.Tensor]:
                     with half:
                         latent_in = self.gpt.get_conditioning(cond_mel.transpose(1, 2), lengths)
-                        return latent_in, beam_sample(self.gpt, self.gpt.prompt(latent_in, text), sampling, g, ctx.check_cancel)
+                        prompt, pad = self.gpt.prompt(latent_in, text)
+                        return latent_in, beam_sample(self.gpt, prompt, sampling, g, ctx.check_cancel, pad=pad)
 
                 latent_in, out = ctx.run("gpt", [self.h_gpt], sample, gpt_memory(self.gpt, beams, tokens, int(sampling.max_new_tokens), bool(self.half)))
                 if self.gpt.graphed and not self.gpt.graphs_failed:
@@ -855,7 +857,9 @@ class LoadedIndexTts15(LoadedEngine):
 
                 latent = ctx.run("gpt", [self.h_gpt], latents, gpt_memory(self.gpt, beams, tokens, int(sampling.max_new_tokens), bool(self.half), int(codes_t.shape[-1])))
                 wav = ctx.run("bigvgan", [self.h_bigvgan], lambda latent=latent: vocode(latent), bigvgan_memory(latent.shape[1] * 1024, 928, 320))
-                wavs.append(torch.clamp(32767 * wav.float(), -32767.0, 32767.0).cpu())
+                # Scaled in the vocoder's own dtype, as upstream: under half precision 32767 × wav rounds in float16 (-7.99976
+                # becomes -8.0) before the truncation to int16; in float32 it truncates to -7.
+                wavs.append(torch.clamp(32767 * wav, -32767.0, 32767.0).cpu())
         ctx.check_cancel()
         out_wav = fade_out_tail(torch.cat(wavs, dim=1), RATES["v1_5"])
         data = out_wav.type(torch.int16).numpy().T
