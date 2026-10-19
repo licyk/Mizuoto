@@ -585,7 +585,7 @@ export default {
     attentionStrict: '失败而不是回退',
     attentionStrictHint: '当所选后端无法计算请求的某一部分时',
     fastFeatures: { tf32: 'TF32', fp16_accumulation: 'fp16 累加', cudnn_benchmark: 'cuDNN 自动调优', sdpa_reduced_precision: '低精度 SDPA' },
-    fastHint: '作用于整个进程的 GPU 提速开关；每一项都会使结果略有不同。tf32 和 fp16 累加会使 GPT-SoVITS 变慢。下次启动 Mizuoto 时生效。',
+    fastHint: '作用于整个进程的 GPU 提速开关；每一项都会使结果略有不同。fp16 累加会使 GPT-SoVITS v2 慢约 5 %。下次启动 Mizuoto 时生效。',
     trainAttention: '注意力',
     engineAttention: '此引擎的注意力',
     engineAttentionInherit: '与 设置 › 计算 相同',

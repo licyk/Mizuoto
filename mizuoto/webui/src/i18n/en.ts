@@ -585,7 +585,7 @@ export default {
     attentionStrict: 'Fail instead of falling back',
     attentionStrictHint: 'When the chosen backend cannot compute part of a request',
     fastFeatures: { tf32: 'TF32', fp16_accumulation: 'fp16 accumulation', cudnn_benchmark: 'cuDNN autotune', sdpa_reduced_precision: 'Reduced-precision SDPA' },
-    fastHint: 'GPU speed switches for the whole process; each changes results slightly. tf32 and fp16 accumulation slow GPT-SoVITS down. Takes effect the next time Mizuoto starts.',
+    fastHint: 'GPU speed switches for the whole process; each changes results slightly. fp16 accumulation makes GPT-SoVITS v2 about 5 % slower. Takes effect the next time Mizuoto starts.',
     trainAttention: 'Attention',
     engineAttention: 'Attention for this engine',
     engineAttentionInherit: 'As in Settings › Compute',

@@ -180,7 +180,7 @@ mizuoto webui
 | `compute.compile` | `false` | 用 `torch.compile` 编译 F5-TTS、CosyVoice、GPT-SoVITS v4/v5 和 IndexTTS 的重型模块；在 GPU 上 VoxCPM 会因此变慢（没有 CUDA 图）；对修改之后加载的模型生效（见 [性能与加速](/docs/advanced-performance)） | **计算** › **编译模型（torch.compile）** |
 | `compute.attention` | `auto` | 引擎如何计算注意力：`auto`（按各模型原本的方式，结果完全相同）、`fast`（可用的最快后端），或指定后端：`sdpa`、`math`、`sdpa_flash`、`sdpa_efficient`、`sdpa_cudnn`、`flash`、`xformers`、`sage`、`sage3`；某个后端无法处理的调用会回退到下一个；对修改之后加载的模型生效（见 [性能与加速](/docs/advanced-performance#注意力后端)） | **计算** › **注意力** |
 | `compute.attention_strict` | `false` | 所选后端无法计算请求的某一部分时让请求失败，而不是回退 | **计算** › **失败而不是回退** |
-| `compute.fast` | `[]` | 作用于整个进程的 GPU 提速开关，每一项都会使结果略有不同：`tf32`、`fp16_accumulation`、`cudnn_benchmark`、`sdpa_reduced_precision`（`tf32` 和 `fp16_accumulation` 会使 GPT-SoVITS 变慢）；下次启动时生效 | **计算** › **加速** |
+| `compute.fast` | `[]` | 作用于整个进程的 GPU 提速开关，每一项都会使结果略有不同：`tf32`、`fp16_accumulation`、`cudnn_benchmark`、`sdpa_reduced_precision`（`fp16_accumulation` 会使 GPT-SoVITS v2 慢约 5 %）；下次启动时生效 | **计算** › **加速** |
 
 ### `downloads`：下载
 

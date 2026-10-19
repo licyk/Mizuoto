@@ -180,7 +180,7 @@ Access tokens, the origin check and the Host check are described in [HTTP API](/
 | `compute.compile` | `false` | `torch.compile` the heavy modules of F5-TTS, CosyVoice, GPT-SoVITS v4/v5 and IndexTTS; VoxCPM is slower with it on a GPU (no CUDA graphs); applies to models loaded after the change (see [Performance](/docs/advanced-performance)) | **Compute** › **Compile models (torch.compile)** |
 | `compute.attention` | `auto` | How engines compute attention: `auto` (as each model does, identical results), `fast` (the fastest backend available), or a backend: `sdpa`, `math`, `sdpa_flash`, `sdpa_efficient`, `sdpa_cudnn`, `flash`, `xformers`, `sage`, `sage3`; a call a backend cannot take falls back to the next; applies to models loaded after the change (see [Performance](/docs/advanced-performance#attention-backends)) | **Compute** › **Attention** |
 | `compute.attention_strict` | `false` | Fail a request instead of falling back when the chosen backend cannot compute part of it | **Compute** › **Fail instead of falling back** |
-| `compute.fast` | `[]` | Process-wide GPU speed switches, each changing results slightly: `tf32`, `fp16_accumulation`, `cudnn_benchmark`, `sdpa_reduced_precision` (`tf32` and `fp16_accumulation` slow GPT-SoVITS down); at the next start | **Compute** › **Acceleration** |
+| `compute.fast` | `[]` | Process-wide GPU speed switches, each changing results slightly: `tf32`, `fp16_accumulation`, `cudnn_benchmark`, `sdpa_reduced_precision` (`fp16_accumulation` makes GPT-SoVITS v2 about 5 % slower); at the next start | **Compute** › **Acceleration** |
 
 ### `downloads`
 
