@@ -207,7 +207,7 @@ class LoadedGptSovits(LoadedEngine):
 
         ctx.progress("loading:encoders", None)
         # Built on the CPU in their dtype; the model manager places them.
-        self.hubert: Any = load_hubert(encoders / "chinese-hubert-base").to(self.precision).eval()
+        self.hubert: Any = load_hubert(encoders / "chinese-hubert-base", self.precision, self.device).to(self.precision).eval()
         self.bert = load_bert_model(encoders, "cpu", self.precision).eval()
         # The Japanese user dictionary is compiled once, beside the dictionary it extends.
         self.text = TextPreprocessor(self.bert, self.device, self.precision, assets, cache_dir=assets[OPEN_JTALK] / ".mizuoto")
@@ -339,7 +339,7 @@ class LoadedGptSovits(LoadedEngine):
         if self.uses_vocoder:
             from mizuoto.engines.gptsovits import sovits_v3
 
-            model = sovits_v3.load_synthesizer(path, self.version, lora_base=self.base[1] if ckpt.lora else None, device="cpu", dtype=self.precision)
+            model = sovits_v3.load_synthesizer(path, self.version, lora_base=self.base[1] if ckpt.lora else None, device="cpu", dtype=self.precision, run_on=self.device)
             if self.compile:
                 from mizuoto.runtime.compile import Compiled
 
@@ -347,7 +347,7 @@ class LoadedGptSovits(LoadedEngine):
         else:
             from mizuoto.engines.gptsovits.sovits import build_synthesizer
 
-            model = build_synthesizer(ckpt).to(self.precision).eval()
+            model = build_synthesizer(ckpt, dtype=self.precision, device=self.device).to(self.precision).eval()
         return model, ckpt
 
     def _replace(self, name: str, module: torch.nn.Module) -> None:

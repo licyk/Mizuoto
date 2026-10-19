@@ -85,12 +85,16 @@ def replace_prefixes(sd: Mapping[str, torch.Tensor], mapping: Mapping[str, str])
     return out
 
 
-def fold_weight_norm(sd: Mapping[str, torch.Tensor], dim: int = 0, dtype: torch.dtype | None = None) -> StateDict:
+def fold_weight_norm(sd: Mapping[str, torch.Tensor], dim: int = 0, dtype: torch.dtype | None = None, device: torch.device | str | None = None) -> StateDict:
     """Turn ``x.weight_g`` + ``x.weight_v`` and ``x.parametrizations.weight.original0/1`` into ``x.weight``.
 
     Computed in float32 and stored in ``weight_v``'s dtype, as ``torch.nn.utils.remove_weight_norm`` does; with
     ``dtype``, ``g`` and ``v`` are first cast to it and so is the result (a float16 checkpoint loaded into a float32
     module whose weight norm is computed at run time).
+
+    With a ``device`` other than the CPU, the norm is computed there by ``torch._weight_norm`` in ``dtype`` (else the
+    pair's own), as a weight norm left on a model moved there and cast computes it at every call: a GPU's reduction
+    and a float16 kernel give other bits than the CPU's float32. The result comes back to the CPU.
     """
     out: StateDict = {}
     pairs: dict[str, dict[str, torch.Tensor]] = {}
@@ -109,6 +113,9 @@ def fold_weight_norm(sd: Mapping[str, torch.Tensor], dim: int = 0, dtype: torch.
         g, v = gv["g"], gv["v"]
         if dtype is not None:
             g, v = g.to(dtype), v.to(dtype)
+        if device is not None and torch.device(device).type != "cpu":
+            out[f"{base}.weight" if base else "weight"] = torch._weight_norm(v.to(device), g.to(device), dim).cpu()
+            continue
         compute = torch.float64 if v.dtype == torch.float64 else torch.float32
         out[f"{base}.weight" if base else "weight"] = torch._weight_norm(v.to(compute), g.to(compute), dim).to(v.dtype)
     return out

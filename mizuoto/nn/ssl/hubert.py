@@ -214,24 +214,28 @@ class HubertModel(nn.Module):
         return ["masked_spec_embed"]
 
 
-def fold_pos_conv(sd: Mapping[str, torch.Tensor], prefix: str = "", dtype: torch.dtype | None = torch.float32) -> dict[str, torch.Tensor]:
+def fold_pos_conv(sd: Mapping[str, torch.Tensor], prefix: str = "", dtype: torch.dtype | None = torch.float32, device: torch.device | str | None = None) -> dict[str, torch.Tensor]:
     """The positional convolution's weight norm (dim 2) folded into ``…pos_conv_embed.conv.weight``.
 
     In ``dtype`` (float32: transformers loads a float16 checkpoint into float32 parameters and computes the
-    weight norm from them).
+    weight norm from them), on ``device`` when the model runs there (``fold_weight_norm``).
     """
     from mizuoto.runtime.loading import fold_weight_norm
 
     base = f"{prefix}encoder.pos_conv_embed.conv."
     norm = {k: v for k, v in sd.items() if k.startswith(base) and ("parametrizations" in k or k.endswith(("weight_g", "weight_v")))}
     out = {k: v for k, v in sd.items() if k not in norm}
-    out.update(fold_weight_norm(norm, dim=2, dtype=dtype))
+    out.update(fold_weight_norm(norm, dim=2, dtype=dtype, device=device))
     return out
 
 
-def load_hubert(folder: str | Path) -> HubertModel:
+def load_hubert(folder: str | Path, dtype: torch.dtype = torch.float32, device: torch.device | str | None = None) -> HubertModel:
     """A transformers ``HubertModel`` folder (``config.json`` + ``model.safetensors`` or ``pytorch_model.bin``) in float32 and
-    eval mode, as ``HubertModel.from_pretrained`` loads it (a float16 file is copied into float32 parameters)."""
+    eval mode, as ``HubertModel.from_pretrained`` loads it (a float16 file is copied into float32 parameters).
+
+    ``dtype`` and ``device`` are where the model will run: the positional convolution's weight norm, which transformers
+    computes at every call, is computed there as it would be (``fold_weight_norm``). The model stays on the CPU in float32.
+    """
     import json
 
     from mizuoto.runtime.loading import load_into, load_state_dict
@@ -241,6 +245,7 @@ def load_hubert(folder: str | Path) -> HubertModel:
     if weights is None:
         raise FileNotFoundError(f"{folder} has no HuBERT weights")
     model = HubertModel(HubertConfig.from_dict(json.loads((folder / "config.json").read_text(encoding="utf-8"))))
-    state = {k: v.float() if v.is_floating_point() else v for k, v in fold_pos_conv(load_state_dict(weights)).items()}
+    folded = fold_pos_conv(load_state_dict(weights), dtype=dtype if device is not None else torch.float32, device=device)
+    state = {k: v.float() if v.is_floating_point() else v for k, v in folded.items()}
     load_into(model, state, ignore=model.ignorable(), what="HuBERT")
     return model.eval()

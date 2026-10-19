@@ -118,6 +118,22 @@ def test_weight_norm_folds_in_both_formats(tmp_path):
         assert torch.allclose(plain(x), module(x), atol=1e-6)
 
 
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="needs a CUDA GPU")
+def test_weight_norm_folded_on_a_gpu_is_what_a_live_one_computes_there():
+    gen = torch.Generator().manual_seed(0)
+    for make in (torch.nn.utils.weight_norm, torch.nn.utils.parametrizations.weight_norm):
+        live = make(torch.nn.Conv1d(64, 96, 5))
+        with torch.no_grad():
+            for p in live.parameters():
+                p.copy_(torch.randn(p.shape, generator=gen))
+        sd = {k: v.clone() for k, v in live.state_dict().items()}
+        live = live.to("cuda", torch.float16)
+        live(torch.zeros(1, 64, 8, device="cuda", dtype=torch.float16))  # the old-style hook computes the weight at a call
+        folded = loading.fold_weight_norm(sd, dtype=torch.float16, device="cuda")
+        assert folded["weight"].device.type == "cpu"
+        assert torch.equal(folded["weight"], live.weight.detach().cpu())
+
+
 def test_loading_is_strict_and_reads_tagged_zips(tmp_path):
     module = torch.nn.Linear(3, 2)
     path = tmp_path / "w.pth"

@@ -467,16 +467,19 @@ def reference_spec(audio: torch.Tensor, filter_length: int, hop_length: int, win
 # -- loading --------------------------------------------------------------------------------------------------------
 
 
-def synthesizer_state(weight: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
+def synthesizer_state(weight: dict[str, torch.Tensor], dtype: torch.dtype = torch.float32, device: torch.device | str | None = None) -> dict[str, torch.Tensor]:
     """A checkpoint's ``weight`` in float32 with weight norm folded (upstream's per-forward ``_weight_norm`` of the
-    float32 parameters it copies the float16 file into: the same weights)."""
+    float32 parameters it copies the float16 file into: the same weights). Upstream keeps the weight norm and computes
+    it at every call on the model's device in its dtype (``.half()`` on a GPU), so with a ``device`` the norm is computed
+    there in ``dtype``, as it would be."""
     from mizuoto.runtime.loading import fold_weight_norm
 
-    return fold_weight_norm({k: v.float() if v.is_floating_point() else v for k, v in weight.items()})
+    return fold_weight_norm({k: v.float() if v.is_floating_point() else v for k, v in weight.items()}, dtype=dtype if device is not None else None, device=device)
 
 
-def build_synthesizer(ckpt: SovitsCheckpoint, ops: Any = default_ops.default) -> SynthesizerTrn:
-    """The model for a checkpoint, weights loaded (float32, CPU, eval). Strict but for ``IGNORABLE``."""
+def build_synthesizer(ckpt: SovitsCheckpoint, ops: Any = default_ops.default, dtype: torch.dtype = torch.float32, device: torch.device | str | None = None) -> SynthesizerTrn:
+    """The model for a checkpoint, weights loaded (float32, CPU, eval). Strict but for ``IGNORABLE``. ``dtype`` and
+    ``device`` are where it will run (``synthesizer_state``)."""
     from mizuoto.runtime.loading import load_into
 
     if ckpt.model_version not in V2_FAMILY:
@@ -485,7 +488,7 @@ def build_synthesizer(ckpt: SovitsCheckpoint, ops: Any = default_ops.default) ->
         raise EngineError(f"{ckpt.path.name} is a LoRA fine-tune, which only v3+ models use", {"path": str(ckpt.path)})
     emb = ckpt.weight.get("enc_p.text_embedding.weight")
     model = SynthesizerTrn.from_hps(ckpt.hps, n_symbols=int(emb.shape[0]) if emb is not None else None, ops=ops)
-    load_into(model, synthesizer_state(ckpt.weight), ignore=IGNORABLE, what=f"SoVITS {ckpt.model_version} model")
+    load_into(model, synthesizer_state(ckpt.weight, dtype, device), ignore=IGNORABLE, what=f"SoVITS {ckpt.model_version} model")
     return model.eval()
 
 

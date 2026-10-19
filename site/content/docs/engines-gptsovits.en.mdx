@@ -54,7 +54,8 @@ Shared: `nn/ssl/hubert.py`, `nn/transformer/` (`bert`, `vits`, `dit`), `nn/flow/
   - G2PW runs in torch from its ONNX weights (identical pinyin);
   - NLTK's tagger and tokenizer, g2p_en, g2pk2, split-lang and fast-langdetect are ported, their data shipped;
   - Japanese needs `pyopenjtalk==0.4.1` (extra `mizuoto[gptsovits-ja]`): pyopenjtalk-plus changes OpenJTalk's rules, and 18 % of Japanese sentences came out differently with it. Korean needs MeCab-ko and jamo (extra `mizuoto[gptsovits-ko]`). The Japanese user dictionary is compiled once into the `gptsovits/open-jtalk` asset's `.mizuoto/` folder.
-- **HuBERT's float16 checkpoint** is loaded into float32 parameters and its weight norm folded in float32, as transformers computes it (folded in float16 the features differed by 1e-4). BERT is transformers' SDPA path, which transformers 4.57 picks for chinese-roberta.
+- **HuBERT's float16 checkpoint** is loaded into float32 parameters and its weight norm folded in float32, as transformers computes it (folded in float16 the features differed by 1e-4). On a GPU, where upstream calls `.half()` on the model and transformers computes the weight norm there at every call, it is folded on that device in float16, as it would be.
+- **SoVITS's weight norm on a GPU**: upstream keeps it on the v2 and v4/v5 synthesizers (the flow's and the decoder's WaveNet layers, the WN encoder) and computes it at every call on the model's device in its dtype (`.half()`); Mizuoto folds it at load, on that device in that dtype (`fold_weight_norm(…, device=)`). Folded on the CPU in float32 the weights differed in about a third of their values, and the output with them (44 dB against 0.1 for v2). BERT is transformers' SDPA path, which transformers 4.57 picks for chinese-roberta.
 - **Fine-tunes.** SoVITS checkpoints that pickle upstream's `utils.HParams` are read by a restricted unpickler (tensors, `OrderedDict`, `HParams` as a dict). v4/v5 LoRA files are merged without peft (W += B·A·α/r in float32, identical to peft's merge).
 
 ## Deviations
@@ -85,6 +86,8 @@ Method `speaker` (stages `text`, `speech`, `semantic`, `sovits`, `gpt`, `export`
 ## Parity
 
 Identical sample for sample to 0.1 on the CPU through the stack in all 15 cases: cloning (Chinese, English), without a transcript, two references with a speed, batches cut at every punctuation mark, serial decoding, streamed v2 (token chunks, SOLA) and v4 (fragments), v4/v5's batched and serial flow, and a voice with its own v2Pro weights. At module level also the text front end (476 texts in 11 language modes), HuBERT, BERT, the speaker-verification model, LoRA merging and every decoder path. Four more cases load each implementation's trained voice in the other; identical too. The contract suite passes (24 tests).
+
+On a GPU (an RTX 3090, fp16, 2026-10-19, stage by stage against 0.1): the codes, HuBERT, the text and style encoders are identical; v2 and v4 differ from 0.1 only by upstream's TorchScript WaveNet gate (`commons.fused_add_tanh_sigmoid_multiply`), which CUDA's fuser compiles after its first calls, so its bits depend on the shapes the process has already seen. With the gate scripted as upstream's (an experiment) both cases are identical sample for sample to 0.1; Mizuoto keeps the gate eager (v2 48.9 dB, v4 32.4 dB), for the reason VoxCPM's Snake runs eagerly ([VoxCPM](/docs/engines-voxcpm#deviations)): every request then gives the same bits. The T4 tier judges the two equivalent.
 
 ## Limitations
 

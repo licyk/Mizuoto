@@ -54,7 +54,8 @@ icon: MicVocal
   - G2PW 用其 ONNX 权重在 torch 中运行（拼音完全相同）；
   - NLTK 的词性标注器和分词器、g2p_en、g2pk2、split-lang 和 fast-langdetect 都已移植，数据随包提供；
   - 日语需要 `pyopenjtalk==0.4.1`（可选依赖 `mizuoto[gptsovits-ja]`）：pyopenjtalk-plus 修改了 OpenJTalk 的规则，用它时 18 % 的日语句子结果不同。韩语需要 MeCab-ko 和 jamo（可选依赖 `mizuoto[gptsovits-ko]`）。日语用户词典只编译一次，放在共享资源 `gptsovits/open-jtalk` 的 `.mizuoto/` 目录里。
-- **HuBERT 的 float16 检查点**载入 float32 参数，并在 float32 下折叠其权重归一化，与 transformers 的计算方式相同（在 float16 下折叠时特征相差 1e-4）。BERT 走 transformers 的 SDPA 路径，即 transformers 4.57 为 chinese-roberta 选用的路径。
+- **HuBERT 的 float16 检查点**载入 float32 参数，并在 float32 下折叠其权重归一化，与 transformers 的计算方式相同（在 float16 下折叠时特征相差 1e-4）。在 GPU 上，上游对模型调用 `.half()`，transformers 每次调用都在该设备上计算权重归一化，因此在该设备上以 float16 折叠，与其计算结果相同。
+- **SoVITS 在 GPU 上的权重归一化**：上游在 v2 和 v4/v5 的合成器上保留它（流模型和解码器的 WaveNet 层、WN 编码器），每次调用都在模型所在设备上按其 dtype（`.half()`）计算；Mizuoto 在加载时于该设备上按该 dtype 折叠（`fold_weight_norm(…, device=)`）。在 CPU 上以 float32 折叠时，约三分之一的权重值不同，输出也随之不同（v2 与 0.1 相比 44 dB）。BERT 走 transformers 的 SDPA 路径，即 transformers 4.57 为 chinese-roberta 选用的路径。
 - **微调权重。** 序列化了上游 `utils.HParams` 的 SoVITS 检查点由受限反序列化器读取（张量、`OrderedDict`，`HParams` 作为字典）。v4/v5 的 LoRA 文件不经 peft 合并（在 float32 下 W += B·A·α/r，与 peft 的合并结果相同）。
 
 ## 有意的差异
@@ -85,6 +86,8 @@ GPT 很小，瓶颈在内核启动：一步约 360 个小内核，过去还要�
 ## 对照结果
 
 在 CPU 上走完整链路，全部 15 个用例都与 0.1 逐采样相同：克隆（中文、英文）、无参考文本、两段参考音频加语速、在每个标点处切分的批次、串行解码、流式 v2（token 分块、SOLA）和 v4（片段）、v4/v5 的批量与串行流模型，以及带自己 v2Pro 权重的音色。模块层面还包括文本前端（11 种语言模式下的 476 条文本）、HuBERT、BERT、说话人验证模型、LoRA 合并和每条解码路径。另外四个用例让每种实现加载另一种实现训练出的音色，也完全相同。契约套件全部通过（24 项测试）。
+
+在 GPU 上（RTX 3090，fp16，2026-10-19，逐阶段与 0.1 对照）：码、HuBERT、文本编码器和风格编码器都相同；v2 和 v4 与 0.1 的差别只来自上游的 TorchScript WaveNet 门控（`commons.fused_add_tanh_sigmoid_multiply`）：CUDA 的融合器在它被调用几次之后才编译，所以它的比特取决于进程此前见过的形状。把门控像上游那样脚本化（仅作实验）后，两个用例都与 0.1 逐采样相同；Mizuoto 让门控保持即时执行（v2 48.9 dB，v4 32.4 dB），理由与 VoxCPM 的 Snake 以即时方式运行相同（[VoxCPM](/docs/engines-voxcpm#有意的差异)）：这样每个请求都得到相同的比特。T4 层级判定两者等价。
 
 ## 限制
 

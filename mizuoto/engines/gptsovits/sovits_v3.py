@@ -597,12 +597,14 @@ def load_synthesizer(
     device: str | torch.device = "cpu",
     dtype: torch.dtype = torch.float32,
     ops: Any = default_ops.default,
+    run_on: str | torch.device | None = None,
 ) -> SynthesizerTrnV3:
     """``TTS.init_vits_weights`` for v4/v5: the model from ``path`` in eval mode.
 
     A LoRA checkpoint (``lora_rank`` in it) needs ``lora_base``, the pretrained ``s2Gv4.pth``/``s2G<v5>.pth`` it was
     trained from. Weights are copied into float32 (upstream's model is float32; the files are float16), weight norm
-    folded and LoRA merged in float32, then the model is cast to ``dtype``.
+    folded and LoRA merged in float32, then the model is cast to ``dtype``. With ``run_on``, the device it will run
+    on, the weight norm is computed there in ``dtype``: upstream keeps it and computes it at every call on that device.
     """
     from mizuoto.runtime.loading import fold_weight_norm, load_into
 
@@ -619,7 +621,7 @@ def load_synthesizer(
         state = merge_lora(state, weights, int(rank))
     else:
         state = {k: v.float() if v.is_floating_point() else v for k, v in weights.items()}
-    state = fold_weight_norm(state)
+    state = fold_weight_norm(state, dtype=dtype if run_on is not None else None, device=run_on)
     n_symbols = int(state["enc_p.text_embedding.weight"].shape[0]) if "enc_p.text_embedding.weight" in state else 732
     model = SynthesizerTrnV3(version, n_symbols=n_symbols, ops=ops, **model_kwargs(config))
     load_into(model, state, ignore=IGNORABLE, what=f"SoVITS {version}")
