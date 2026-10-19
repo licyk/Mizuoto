@@ -271,24 +271,94 @@ def test_streaming_sends_the_audio_as_it_is_made(services, model, reference):
 
 
 @pytest.mark.parametrize("model", MODELS)
+def test_streamed_audio_starts_early(services, model, reference):
+    """A model that streams tokens sends its first audio well before the request ends (within three quarters of it:
+    CosyVoice waits for its first chunk of tokens and their lookahead). GPT-SoVITS v2 cuts its stream only at a pause
+    by default, as upstream does, so a sentence without one would come whole: its fixed-length chunks show the
+    streaming itself."""
+    from mizuoto.core.tts.service import StreamSink
+
+    info = services.models.get(model)
+    variant = services.engines.variant(info.engine, info.variant)
+    if "stream_audio" not in variant.capabilities or variant.stream_granularity != "token":
+        pytest.skip("the model does not stream tokens")
+    mode = voice_modes(services, model)[0]
+    run(services, request(services, model, mode, TEXTS["en"][1], "en", reference))  # loaded and warm
+    first: list[float] = []
+    sink = StreamSink()
+    sink.chunk = lambda samples, rate, segment: first.append(time.monotonic()) if not first else None
+    started = time.monotonic()
+    req = request(services, model, mode, " ".join([TEXTS["en"][0]] * 3), "en", reference)
+    if "fixed_length_chunk" in services.engines.manifest(info.engine).options:
+        req.engine_options = {"fixed_length_chunk": True}
+    job = services.tts.speak(req, wait=True, stream=sink)
+    ended = time.monotonic()
+    assert job.state == "completed", job.error
+    print(f"first audio {model}: {first[0] - started:.2f} of {ended - started:.2f} s")
+    assert first[0] - started < 0.75 * (ended - started)
+
+
+@pytest.mark.parametrize("model", MODELS)
+def test_unloading_frees_the_device(services, model, reference):
+    """After a request, unloading the model gives its device memory back (graphs, caches and weights alike)."""
+    import gc
+
+    import torch
+
+    info = services.models.get(model)
+    device = services.runtime.device_for(info.engine)
+    if not device.startswith("cuda") or not torch.cuda.is_available():
+        pytest.skip("measured on CUDA devices")
+    services.runtime.unload()
+    gc.collect()
+    baseline = torch.cuda.memory_allocated(device)
+    run(services, request(services, model, voice_modes(services, model)[0], TEXTS["en"][1], "en", reference))
+    loaded = torch.cuda.memory_allocated(device)
+    services.runtime.unload_model(model)
+    gc.collect()
+    left = torch.cuda.memory_allocated(device) - baseline
+    print(f"unload {model}: {(loaded - baseline) / 2**20:.0f} MB loaded, {left / 2**20:.1f} MB left")
+    assert left < 64 * 2**20, f"{left / 2**20:.0f} MB still allocated after unloading {model}"
+
+
+@pytest.mark.parametrize("model", MODELS)
+def test_another_engine_in_between_changes_nothing(services, model, reference):
+    """The same seeded request gives the same audio before and after another engine's model ran in the process."""
+    import numpy as np
+
+    info = services.models.get(model)
+    other = next((m for m in MODELS if services.models.get(m).engine != info.engine), None)
+    if other is None:
+        pytest.skip("no other engine's model is installed")
+    mode = voice_modes(services, model)[0]
+    req = request(services, model, mode, TEXTS["en"][1], "en", reference)
+    _, (before, _, _) = run(services, req)
+    run(services, request(services, other, voice_modes(services, other)[0], TEXTS["en"][1], "en", reference))
+    _, (after, _, _) = run(services, request(services, model, mode, TEXTS["en"][1], "en", reference))
+    assert np.array_equal(before, after)
+
+
+@pytest.mark.parametrize("model", MODELS)
 def test_cancel_stops_the_engine(services, model, reference):
     from mizuoto.core.events.models import JobUpdatedEvent
 
     mode = voice_modes(services, model)[0]
-    long_text = " ".join([TEXTS["en"][0]] * 6)
+    long_text = " ".join([TEXTS["en"][0]] * 12)  # long enough that a fast model on a GPU is still speaking when cancelled
     req = request(services, model, mode, long_text, "en", reference)
     req.segmentation = "engine"
     started = threading.Event()
     services.events.subscribe(lambda e: started.set() if isinstance(e, JobUpdatedEvent) and e.job.message == "Speaking" else None)
     job = services.tts.speak(req)
     assert started.wait(600), "the job never started speaking"
-    time.sleep(2.0)
+    time.sleep(0.5)
     cancelled_at = time.monotonic()
     services.jobs.cancel(job.id)
     while services.jobs.get(job.id).state not in ("cancelled", "failed", "completed"):
-        time.sleep(0.1)
-        assert time.monotonic() - cancelled_at < 30
+        time.sleep(0.05)
+        # Measured 0.1-0.2 s for every model on an RTX 3090; a CPU's step can take seconds.
+        assert time.monotonic() - cancelled_at < (2 if services.runtime.device_for(services.models.get(model).engine).startswith("cuda") else 30)
     assert services.jobs.get(job.id).state == "cancelled"
+    print(f"cancel latency {model}: {time.monotonic() - cancelled_at:.2f} s")
     # The engine stopped at its next cancel check and still answers.
     info = services.models.get(model)
     engine = services.runtime.engine(info.engine, services.runtime.device_for(info.engine))

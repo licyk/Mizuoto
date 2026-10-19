@@ -124,12 +124,15 @@ MIZUOTO_TEST_DEVICE=cpu python scripts/dev.py test-engines cosyvoice
 | `test_every_voice_mode_speaks_the_text` | Every declared voice mode, in English and Chinese, is audible (RMS &gt; 0.01), at the right rate, about as long as the text needs; with ASR installed, word error rate &lt; 0.35 |
 | `test_seed_repeats_and_segments` | The same seed repeats sample for sample; two sentences that do not fit one segment become two segments (or the engine handles long text itself) |
 | `test_streaming_sends_the_audio_as_it_is_made` | A model that streams: the sink hears its variant's granularity, gets more than one piece of one segment when it streams tokens, and the stored output is the pieces joined |
-| `test_cancel_stops_the_engine` | Cancelled mid-generation, the job is `cancelled` within 30 s, the model is still loaded, and the next request speaks normally |
+| `test_streamed_audio_starts_early` | A model that streams tokens sends its first audio within three quarters of a three-sentence request (GPT-SoVITS v2 with fixed-length chunks: it cuts at pauses by default) |
+| `test_unloading_frees_the_device` | On CUDA, unloading the model after a request leaves at most 64 MB more allocated than before it loaded (8 MB of cuBLAS workspace in practice) |
+| `test_another_engine_in_between_changes_nothing` | A seeded request gives the same audio before and after another engine's model ran in the process |
+| `test_cancel_stops_the_engine` | Cancelled mid-generation, the job is `cancelled` within 2 s on a GPU (30 s on a CPU), the model is still loaded, and the next request speaks normally |
 | `test_no_residue` | Digests of the process-wide state (working folder, environment, `sys.path`, RNGs, torch flags, log handlers, warning filters) are the same before and after many requests, taken with the `mizuoto.snapshot` op |
 
 The reference to clone comes from `MIZUOTO_TEST_REFERENCE` (plus `MIZUOTO_TEST_REFERENCE_TEXT`), else an installed preset or design model speaks one. Licence-gated engines take part only with `MIZUOTO_TEST_ACCEPT_LICENCES=1` (and their packages installed), and their licences are accepted in the temporary folder only.
 
-On the CPU, every catalogue model of every engine passes the contract suite. The whole suite takes hours (the larger the model, the slower), so when changing one engine, run that engine.
+On the CPU, every catalogue model of every engine passes the contract suite. On an RTX 3090 (2026-10-19) every installed model passed the four tests above, the licence-gated ones included: the first audio after 0.1–2.3 s of 0.9–6 s requests, cancelled in 0.05–0.6 s, and at most 8 MB left on the device after unloading. The whole suite takes hours (the larger the model, the slower), so when changing one engine, run that engine.
 
 ## Parity with the references
 

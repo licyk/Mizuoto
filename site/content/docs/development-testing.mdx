@@ -123,12 +123,15 @@ MIZUOTO_TEST_DEVICE=cpu python scripts/dev.py test-engines cosyvoice
 | `test_every_voice_mode_speaks_the_text` | 声明的每种音色模式，中英文都能发声（RMS &gt; 0.01）、采样率正确、时长与文本相称；装了 ASR 时词错误率 &lt; 0.35 |
 | `test_seed_repeats_and_segments` | 同一个种子逐采样复现；放不进一段的两句话切成两段（或由引擎自己处理长文本） |
 | `test_streaming_sends_the_audio_as_it_is_made` | 能流式输出的模型：接收端得到其变体的粒度；按 token 流式输出时，一段会分成多块到达；存储的输出就是这些块拼起来的结果 |
-| `test_cancel_stops_the_engine` | 生成中途取消，任务在 30 秒内变为 `cancelled`，模型仍在加载状态，下一个请求正常发声 |
+| `test_streamed_audio_starts_early` | 逐 token 流式输出的模型在一个三句话请求的前四分之三时间内送出首段音频（GPT-SoVITS v2 使用固定长度的分块：默认在停顿处切分） |
+| `test_unloading_frees_the_device` | 在 CUDA 上，请求之后卸载模型，已分配的显存比加载前最多多 64 MB（实际为 8 MB 的 cuBLAS 工作区） |
+| `test_another_engine_in_between_changes_nothing` | 同一个带种子的请求，在进程中运行了另一个引擎的模型前后，音频相同 |
+| `test_cancel_stops_the_engine` | 在生成途中取消，作业在 GPU 上 2 秒内（CPU 上 30 秒内）变为 `cancelled`，模型仍然加载，下一个请求正常朗读 |
 | `test_no_residue` | 进程级状态（工作目录、环境变量、`sys.path`、随机数生成器、torch 标志、日志处理器、警告过滤器）的摘要在多次请求前后相同，通过 `mizuoto.snapshot` 操作获取 |
 
 要克隆的参考音频来自 `MIZUOTO_TEST_REFERENCE`（加上 `MIZUOTO_TEST_REFERENCE_TEXT`），没有时由已安装的预设或设计模型说一段。需要接受许可的引擎只有在设了 `MIZUOTO_TEST_ACCEPT_LICENCES=1`（并装了它们的包）时才参加，许可只在临时目录里接受。
 
-在 CPU 上，每个引擎的全部目录模型都通过契约套件。整套跑完需要几个小时（模型越大越慢），所以改动某个引擎时只跑它。
+在 CPU 上，每个引擎的全部目录模型都通过契约套件。在 RTX 3090 上（2026-10-19），每个已安装的模型（含需要接受许可的引擎）都通过了上面四项新测试：0.9–6 秒的请求在 0.1–2.3 秒后送出首段音频，取消在 0.05–0.6 秒内完成，卸载后设备上最多留下 8 MB。整套跑完需要几个小时（模型越大越慢），所以改动某个引擎时只跑它。
 
 ## 与参照实现对照
 
