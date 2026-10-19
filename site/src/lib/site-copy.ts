@@ -12,10 +12,10 @@ const zhCN = {
     sections: ["首页", "功能", "使用流程", "特点", "安装"],
     hero: {
       eyebrow: "开源语音合成引擎的统一平台",
-      title: "七个语音合成引擎，",
+      title: "八个语音合成引擎，",
       titleAccent: "同一个平台",
       description:
-        "Mizuoto 把 CosyVoice、F5-TTS、GPT-SoVITS、OmniVoice、Qwen3-TTS、Fish Speech 和 IndexTTS 收进一个网页界面、一套命令行和一个 HTTP 接口：合成语音、克隆与设计音色、转换与编辑语音、朗读长篇作品，并用你自己的录音微调模型。",
+        "Mizuoto 把 CosyVoice、F5-TTS、GPT-SoVITS、OmniVoice、Qwen3-TTS、VoxCPM、Fish Speech 和 IndexTTS 收进一个网页界面、一套命令行和一个 HTTP 接口：合成语音、克隆与设计音色、转换与编辑语音、朗读长篇作品，并用你自己的录音微调模型。",
       start: "开始使用",
       learn: "了解",
       platformsLabel: "支持的平台",
@@ -59,11 +59,11 @@ const zhCN = {
       steps: [
         {
           title: "安装 Mizuoto",
-          description: "从 PyPI、Docker 镜像或源代码安装，然后运行 mizuoto webui。",
+          description: "先装好适合本机硬件的 torch，再从 PyPI 安装 Mizuoto（也可用 Docker 镜像或源代码），然后运行 mizuoto webui。",
         },
         {
-          title: "安装引擎与模型",
-          description: "首次运行的引导会为引擎建立独立的 Python 环境（含 PyTorch），再下载并校验一个模型。",
+          title: "下载模型",
+          description: "引擎都已内置，无需单独安装；选一个模型，Mizuoto 会下载并校验它。演示引擎不需要下载，可以先用它熟悉界面。",
         },
         {
           title: "合成",
@@ -77,15 +77,16 @@ const zhCN = {
     },
     highlights: {
       title: "引擎各不相同，用法始终一致",
-      description: "保留每个引擎的上游代码，把环境、下载、排队与格式的差异交给 Mizuoto 处理。",
+      description: "每个引擎都原生移植并忠实复现上游的输出，下载、显存、排队与格式的差异交给 Mizuoto 处理。",
       items: [
         {
-          title: "一种请求，七个引擎",
+          title: "一种请求，八个引擎",
           description: "无论由哪个引擎处理，请求、音色、参数、任务与结果的形式都相同；不支持的选项在任务开始前就会指出。",
         },
         {
-          title: "每个引擎一个独立环境",
-          description: "Mizuoto 为每个引擎自动建立 Python 环境并安装匹配显卡的 PyTorch，引擎之间的依赖互不冲突；Mizuoto 本身从不导入 torch。",
+          title: "所有引擎原生运行，只需一个环境",
+          description:
+            "每个引擎都移植到 Mizuoto 基于 torch 的运行时上，在服务器进程内运行：只有一个 Python 环境，不必为引擎单独搭建；在 CPU 上与上游的输出逐样本一致。显存不够时，权重从内存流式加载，而不是加载失败。",
         },
         {
           title: "网页、命令行与接口同源",
@@ -104,7 +105,7 @@ const zhCN = {
     install: {
       title: "按文档完成安装",
       description:
-        "Mizuoto 可以从 PyPI 安装，也可以使用 Docker 镜像或源代码。安装文档会说明系统要求、适合本机显卡的 torch 与每种方式的完整步骤；Fish Speech 与 IndexTTS 需先阅读并接受各自的许可证。",
+        "Mizuoto 可以从 PyPI 安装，也可以使用 Docker 镜像或源代码。安装文档会说明系统要求、适合本机硬件的 torch 与每种方式的完整步骤；Fish Speech 与 IndexTTS 需先阅读并接受各自的许可证。",
       link: "查看安装文档",
       href: "/docs/installation#安装方式",
     },
@@ -154,10 +155,10 @@ const en = {
     sections: ["Home", "Features", "Workflow", "Highlights", "Install"],
     hero: {
       eyebrow: "One platform for open text-to-speech engines",
-      title: "Seven speech engines,",
+      title: "Eight speech engines,",
       titleAccent: "one platform",
       description:
-        "Mizuoto puts CosyVoice, F5-TTS, GPT-SoVITS, OmniVoice, Qwen3-TTS, Fish Speech and IndexTTS behind one web UI, one command line and one HTTP API: speak, clone and design voices, convert and edit speech, read long-form projects and fine-tune models on your own recordings.",
+        "Mizuoto puts CosyVoice, F5-TTS, GPT-SoVITS, OmniVoice, Qwen3-TTS, VoxCPM, Fish Speech and IndexTTS behind one web UI, one command line and one HTTP API: speak, clone and design voices, convert and edit speech, read long-form projects and fine-tune models on your own recordings.",
       start: "Get started",
       learn: "Explore ",
       platformsLabel: "Supported platforms",
@@ -207,12 +208,13 @@ const en = {
       steps: [
         {
           title: "Install Mizuoto",
-          description: "From PyPI, the Docker image or a source checkout; then run mizuoto webui.",
+          description:
+            "Install torch for your hardware and Mizuoto from PyPI (or use the Docker image or a source checkout), then run mizuoto webui.",
         },
         {
-          title: "Add an engine and a model",
+          title: "Download a model",
           description:
-            "The first-run guide builds the engine its own Python environment, PyTorch included, then downloads and verifies a model.",
+            "Every engine is built in, with nothing to install per engine; pick a model and Mizuoto downloads and verifies it. The demo engine needs no download, so you can look around first.",
         },
         {
           title: "Speak",
@@ -229,17 +231,17 @@ const en = {
     highlights: {
       title: "Different engines, one way of working",
       description:
-        "Each engine keeps its upstream code; Mizuoto takes care of environments, downloads, queues and formats.",
+        "Each engine is a native port that reproduces its upstream's output; Mizuoto takes care of downloads, GPU memory, queues and formats.",
       items: [
         {
-          title: "One request, seven engines",
+          title: "One request, eight engines",
           description:
             "Requests, voices, parameters, jobs and results look the same whichever engine serves them; what a model cannot do is reported before any job starts.",
         },
         {
-          title: "An environment of its own for each engine",
+          title: "Every engine native, in one environment",
           description:
-            "Mizuoto builds each engine a Python environment with the PyTorch build for your graphics card, so their dependencies never clash; Mizuoto itself never imports torch.",
+            "Each engine is ported onto Mizuoto's own runtime over torch and runs in the server's process: one Python environment, nothing to build per engine, and on the CPU the same output as upstream, sample for sample. When GPU memory runs short, weights stream from RAM instead of the load failing.",
         },
         {
           title: "Web UI, command line and API from one core",
@@ -261,7 +263,7 @@ const en = {
     install: {
       title: "Install with the guide",
       description:
-        "Install Mizuoto from PyPI, or use the Docker image or a source checkout. The installation guide covers the requirements, the torch build for your graphics card and every way step by step; Fish Speech and IndexTTS need their licences read and accepted first.",
+        "Install Mizuoto from PyPI, or use the Docker image or a source checkout. The installation guide covers the requirements, the torch build for your hardware and every way step by step; Fish Speech and IndexTTS need their licences read and accepted first.",
       link: "Read the installation guide",
       href: "/docs/installation#ways-to-install",
     },
