@@ -558,7 +558,7 @@ mizuoto config set engines.cosyvoice.device cuda:1
 
 | 选项 | 说明 | 默认值 |
 | --- | --- | --- |
-| `--host <str>` | 绑定的地址 | 设置 `server.host`（`127.0.0.1`） |
+| `--host <str>` | 绑定的地址（`0.0.0.0`：所有 IPv4 网卡；`::`：所有网卡，IPv4 和 IPv6 都可连接） | 设置 `server.host`（`127.0.0.1`） |
 | `--port <int>` | 第一个尝试的端口，`[0, 65535]`；`0` 由系统任选 | 设置 `server.port`（`7869`） |
 | `--strict-port / --no-strict-port` | 端口被占用时直接失败，而不是尝试下一个 | 设置 `server.strict_port`（关） |
 | `--open / --no-open` | 在浏览器中打开网页界面 | 设置 `server.open_browser`（开） |

@@ -558,7 +558,7 @@ Start the server and open the web UI.
 
 | Option | Meaning | Default |
 | --- | --- | --- |
-| `--host <str>` | Address to bind | setting `server.host` (`127.0.0.1`) |
+| `--host <str>` | Address to bind (`0.0.0.0`: every IPv4 interface; `::`: every interface, IPv4 and IPv6) | setting `server.host` (`127.0.0.1`) |
 | `--port <int>` | First port to try, `[0, 65535]`; `0` picks any | setting `server.port` (`7869`) |
 | `--strict-port / --no-strict-port` | Fail instead of trying the next port | setting `server.strict_port` (off) |
 | `--open / --no-open` | Open the web UI in a browser | setting `server.open_browser` (on) |

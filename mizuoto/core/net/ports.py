@@ -21,6 +21,19 @@ def _family(host: str) -> socket.AddressFamily:
     return socket.AF_INET6 if ":" in host else socket.AF_INET
 
 
+def _socket(host: str) -> socket.socket:
+    """A TCP socket for ``host``. On the IPv6 wildcard (``::``) it also takes IPv4 connections: ``IPV6_V6ONLY`` is off by
+    default on Linux but on by default on Windows, so it is turned off explicitly (as ``socket.create_server``'s
+    ``dualstack_ipv6`` does)."""
+    sock = socket.socket(_family(host), socket.SOCK_STREAM)
+    if host.strip("[]") == "::" and hasattr(socket, "IPV6_V6ONLY"):
+        try:
+            sock.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 0)
+        except OSError:
+            pass  # a system without dual-stack sockets: IPv6 only
+    return sock
+
+
 def bind_first_free_port(host: str, start_port: int, attempts: int = MAX_PORT_ATTEMPTS, strict: bool = False) -> socket.socket:
     """Bind a listening socket to the first free port at or above ``start_port``.
 
@@ -28,7 +41,7 @@ def bind_first_free_port(host: str, start_port: int, attempts: int = MAX_PORT_AT
     """
     if start_port == 0:
         # Let the operating system pick any free port, which cannot collide.
-        sock = socket.socket(_family(host), socket.SOCK_STREAM)
+        sock = _socket(host)
         sock.bind((host, 0))
         sock.listen(2048)
         sock.setblocking(False)
@@ -38,7 +51,7 @@ def bind_first_free_port(host: str, start_port: int, attempts: int = MAX_PORT_AT
     last_port = start_port if strict else min(start_port + max(attempts, 1) - 1, 65535)
     last_error: OSError | None = None
     for port in range(start_port, last_port + 1):
-        sock = socket.socket(_family(host), socket.SOCK_STREAM)
+        sock = _socket(host)
         if hasattr(socket, "SO_EXCLUSIVEADDRUSE"):
             # Windows: stop another process from binding the same address and port.
             sock.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)  # type: ignore[attr-defined]
