@@ -41,7 +41,7 @@ IndexTTS——共用一个网页界面、一个命令行和一套 HTTP 接口：
 请求、音色、参数、任务与结果的形式都相同。显存由所有引擎统一管理：放不下的模型部分加载，其余权重从内存流式加载。
 
 - **官网：** <https://mizuoto.netlify.app>
-- **文档：** [`site/`](site/content/docs/index.mdx) 中的文档站点（中文与英文；`python scripts/dev.py site-dev` 可在本地预览）
+- **文档：** <https://mizuoto.netlify.app/docs/>（中文与英文；源文件在 `site/`，`python scripts/dev.py site-dev` 可在本地预览）
 
 ## 功能
 
@@ -237,13 +237,13 @@ mizuoto remote use qwen3tts gpu-box --device cuda:0
 
 ## 文档
 
-文档站点的源文件在 [`site/content/docs/`](site/content/docs/)，每页都有中文（`.mdx`）与英文（`.en.mdx`）版本：
+文档发布在 <https://mizuoto.netlify.app/docs/>，每页都有中文与英文版本（源文件在 `site/content/docs/`，`.mdx` 与 `.en.mdx`）：
 
-- **开始**：[快速开始](site/content/docs/quick-start.mdx)、[安装](site/content/docs/installation.mdx)、[首次运行](site/content/docs/first-run.mdx)
+- **开始**：[快速开始](https://mizuoto.netlify.app/docs/quick-start/)、[安装](https://mizuoto.netlify.app/docs/installation/)、[首次运行](https://mizuoto.netlify.app/docs/first-run/)
 - 网页界面各页面的**使用教程**、**命令行**及其**配置**
-- **进阶**：[引擎](site/content/docs/advanced-engines.mdx)、[HTTP 接口](site/content/docs/advanced-api.mdx)、[远程主机](site/content/docs/advanced-remote.mdx)、[性能](site/content/docs/advanced-performance.mdx)、[下载](site/content/docs/advanced-downloads.mdx)、[Docker](site/content/docs/advanced-docker.mdx)、[嵌入](site/content/docs/advanced-embed.mdx)、[常见问题](site/content/docs/advanced-faq.mdx)
-- **引擎参考**：各引擎如何复现其上游（[概览](site/content/docs/engines.mdx)）
-- **开发文档**：[架构](site/content/docs/development-architecture.mdx)、[开发约定](site/content/docs/development-conventions.mdx)、[运行时](site/content/docs/development-runtime.mdx)、[显存与内存](site/content/docs/development-memory.mdx)、[加速](site/content/docs/development-acceleration.mdx)、[接入引擎](site/content/docs/development-engine.mdx)、[测试](site/content/docs/development-testing.mdx)、[发布](site/content/docs/development-release.mdx)
+- **进阶**：[引擎](https://mizuoto.netlify.app/docs/advanced-engines/)、[HTTP 接口](https://mizuoto.netlify.app/docs/advanced-api/)、[远程主机](https://mizuoto.netlify.app/docs/advanced-remote/)、[性能](https://mizuoto.netlify.app/docs/advanced-performance/)、[下载](https://mizuoto.netlify.app/docs/advanced-downloads/)、[Docker](https://mizuoto.netlify.app/docs/advanced-docker/)、[嵌入](https://mizuoto.netlify.app/docs/advanced-embed/)、[常见问题](https://mizuoto.netlify.app/docs/advanced-faq/)
+- **引擎参考**：各引擎如何复现其上游（[概览](https://mizuoto.netlify.app/docs/engines/)）
+- **开发文档**：[架构](https://mizuoto.netlify.app/docs/development-architecture/)、[开发约定](https://mizuoto.netlify.app/docs/development-conventions/)、[运行时](https://mizuoto.netlify.app/docs/development-runtime/)、[显存与内存](https://mizuoto.netlify.app/docs/development-memory/)、[加速](https://mizuoto.netlify.app/docs/development-acceleration/)、[接入引擎](https://mizuoto.netlify.app/docs/development-engine/)、[测试](https://mizuoto.netlify.app/docs/development-testing/)、[发布](https://mizuoto.netlify.app/docs/development-release/)
 
 `python scripts/dev.py site` 构建站点，`site-dev` 以热重载方式预览（都需要 bun）。
 
@@ -255,7 +255,7 @@ python scripts/dev.py dev       # 同时运行接口与前端开发服务器（h
 python scripts/dev.py test-engines qwen3tts      # 用已安装的模型运行契约测试
 ```
 
-[AGENTS.md](AGENTS.md) 是代码地图，也是贡献者与编码代理的工作规则；[开发约定](site/content/docs/development-conventions.mdx)
+[AGENTS.md](AGENTS.md) 是代码地图，也是贡献者与编码代理的工作规则；[开发约定](https://mizuoto.netlify.app/docs/development-conventions/)
 一页有完整说明。
 
 ## 构建

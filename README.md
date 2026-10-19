@@ -43,8 +43,8 @@ them. GPU memory is managed for all of them together: a model that does not fit 
 weights streamed from RAM.
 
 - **Website:** <https://mizuoto.netlify.app>
-- **Documentation:** the site in [`site/`](site/content/docs/index.en.mdx) (English and Chinese;
-  `python scripts/dev.py site-dev` serves it locally)
+- **Documentation:** <https://mizuoto.netlify.app/docs/> (English and Chinese; its sources are in `site/`, and
+  `python scripts/dev.py site-dev` serves them locally)
 
 ## Features
 
@@ -249,14 +249,14 @@ do locally; training stays on this machine.
 
 ## Documentation
 
-The documentation site's sources are in [`site/content/docs/`](site/content/docs/), each page in Chinese (`.mdx`) and
-English (`.en.mdx`):
+The documentation is published at <https://mizuoto.netlify.app/docs/>, every page in Chinese and English (its sources: `site/content/docs/`,
+`.mdx` and `.en.mdx`):
 
-- **Getting started**: [quick start](site/content/docs/quick-start.en.mdx), [installation](site/content/docs/installation.en.mdx), [first run](site/content/docs/first-run.en.mdx)
+- **Getting started**: [quick start](https://mizuoto.netlify.app/docs/quick-start/), [installation](https://mizuoto.netlify.app/docs/installation/), [first run](https://mizuoto.netlify.app/docs/first-run/)
 - **Guides** to every screen of the web UI, the **command line** and its **configuration**
-- **Advanced**: [engines](site/content/docs/advanced-engines.en.mdx), [HTTP API](site/content/docs/advanced-api.en.mdx), [remote hosts](site/content/docs/advanced-remote.en.mdx), [performance](site/content/docs/advanced-performance.en.mdx), [downloads](site/content/docs/advanced-downloads.en.mdx), [Docker](site/content/docs/advanced-docker.en.mdx), [embedding](site/content/docs/advanced-embed.en.mdx), [FAQ](site/content/docs/advanced-faq.en.mdx)
-- **Engine reference**: how each engine reproduces its upstream ([overview](site/content/docs/engines.en.mdx))
-- **Development**: [architecture](site/content/docs/development-architecture.en.mdx), [conventions](site/content/docs/development-conventions.en.mdx), [runtime](site/content/docs/development-runtime.en.mdx), [memory](site/content/docs/development-memory.en.mdx), [acceleration](site/content/docs/development-acceleration.en.mdx), [adding an engine](site/content/docs/development-engine.en.mdx), [testing](site/content/docs/development-testing.en.mdx), [release](site/content/docs/development-release.en.mdx)
+- **Advanced**: [engines](https://mizuoto.netlify.app/docs/advanced-engines/), [HTTP API](https://mizuoto.netlify.app/docs/advanced-api/), [remote hosts](https://mizuoto.netlify.app/docs/advanced-remote/), [performance](https://mizuoto.netlify.app/docs/advanced-performance/), [downloads](https://mizuoto.netlify.app/docs/advanced-downloads/), [Docker](https://mizuoto.netlify.app/docs/advanced-docker/), [embedding](https://mizuoto.netlify.app/docs/advanced-embed/), [FAQ](https://mizuoto.netlify.app/docs/advanced-faq/)
+- **Engine reference**: how each engine reproduces its upstream ([overview](https://mizuoto.netlify.app/docs/engines/))
+- **Development**: [architecture](https://mizuoto.netlify.app/docs/development-architecture/), [conventions](https://mizuoto.netlify.app/docs/development-conventions/), [runtime](https://mizuoto.netlify.app/docs/development-runtime/), [memory](https://mizuoto.netlify.app/docs/development-memory/), [acceleration](https://mizuoto.netlify.app/docs/development-acceleration/), [adding an engine](https://mizuoto.netlify.app/docs/development-engine/), [testing](https://mizuoto.netlify.app/docs/development-testing/), [release](https://mizuoto.netlify.app/docs/development-release/)
 
 `python scripts/dev.py site` builds the site and `site-dev` serves it with hot reload (both need bun).
 
@@ -269,7 +269,7 @@ python scripts/dev.py test-engines qwen3tts      # the contract suite against in
 ```
 
 [AGENTS.md](AGENTS.md) is the map of the code and the working rules for contributors and coding agents; the
-[conventions](site/content/docs/development-conventions.en.mdx) page explains them in full.
+[conventions](https://mizuoto.netlify.app/docs/development-conventions/) page explains them in full.
 
 ## Build
 
