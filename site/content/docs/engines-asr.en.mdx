@@ -53,6 +53,8 @@ One phase per transcription: the whole model, the decoder marked `hot` (it runs 
 
 0.1's transcripts exactly on the CPU in fp32: text, segments, language and every window's tokens on 57 corpus clips (language detected or given) and 6 clips of 50–124 s; at module level also the features and `_decode_asr` (3000 fuzzed windows). The stack's parity cases that transcribe their reference (a Qwen3-TTS clone and a CosyVoice 2 clone) are identical as well, so the contract suite's word error rates are unchanged.
 
+Through the stack, `scripts/parity/cases/asr.jsonl` (seven clips, 4–120 s, English, Chinese and mixed, language detected or given) gives 0.1's transcripts exactly on the CPU in fp32 and on a GPU (an RTX 3090, 2026-10-19): language, text and every segment's timestamps.
+
 ## Limitations
 
 - One model in the catalogue; speech recognition is used inside Mizuoto, not offered as a synthesis model or through `GET /v1/models`.

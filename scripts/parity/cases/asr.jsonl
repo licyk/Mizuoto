@@ -1,0 +1,9 @@
+// ASR (Whisper large-v3-turbo) through services.asr.transcribe: the transcript (language, text, timestamped segments).
+// Each clip appears once: transcripts are cached by the audio's SHA-256, so a second case on a clip would read the first.
+{"id": "en-narrator-auto", "kind": "transcribe", "request": {"model": "asr/whisper-large-v3-turbo", "audio": {"ref": "en-narrator"}}}
+{"id": "en-vivian-en", "kind": "transcribe", "request": {"model": "asr/whisper-large-v3-turbo", "audio": {"ref": "en-vivian"}, "language": "en"}}
+{"id": "zh-serena-auto", "kind": "transcribe", "request": {"model": "asr/whisper-large-v3-turbo", "audio": {"ref": "zh-serena"}}}
+{"id": "long-zh-60-zh", "kind": "transcribe", "request": {"model": "asr/whisper-large-v3-turbo", "audio": {"file": "debug/asr/long/long-zh-60.wav"}, "language": "zh"}}
+{"id": "long-en-75", "kind": "transcribe", "request": {"model": "asr/whisper-large-v3-turbo", "audio": {"file": "debug/asr/long/long-en-75.wav"}, "language": "en"}}
+{"id": "long-zh-110", "kind": "transcribe", "request": {"model": "asr/whisper-large-v3-turbo", "audio": {"file": "debug/asr/long/long-zh-110.wav"}}}
+{"id": "long-mixed-120", "kind": "transcribe", "request": {"model": "asr/whisper-large-v3-turbo", "audio": {"file": "debug/asr/long/long-mixed-120.wav"}}}

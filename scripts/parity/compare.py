@@ -9,6 +9,8 @@ For every case folder under ``<workspace>/fixtures/<engine>/`` holding both ``<a
   absolute difference and the SNR of b against a.
 - **Behaviour:** job state and error code, voice mode, segments, applied parameters, warnings,
   output sample rate and, for cases with ``stream``, the streamed chunks' lengths.
+- **Transcripts** (``kind: transcribe`` cases, the ASR engine): the language, the text and every segment with its
+  timestamps, exactly; such a case passes when they are all equal.
 
 Prints a Markdown table, and writes it with ``--report``. Exits non-zero when any case differs beyond
 ``--tolerance`` (default 1e-4, the T3 bound), or in behaviour.
@@ -46,6 +48,7 @@ def behaviour(rec: dict[str, Any]) -> dict[str, Any]:
         "warnings": sorted(set(meta.get("warnings") or [])),
         "sample_rate": out.get("sample_rate"),
         "stream_chunks": rec.get("stream_chunks"),
+        "transcript": {k: v for k, v in (rec.get("transcript") or {}).items() if k != "sha256"} or None,
     }
 
 
@@ -75,7 +78,9 @@ def compare_case(folder: Path, a: str, b: str, tolerance: float) -> dict[str, An
             row["identical"] = False
             row["max_abs"] = None
     max_abs = row.get("max_abs")
-    row["pass"] = not diffs and ((max_abs is not None and max_abs <= tolerance) or (ba["state"] != "completed" and ba == bb))
+    if ba["transcript"] is not None:
+        row["identical"] = not diffs
+    row["pass"] = not diffs and ((max_abs is not None and max_abs <= tolerance) or (ba["state"] != "completed" and ba == bb) or ba["transcript"] is not None)
     return row
 
 

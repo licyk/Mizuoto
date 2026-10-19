@@ -162,6 +162,8 @@ def run_case(s: Any, case: dict[str, Any], table: dict[str, Any]) -> tuple[Any, 
     StreamSink = package("core.tts.service").StreamSink
 
     kind = case.get("kind", "speak")
+    if kind == "transcribe":
+        return None, transcribe_case(s, case, table)
     copy_voices(s, case.get("voices", []))
     body = resolve(json.loads(json.dumps(case["request"])), table)
     body.setdefault("output", {}).update({"format": "wav", "normalize": "none"})
@@ -202,6 +204,26 @@ def run_case(s: Any, case: dict[str, Any], table: dict[str, Any]) -> tuple[Any, 
     out = s.outputs.get(job.result["output_id"])
     record["output"] = out.model_dump(mode="json")
     return Path(out.path), record
+
+
+def transcribe_case(s: Any, case: dict[str, Any], table: dict[str, Any]) -> dict[str, Any]:
+    """A ``kind: transcribe`` case: ``services.asr.transcribe`` of ``request.audio`` (``{"ref": id}`` or ``{"file": path
+    under the workspace}``) with ``request.language`` (none: Whisper detects it), recorded as the transcript."""
+    request = case["request"]
+    audio = request["audio"]
+    path = Path(resolve(audio, table)["path"]) if "ref" in audio else WORKSPACE / audio["file"]
+    started = time.perf_counter()
+    try:
+        transcript = s.asr.transcribe(path, request.get("language"), request.get("model"))
+    except Exception as exc:
+        return {"case": case, "wall_seconds": time.perf_counter() - started, "job_state": "failed", "error": {"code": getattr(exc, "code", None), "message": str(exc)}}
+    return {
+        "case": case,
+        "wall_seconds": time.perf_counter() - started,
+        "job_state": "completed",
+        "error": None,
+        "transcript": transcript.model_dump(mode="json", exclude={"created_at"}),
+    }
 
 
 def _keys(tree: dict[str, Any], prefix: str = "") -> Iterator[str]:
@@ -265,6 +287,8 @@ def cmd_run(args: argparse.Namespace) -> int:
                 shutil.copyfile(path, folder / f"{name}.wav")
                 runs = ", ".join(f"{w:.1f}s" for w in record.get("wall_seconds_runs", [record["wall_seconds"]]))
                 print(f"    ok {record['output']['duration']:.2f}s in {runs}", flush=True)
+            elif record.get("transcript") is not None:
+                print(f"    ok {record['transcript']['language']}: {record['transcript']['text'][:60]!r} in {record['wall_seconds']:.1f}s", flush=True)
             else:
                 failures += 1
                 print(f"    {record['job_state']}: {(record.get('error') or {}).get('message')}", flush=True)

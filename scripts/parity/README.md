@@ -38,7 +38,9 @@ CUDA_VISIBLE_DEVICES= $W/native-env/bin/python scripts/parity/stack.py run scrip
 ```
 
 - `cases/<engine>.jsonl` holds one JSON object per line. `request` is a `SpeakRequest`
-  (`kind: convert|edit` for the other two requests). Voices name corpus clips as `{"ref": "<id>"}` (and
+  (`kind: convert|edit` for the other two requests; `kind: transcribe` for ASR, whose `request` is `{model, audio,
+  language}` with `audio` a corpus clip `{"ref": id}` or `{"file": path under the workspace}`, recorded and compared as
+  the transcript: language, text and timestamped segments, exactly). Voices name corpus clips as `{"ref": "<id>"}` (and
   `"transcript": null` to drop the transcript); a source clip is `{"source_ref": "<id>"}`.
   `settings` holds per-case settings, restored after the case.
   `stream: true` runs the case with a stream sink and records the streamed chunks' lengths (compared as
