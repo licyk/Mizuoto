@@ -136,6 +136,8 @@ At the top of **Cast**, the **Project** part holds the project's **Model**, **Pr
 - **How it speaks**: a style instruction for each of this speaker's lines (only when the model takes instructions).
 - **Parameters**: the same panel as in Speak; it shows **N set** when you changed some.
 
+A speaker's settings stay when its model (or the project's) changes, so choosing the first model again brings them back. Each line's request carries only the style instruction, parameters and engine options its model takes; the rest are kept but not used. A kept instruction the model does not follow (or not with this voice) says so under the field, and **Add a style instruction** is not offered for that speaker's lines. A preset speaker or a language the new model lacks is marked on the card: those decide what is said, so the lines fail until you choose again.
+
 **Add a speaker** adds one. The project's own language is set under **Project** on the same tab (**Language**; **Each model decides** leaves it to each model), or with `mizuoto project set --lang`.
 
 <Callout type="info" title="Changing a speaker makes lines stale">

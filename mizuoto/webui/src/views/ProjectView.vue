@@ -160,6 +160,11 @@ const stateOf = (l: DraftLine) => {
   if (s.text !== l.text && l.text.trim()) return 'stale';
   return s.state;
 };
+/** Whether a line's speaker's model follows no instruction (as the server last reported): it is kept, not sent. */
+const instructUnused = (l: DraftLine) => {
+  const speaker = l.speaker ?? draft.value?.speakers[0]?.id;
+  return !!speaker && !!server.value?.instruct_unused.includes(speaker);
+};
 const counts = (c: DraftChapter) => {
   const done = c.lines.filter((l) => stateOf(l) === 'rendered').length;
   return `${done}/${c.lines.length}`;
@@ -234,7 +239,7 @@ function lineMenu(l: DraftLine): MenuItem[] {
   return [
     { id: 'insert', label: t('projects.insertBelow'), icon: icons.Plus },
     { id: 'paragraph', label: l.ends_paragraph ? t('projects.joinParagraph') : t('projects.endParagraph'), icon: icons.Split },
-    ...(l.instruct || instructOpen.value[l.id] ? [] : [{ id: 'instruct', label: t('projects.addInstruct'), icon: icons.Sparkles }]),
+    ...(l.instruct || instructOpen.value[l.id] || instructUnused(l) ? [] : [{ id: 'instruct', label: t('projects.addInstruct'), icon: icons.Sparkles }]),
     { id: 'up', label: t('projects.moveUp'), icon: icons.ArrowUp, disabled: i <= 0 },
     { id: 'down', label: t('projects.moveDown'), icon: icons.ArrowDown, disabled: !c || i >= c.lines.length - 1 },
     { id: 'speak', label: t('projects.tryInSpeak'), icon: icons.Speech },
@@ -457,6 +462,7 @@ function remove() {
                           <TextField
                             :model-value="l.instruct ?? ''"
                             :label="t('projects.lineInstruct')"
+                            :supporting-text="instructUnused(l) ? t('projects.instructUnused') : ''"
                             class="grow"
                             @update:model-value="
                               (l.instruct = String($event ?? '') || null),
@@ -520,6 +526,7 @@ function remove() {
             :project-model="draft.model ?? null"
             :narrator="i === 0"
             :lines="linesOf(s, i)"
+            :instruct-unused="!!server?.instruct_unused.includes(s.id)"
             @change="changed"
             @remove="removing = i"
           />

@@ -5,14 +5,18 @@ import type { SpeakerInput } from '@/api/types';
 import ModelPicker from '@/components/ModelPicker.vue';
 import ParamsPanel from '@/components/ParamsPanel.vue';
 import VoicePicker from '@/components/VoicePicker.vue';
+import { fieldsFor, speaks } from '@/components/speakForm';
 import { useI18n } from '@/i18n';
 import { AppButton, AxisPanes, Badge, ExpansionPanel, IconButton, SegmentedButton, SelectField, Surface, TextField, icons } from '@/ui';
 
 /**
  * One member of a project's cast: its name, the model it speaks with (the project's when it names
- * none), and its voice: a library voice, a preset speaker of the model, or the model's own.
+ * none), and its voice: a library voice, a preset speaker of the model, or the model's own. Its
+ * settings are kept when its model changes; the server sends each line's model only the instruction,
+ * parameters and options it takes (``instructUnused``: it takes no instruction), and the fields say
+ * what the model does not take.
  */
-const props = defineProps<{ projectModel: string | null; narrator: boolean; lines: number }>();
+const props = defineProps<{ projectModel: string | null; narrator: boolean; lines: number; instructUnused?: boolean }>();
 const speaker = defineModel<SpeakerInput>({ required: true });
 const emit = defineEmits<{ change: []; remove: [] }>();
 const { t, tOr } = useI18n();
@@ -60,7 +64,14 @@ const languageOptions = computed(() => [{ value: '', label: t('projects.projectL
 const params = computed({ get: () => (speaker.value.params ?? {}) as Record<string, unknown>, set: (v) => update({ params: v as SpeakerInput['params'] }) });
 const options = computed({ get: () => (speaker.value.engine_options ?? {}) as Record<string, unknown>, set: (v) => update({ engine_options: v }) });
 const paramsOpen = ref(false);
-const changedParams = computed(() => Object.values(speaker.value.params ?? {}).filter((v) => v !== null && v !== undefined).length + Object.keys(speaker.value.engine_options ?? {}).length);
+// Only what this model takes: the rest is kept for another model and not sent.
+const changedParams = computed(() => {
+  const s = spec.data.value;
+  if (!s) return 0;
+  return Object.keys(fieldsFor(s, 'common', speaker.value.params ?? {})).length + Object.keys(fieldsFor(s, 'option', speaker.value.engine_options ?? {})).length;
+});
+const presetHint = computed(() => (speaker.value.preset && spec.data.value && !spec.data.value.speakers.includes(speaker.value.preset) ? t('projects.presetUnknown') : ''));
+const languageHint = computed(() => (speaker.value.language && spec.data.value && !speaks(spec.data.value.languages, speaker.value.language) ? t('projects.languageUnsupported') : ''));
 </script>
 
 <template>
@@ -79,12 +90,18 @@ const changedParams = computed(() => Object.values(speaker.value.params ?? {}).f
     <!-- Each way to give a voice is a pane; a change slides the way the control moved. -->
     <AxisPanes :value="kind" :order="KINDS">
       <div v-if="kind === 'library'" key="library"><VoicePicker v-model="voice" :model="model" /></div>
-      <div v-else-if="kind === 'preset'" key="preset"><SelectField v-model="preset" :label="t('speak.speaker')" :options="speakerOptions" /></div>
+      <div v-else-if="kind === 'preset'" key="preset"><SelectField v-model="preset" :label="t('speak.speaker')" :options="speakerOptions" :supporting-text="presetHint" /></div>
       <p v-else key="auto" class="type-body-medium muted auto">{{ t('speak.autoVoice') }}</p>
     </AxisPanes>
     <div class="grid">
-      <SelectField v-model="language" :label="t('common.language')" :options="languageOptions" />
-      <TextField v-if="caps.has('instruct')" :model-value="speaker.instruct ?? ''" :label="t('projects.instruct')" @update:model-value="update({ instruct: String($event ?? '') || null })" />
+      <SelectField v-model="language" :label="t('common.language')" :options="languageOptions" :supporting-text="languageHint" />
+      <TextField
+        v-if="caps.has('instruct') || speaker.instruct"
+        :model-value="speaker.instruct ?? ''"
+        :label="t('projects.instruct')"
+        :supporting-text="instructUnused ? t('projects.instructUnused') : ''"
+        @update:model-value="update({ instruct: String($event ?? '') || null })"
+      />
     </div>
     <ExpansionPanel v-model:open="paramsOpen" :label="t('projects.params')" :supporting-text="changedParams ? t('projects.paramsSet', { n: changedParams }) : ''" :icon="icons.SlidersHorizontal">
       <ParamsPanel v-model:params="params" v-model:options="options" :spec="spec.data.value ?? null" />

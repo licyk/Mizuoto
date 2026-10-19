@@ -121,6 +121,38 @@ def test_failures_are_kept_per_line(services):
     assert "nobody" in (p.chapters[0].lines[1].error or "")
 
 
+def test_a_speakers_settings_outlive_a_change_of_model(services):
+    # A speaker set up for one model keeps its settings under another; each line's request carries
+    # only what its model takes, so a change of model does not fail every line.
+    speaker = Speaker(id="narrator", name="Narrator", instruct="Slowly", params=CommonParams(speed=1.2, temperature=0.5), engine_options={"delay_ms": 5})
+    p = services.projects.import_script(make(services, speakers=[speaker]).id, ScriptImport(text="Hello."))
+    line = p.chapters[0].lines[0].id
+    req = services.projects.request_for(p.id, line)
+    assert req.style.instruct == "Slowly" and req.params.speed == 1.2 and req.engine_options == {"delay_ms": 5}
+
+    cast = services.projects.editable(p)
+    cast.model = "qwen3tts/1.7b-base"
+    p = services.projects.update(p.id, cast)
+    assert p.speakers[0].instruct == "Slowly" and p.speakers[0].engine_options == {"delay_ms": 5} and p.instruct_unused == ["narrator"]
+    req = services.projects.request_for(p.id, line)
+    assert req.style is None and req.engine_options == {} and req.params.model_dump(exclude_none=True) == {"temperature": 0.5}
+
+    # An instruction this model follows only with a preset speaker: not with its own voice.
+    cast.model = "cosyvoice/cosyvoice-300m-instruct"
+    assert services.projects.request_for(services.projects.update(p.id, cast).id, line).style is None
+    cast.speakers[0].preset = "中文女"
+    assert services.projects.request_for(services.projects.update(p.id, cast).id, line).style.instruct == "Slowly"
+
+    # Back to the first model: everything again. A model Mizuoto does not know gets the settings as saved.
+    cast.model, cast.speakers[0].preset = "dummy/default", None
+    p = services.projects.update(p.id, cast)
+    req = services.projects.request_for(p.id, line)
+    assert req.style.instruct == "Slowly" and req.engine_options == {"delay_ms": 5} and req.params.speed == 1.2 and p.instruct_unused == []
+    assert "instruct_unused" not in (services.settings.projects_dir / p.slug / "project.json").read_text()
+    cast.model = "nope/nothing"
+    assert services.projects.request_for(services.projects.update(p.id, cast).id, line).engine_options == {"delay_ms": 5}
+
+
 def test_checks_and_delete(services):
     p = make(services)
     edit = services.projects.editable(services.projects.import_script(p.id, ScriptImport(text="One.\nTwo.")))

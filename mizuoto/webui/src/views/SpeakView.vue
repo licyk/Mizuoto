@@ -9,7 +9,7 @@ import { fetchRerun } from '@/api/queries/outputs';
 import { usePresets } from '@/api/queries/presets';
 import { planSpeech, speak } from '@/api/queries/tts';
 import { useModelVoiceFits, useVoiceActions } from '@/api/queries/voices';
-import type { EmotionInput, Output, Preset, SpeakRequest, SpeakRequestOut, SynthesisPlan, VoiceMode } from '@/api/types';
+import type { Output, Preset, SpeakRequest, SpeakRequestOut, SynthesisPlan, VoiceMode } from '@/api/types';
 import { StreamPlayer, type StreamStatus } from '@/audio/streamPlayer';
 import AudioSourceInput from '@/components/AudioSourceInput.vue';
 import EmotionPanel from '@/components/EmotionPanel.vue';
@@ -25,15 +25,13 @@ import ScriptEditor from '@/components/ScriptEditor.vue';
 import StreamPlayerBar from '@/components/StreamPlayerBar.vue';
 import VoicePicker from '@/components/VoicePicker.vue';
 import { inputKey, type InputItem } from '@/components/inputs';
+import { VOICE_KINDS, designFor, emotionForm, emotionWays, emptyEmotion, instructFit, rerunParams, speakRequest, takesSeed as specTakesSeed, voiceModes, type EmotionForm, type VoiceKind } from '@/components/speakForm';
 import { useSessionOutputs } from '@/components/sessionOutputs';
 import { useI18n } from '@/i18n';
 import { useHandoffStore } from '@/stores/handoff';
 import { isFinished, useJobsStore } from '@/stores/jobs';
 import { usePreferencesStore } from '@/stores/preferences';
 import { AppButton, AppDialog, AxisPanes, Badge, Chip, FieldRow, IconButton, PageFooter, SegmentedControl, SelectField, Surface, Switch, TextArea, TextField, Tooltip, icons, useSnackbar } from '@/ui';
-
-const VOICE_KINDS = ['library', 'clip', 'preset', 'design', 'auto'] as const;
-type VoiceKind = (typeof VOICE_KINDS)[number];
 
 const { t, tOr } = useI18n();
 const prefs = usePreferencesStore();
@@ -133,17 +131,26 @@ const text = ref('');
 const language = ref(prefs.prefs.speakLanguage || 'auto');
 watch(language, (l) => (prefs.prefs.speakLanguage = l));
 const batch = ref(false);
+// The instruction and the emotion are kept across models (choosing a model back brings them back);
+// the request carries them only to a model that takes them (speakForm).
 const instruct = ref('');
-const emotion = ref<EmotionInput | null>(null);
-const emotionPanel = ref<InstanceType<typeof EmotionPanel> | null>(null);
-const emotionWays = computed(() => ({ vector: caps.value.has('emotion_vector'), audio: caps.value.has('emotion_audio'), text: caps.value.has('emotion_text') }));
-const hasStyle = computed(() => caps.value.has('instruct') || Object.values(emotionWays.value).some(Boolean));
+const emotion = ref<EmotionForm>(emptyEmotion());
+const libraryMode = computed(() => (fits.data.value ?? []).find((f) => f.voice_id === voiceId.value)?.mode ?? null);
+const instructRule = computed(() => (spec.data.value ? instructFit(spec.data.value, voiceModes(voiceKind.value, libraryMode.value)) : null));
+const instructHint = computed(() =>
+  instructRule.value && !instructRule.value.taken ? t('speak.instructNeeds', { modes: instructRule.value.requires.map((m) => t(`voiceModes.${m}`)).join(' / ') }) : '',
+);
+const hasStyle = computed(() => !!instructRule.value?.offered || (spec.data.value ? emotionWays(spec.data.value).length > 0 : false));
 const params = ref<Record<string, unknown>>({});
 const options = ref<Record<string, unknown>>({});
-watch(model, () => {
-  params.value = {};
-  options.value = {};
-  emotionPanel.value?.reset();
+// A model's parameters and options are its own: a new model starts from its defaults, or from the
+// request being run again (apply), set here so that the reset does not undo it.
+let rerunning: SpeakRequestOut | null = null;
+watch(model, (m) => {
+  const r = rerunning?.model === m ? rerunning : null;
+  rerunning = null;
+  params.value = r ? rerunParams(r).params : {};
+  options.value = r ? { ...(r.engine_options ?? {}) } : {};
 });
 
 // -- presets: a model's default preset is applied when the model (and voice) is picked ----------
@@ -166,7 +173,7 @@ watch(
   },
 );
 const seed = ref<number | null>(null);
-const takesSeed = computed(() => (spec.data.value?.params ?? []).some((p) => p.name === 'seed'));
+const takesSeed = computed(() => !!spec.data.value && specTakesSeed(spec.data.value));
 const rollSeed = () => (seed.value = Math.floor(Math.random() * 2 ** 31));
 const format = ref<string | null>(null);
 const sampleRate = ref<string>('');
@@ -182,33 +189,35 @@ const voiceProblem = computed(() => {
   if (voiceKind.value === 'library' && !voiceId.value) return t('speak.noVoice');
   if (voiceKind.value === 'clip' && !clip.value.some((c) => c.status === 'ready')) return t('speak.noVoice');
   if (voiceKind.value === 'preset' && !speaker.value) return t('speak.noVoice');
-  if (voiceKind.value === 'design' && !description.value.trim() && !Object.keys(attributes.value).length) return t('speak.noVoice');
+  if (voiceKind.value === 'design' && spec.data.value) {
+    const d = designFor(spec.data.value, description.value, attributes.value);
+    if (!d.description && !d.attributes) return t('speak.noVoice');
+  }
   return '';
 });
-const style = computed(() => {
-  const i = caps.value.has('instruct') && instruct.value.trim() ? instruct.value.trim() : null;
-  return i || emotion.value ? { instruct: i, emotion: emotion.value } : null;
-});
+// Everything the form holds goes through speakRequest, which sends only what the model takes.
 const request = computed<SpeakRequest | null>(() => {
-  if (!model.value || !spec.data.value) return null;
-  const lines = text.value.split('\n').map((l) => l.trim()).filter(Boolean);
-  const req: SpeakRequest = {
+  if (!model.value || !spec.data.value || spec.data.value.model !== model.value) return null;
+  return speakRequest(spec.data.value, {
     model: model.value,
-    text: batch.value ? '' : text.value,
-    texts: batch.value ? lines : null,
-    language: language.value === 'auto' ? null : language.value,
-    params: { ...params.value, ...(seed.value !== null && takesSeed.value ? { seed: seed.value } : {}) },
-    engine_options: { ...options.value },
+    text: text.value,
+    batch: batch.value,
+    language: language.value,
+    voiceKind: voiceKind.value,
+    voiceId: voiceId.value,
+    libraryMode: libraryMode.value,
+    clip: clip.value,
+    transcript: transcript.value,
+    speaker: speaker.value,
+    description: description.value,
+    attributes: attributes.value,
+    instruct: instruct.value,
+    emotion: emotion.value,
+    params: params.value,
+    options: options.value,
+    seed: seed.value,
     output: { format: chosenFormat.value as 'wav', sample_rate: sampleRate.value ? Number(sampleRate.value) : null, normalize: normalize.value as 'peak' | null },
-    style: style.value,
-  };
-  if (voiceKind.value === 'library') req.voice = voiceId.value;
-  else if (voiceKind.value === 'clip') {
-    const c = clip.value.find((i) => i.status === 'ready' && i.audioId);
-    if (c) req.voice_spec = { references: [{ audio_id: c.audioId, transcript: transcript.value.trim() || null }] };
-  } else if (voiceKind.value === 'preset') req.voice_spec = { preset: speaker.value };
-  else if (voiceKind.value === 'design') req.voice_spec = { description: description.value.trim() || null, attributes: Object.keys(attributes.value).length ? attributes.value : null };
-  return req;
+  });
 });
 const textProblem = computed(() => (text.value.trim() ? '' : t('speak.noText')));
 const canSpeak = computed(() => !!request.value && !voiceProblem.value && !textProblem.value && !clip.value.some((c) => c.status === 'uploading'));
@@ -298,6 +307,8 @@ function confirmKeep() {
 const keepOpen = computed({ get: () => !!keepOutput.value, set: (v) => (keepOutput.value = v ? keepOutput.value : null) });
 
 function apply(r: SpeakRequestOut) {
+  // A different model resets the parameters when its watcher runs, after this: they are restored there.
+  if (model.value !== r.model) rerunning = r;
   model.value = r.model;
   chosenFor = r.model;
   if (r.texts?.length) {
@@ -308,12 +319,12 @@ function apply(r: SpeakRequestOut) {
     text.value = r.text;
   }
   language.value = r.language ?? 'auto';
-  const { seed: s, ...rest } = (r.params ?? {}) as Record<string, unknown>;
-  params.value = Object.fromEntries(Object.entries(rest).filter(([, v]) => v !== null && v !== undefined));
-  seed.value = typeof s === 'number' ? s : null;
-  // Applied after the model's spec arrives (its watcher clears the options).
-  setTimeout(() => (options.value = { ...(r.engine_options ?? {}) }), 0);
+  const restored = rerunParams(r);
+  params.value = restored.params;
+  options.value = { ...(r.engine_options ?? {}) };
+  seed.value = restored.seed;
   instruct.value = r.style?.instruct ?? '';
+  emotion.value = emotionForm(r.style?.emotion);
   defaultsFor = r.model;
   if (r.voice) {
     voiceKind.value = 'library';
@@ -423,8 +434,15 @@ onActivated(() => {
 
       <Surface v-if="spec.data.value && hasStyle" :level="0" shape="large" class="section">
         <h2 class="type-title-medium heading">{{ t('speak.style') }}</h2>
-        <TextField v-if="caps.has('instruct')" v-model="instruct" :label="t('speak.instruct')" :placeholder="t('speak.instructPlaceholder')" />
-        <EmotionPanel ref="emotionPanel" v-model="emotion" :emotions="spec.data.value.emotions" :vector="emotionWays.vector" :audio="emotionWays.audio" :text="emotionWays.text" />
+        <TextField
+          v-if="instructRule?.offered"
+          v-model="instruct"
+          :label="t('speak.instruct')"
+          :placeholder="t('speak.instructPlaceholder')"
+          :disabled="!instructRule.taken"
+          :supporting-text="instructHint"
+        />
+        <EmotionPanel v-model="emotion" :spec="spec.data.value" />
       </Surface>
 
       <Surface v-if="spec.data.value" :level="0" shape="large" class="section">

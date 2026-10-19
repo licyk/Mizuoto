@@ -64,6 +64,9 @@ def test_registry_lookups(services):
         reg.manifest("nope")
     assert reg.status("dummy").available and reg.status("dummy").missing == []
     assert "preset" in reg.voice_modes(reg.variant("dummy", "default"))
+    # The UI's form follows the spec, so every rule the synthesis checks a style against is in it.
+    spec = reg.param_specs("cosyvoice/v2", "cosyvoice", "v2")
+    assert spec.instruct_requires == ["clone", "clone_no_transcript"] and reg.param_specs("dummy/default", "dummy", "default").instruct_requires == []
 
 
 @pytest.mark.parametrize(

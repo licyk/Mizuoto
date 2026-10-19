@@ -27,7 +27,7 @@ from mizuoto.core.audio.service import AudioService
 from mizuoto.core.clock import now_iso
 from mizuoto.core.engines import languages
 from mizuoto.core.engines.models import EngineManifest, ModelParamSpecs, VariantInfo, VoiceMode
-from mizuoto.core.engines.params import check_options, check_params
+from mizuoto.core.engines.params import accepted, check_options, check_params
 from mizuoto.core.engines.registry import EngineRegistry
 from mizuoto.core.errors import CapabilityError, LanguageError, NotFoundError, ReferenceInvalidError, ValidationError
 from mizuoto.core.inference.engine import AudioStream, EngineHandle, EngineRequest, ModelRef
@@ -120,6 +120,16 @@ class TextFeed:
         return "".join(self._parts)
 
 
+@dataclass(frozen=True)
+class SettingsFit:
+    """What a model takes of settings saved apart from it (a project speaker's, which outlive a change of
+    the speaker's or the project's model): whether an instruction, and which parameters and options."""
+
+    instruct: bool
+    params: frozenset[str]
+    options: frozenset[str]
+
+
 @dataclass
 class StreamSink:
     """Receives a synthesis as it happens: ``start`` once, ``chunk`` per piece, then ``end`` or ``error``."""
@@ -203,6 +213,23 @@ class TtsService:
         jobs.register("engine_op", self._op_job)
 
     # -- what a model offers ------------------------------------------------------------
+
+    def settings_fit(self, model_id: str, voice: str | None = None, preset: str | None = None) -> SettingsFit:
+        """What ``model_id`` takes of saved settings, with a library ``voice``, a ``preset`` speaker or its own voice.
+        The instruction counts as taken while the voice's mode is not known (its fit fails): synthesis then says why."""
+        info = self._models.get(model_id)
+        manifest = self._registry.manifest(info.engine)
+        variant = self._registry.variant(info.engine, info.variant)
+        instruct = "instruct" in variant.capabilities
+        if instruct and variant.instruct_requires:
+            mode: VoiceMode | None = "preset" if preset else "auto"
+            if voice:
+                try:
+                    mode = self.voices.fit_voice(self.voices.get(voice), model_id, variant).mode if self.voices is not None else None
+                except NotFoundError:
+                    mode = None
+            instruct = mode is None or mode in variant.instruct_requires
+        return SettingsFit(instruct=instruct, params=accepted(manifest.params, variant.id), options=accepted(manifest.options, variant.id))
 
     def model_spec(self, model_id: str) -> ModelParamSpecs:
         info = self._models.get(model_id)

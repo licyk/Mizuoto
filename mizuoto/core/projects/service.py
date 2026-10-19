@@ -43,7 +43,7 @@ from mizuoto.core.tts.models import CommonParams, OutputSpec, SpeakRequest, Styl
 
 if TYPE_CHECKING:
     from mizuoto.core.outputs.service import OutputService
-    from mizuoto.core.tts.service import TtsService
+    from mizuoto.core.tts.service import SettingsFit, TtsService
     from mizuoto.core.voices.service import VoiceService
 
 PROJECT_FILE = "project.json"
@@ -102,7 +102,7 @@ class ProjectService:
             for line in chapter.lines:
                 line.state = "missing"
         tmp = folder / (PROJECT_FILE + ".tmp")
-        tmp.write_text(stored.model_dump_json(indent=2, exclude={"stats"}), encoding="utf-8")
+        tmp.write_text(stored.model_dump_json(indent=2, exclude={"stats", "instruct_unused"}), encoding="utf-8")
         tmp.replace(folder / PROJECT_FILE)
 
     def _load(self, key: str) -> Project:
@@ -150,6 +150,7 @@ class ProjectService:
     def _annotate(self, project: Project) -> Project:
         rendering = self._rendering.get(project.id, set())
         revisions: dict[str, str] = {}
+        fits: dict[tuple[str, str | None, str | None], SettingsFit | None] = {}
         stats = ProjectStats(chapters=len(project.chapters))
         for chapter in project.chapters:
             for line in chapter.lines:
@@ -165,7 +166,7 @@ class ProjectService:
                     line.state = "missing"
                 else:
                     try:
-                        current = self._fingerprint(self._request(project, line), revisions)
+                        current = self._fingerprint(self._request(project, line, fits), revisions)
                     except MizuotoError:
                         current = None
                     line.state = "rendered" if current == take.fingerprint else "stale"
@@ -175,6 +176,16 @@ class ProjectService:
                     setattr(stats, line.state, getattr(stats, line.state) + 1)
         stats.seconds = round(stats.seconds, 2)
         project.stats = stats
+        project.instruct_unused = []
+        for s in project.speakers:
+            model = s.model or project.model
+            key = (model or "", s.voice, s.preset)
+            if not model:
+                continue
+            fit = fits[key] if key in fits else self._fit(model, s.voice, s.preset)
+            fits[key] = fit
+            if fit is not None and not fit.instruct:
+                project.instruct_unused.append(s.id)
         return project
 
     @staticmethod
@@ -400,15 +411,30 @@ class ProjectService:
             return next((s for s in project.speakers if s.id == line.speaker), None)
         return project.speakers[0] if project.speakers else None
 
-    def _request(self, project: Project, line: Line) -> SpeakRequest:
-        """The synthesis request of a line: its speaker's model, voice and settings, then its own."""
+    def _request(self, project: Project, line: Line, fits: dict[tuple[str, str | None, str | None], SettingsFit | None] | None = None) -> SpeakRequest:
+        """The synthesis request of a line: its speaker's model, voice and settings, then its own.
+
+        The settings are kept when the speaker's or the project's model changes (choosing it back brings
+        them back), so the request carries only the instruction, parameters and engine options the model
+        takes; the voice and the language decide what is said and are sent as they are. ``fits`` caches
+        each speaker's fit across the lines of one pass."""
         speaker = self.speaker_of(project, line)
         model = (speaker.model if speaker else None) or project.model
         if not model:
             raise ValidationError(f"{speaker.name if speaker else 'The narrator'} has no model, and the project names none", {"line": line.id})
+        voice, preset = (speaker.voice, speaker.preset) if speaker else (None, None)
+        key = (model, voice, preset)
+        fit = fits.get(key) if fits is not None and key in fits else self._fit(model, voice, preset)
+        if fits is not None:
+            fits[key] = fit
         params = (speaker.params if speaker else CommonParams()).model_dump(exclude_none=True)
         params.update(line.params.model_dump(exclude_none=True))
         instruct = line.instruct or (speaker.instruct if speaker else None)
+        options = dict(speaker.engine_options) if speaker else {}
+        if fit is not None:
+            params = {k: v for k, v in params.items() if k in fit.params}
+            options = {k: v for k, v in options.items() if k in fit.options}
+            instruct = instruct if fit.instruct else None
         return SpeakRequest(
             model=model,
             text=line.text.strip(),
@@ -417,9 +443,16 @@ class ProjectService:
             voice_spec=VoiceInput(preset=speaker.preset) if speaker and speaker.preset else None,
             style=StyleInput(instruct=instruct) if instruct else None,
             params=CommonParams.model_validate(params),
-            engine_options=dict(speaker.engine_options) if speaker else {},
+            engine_options=options,
             output=OutputSpec(format=TAKE_FORMAT, normalize=project.normalize, project=project.id),
         )
+
+    def _fit(self, model: str, voice: str | None, preset: str | None) -> SettingsFit | None:
+        """What the model takes of a speaker's settings; None for a model Mizuoto does not know (synthesis says so)."""
+        try:
+            return self._tts.settings_fit(model, voice, preset)
+        except NotFoundError:
+            return None
 
     def request_for(self, key: str, line_id: str) -> SpeakRequest:
         project = self._load(key)

@@ -23,16 +23,23 @@ watch(text, (v) => {
   clearTimeout(timer);
   timer = setTimeout(() => (settled.value = v), 600);
 });
-const segments = useSegments(() => (batch.value ? '' : settled.value), () => props.model);
+// The switch is kept while a model without batches is chosen (choosing one back brings it back), and off for it.
+const batching = computed(() => props.batchable && batch.value);
+const segments = useSegments(() => (batching.value ? '' : settled.value), () => props.model);
 const pieces = computed(() => segments.data.value?.segments ?? []);
 
 const languageOptions = computed(() => {
   const codes = props.languages.includes('*') || !props.languages.length ? ['zh', 'en', 'ja', 'ko', 'de', 'fr', 'es', 'it', 'pt', 'ru'] : props.languages;
   return [{ value: 'auto', label: t('languages.auto') }, ...codes.filter((c) => c !== 'auto').map((c) => ({ value: c, label: tOr(`languages.${c}`, c) }))];
 });
-watch(languageOptions, (opts) => {
-  if (!opts.some((o) => o.value === language.value)) language.value = 'auto';
-});
+// Also when the editor appears: it is shown anew for a model whose spec was still loading.
+watch(
+  languageOptions,
+  (opts) => {
+    if (!opts.some((o) => o.value === language.value)) language.value = 'auto';
+  },
+  { immediate: true },
+);
 const lines = computed(() => text.value.split('\n').filter((l) => l.trim()).length);
 defineExpose({ insert: (s: string) => area.value?.insert(s) });
 </script>
@@ -44,7 +51,7 @@ defineExpose({ insert: (s: string) => area.value?.insert(s) });
       <SelectField v-model="language" :label="t('common.language')" :options="languageOptions" class="lang" />
       <Switch v-if="batchable" v-model="batch" :label="t('speak.batch')" />
     </div>
-    <div v-if="batch && lines > 1" class="type-body-small muted">{{ t('speak.segments', { n: lines }) }}</div>
+    <div v-if="batching && lines > 1" class="type-body-small muted">{{ t('speak.segments', { n: lines }) }}</div>
     <div v-else-if="pieces.length > 1" class="segments" :aria-label="t('speak.segments', { n: pieces.length })">
       <span class="type-label-medium muted">{{ t('speak.segments', { n: pieces.length }) }}</span>
       <Chip v-for="(p, i) in pieces" :key="i" :label="p.length > 32 ? `${p.slice(0, 32)}…` : p" />

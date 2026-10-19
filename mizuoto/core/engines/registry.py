@@ -251,6 +251,7 @@ class EngineRegistry:
             languages=list(v.languages or m.languages),
             params=param_fields(m, variant_id),
             reference=v.reference,
+            instruct_requires=list(v.instruct_requires),
             design_attributes=v.design_attributes,
             inline_tags=list(v.inline_tags),
             emotions=list(v.emotions),

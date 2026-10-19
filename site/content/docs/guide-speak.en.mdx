@@ -4,7 +4,7 @@ description: "The Speak screen: choose a model and a voice, type the text, set t
 icon: Speech
 ---
 
-**Speak** turns text into speech. From top to bottom the screen has **Model**, **Voice**, **Text**, **Style** (when the model has it), **Parameters** and **Results**; the **Speak** button stays at the bottom of the page. Each part shows only what the chosen model supports, so the screen changes with the model.
+**Speak** turns text into speech. From top to bottom the screen has **Model**, **Voice**, **Text**, **Style** (when the model has it), **Parameters** and **Results**; the **Speak** button stays at the bottom of the page. Each part shows only what the chosen model supports, so the screen changes with the model. What you set is kept when you choose another model, and comes back when you choose the first one again, but a model is only sent what it shows: an emotion set for IndexTTS-2, say, is not sent to Qwen3-TTS. Parameters are the exception: each model starts from its own defaults (or its default preset).
 
 ## Model
 
@@ -73,7 +73,7 @@ A clip longer than the model allows follows **Settings › Speech › A referenc
 
 Shown only when the model takes instructions or emotions.
 
-- **How to say it**: a style instruction such as "Cheerfully, a little faster" (Qwen3-TTS 1.7B CustomVoice, CosyVoice 2 and 3, CosyVoice 300M Instruct).
+- **How to say it**: a style instruction such as "Cheerfully, a little faster" (Qwen3-TTS 1.7B CustomVoice, CosyVoice 2 and 3, CosyVoice 300M Instruct). Some models follow it only with one kind of voice (CosyVoice 2 and 3 with a reference clip, CosyVoice 300M Instruct with a preset speaker); with another, the field is greyed out and says which.
 - Emotion (IndexTTS-2 and 2.5) comes three ways, as the model supports:
   - **Emotion weights**: a 0–1 slider per emotion (**Happy**, **Angry**, **Sad**, **Afraid**, **Disgusted**, **Melancholic**, **Surprised**, **Calm**).
   - **From a clip**: an **Emotion clip**; only the clip's emotion is borrowed, not its voice; **Strength** 0–2.

@@ -7,6 +7,7 @@ of range is always an error. Defaults are never filled in here.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from typing import Any
 
 from mizuoto.core.engines.models import EngineManifest, OptionSpec, ParamField, ParamSpec
@@ -16,6 +17,11 @@ from mizuoto.core.errors import ParameterError
 def _in_variant(spec: ParamSpec | OptionSpec, variant: str) -> bool:
     """Whether a parameter applies to ``variant`` (empty: any variant, as for an engine's load options)."""
     return spec.variants is None or not variant or variant in spec.variants
+
+
+def accepted(specs: Mapping[Any, ParamSpec | OptionSpec], variant: str) -> frozenset[str]:
+    """The names of ``specs`` (a manifest's parameters or options) that ``variant`` takes, offered or not."""
+    return frozenset(name for name, spec in specs.items() if _in_variant(spec, variant))
 
 
 def _check_number(name: str, value: Any, kind: str, lo: float | None, hi: float | None) -> tuple[Any, dict[str, Any] | None]:

@@ -333,6 +333,8 @@ class ModelParamSpecs(Record):
     languages: list[str]
     params: list[ParamField]
     reference: ReferenceLimits
+    instruct_requires: list[VoiceMode] = Field(default_factory=list)
+    """Voice modes an instruction needs (none: any); the UI offers the instruction only with these."""
     design_attributes: dict[str, list[str]] | None = None
     inline_tags: list[str] = Field(default_factory=list)
     emotions: list[str] = Field(default_factory=list)

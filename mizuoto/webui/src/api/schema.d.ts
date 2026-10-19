@@ -3718,6 +3718,8 @@ export interface components {
             /** Params */
             params: components["schemas"]["ParamField"][];
             reference: components["schemas"]["ReferenceLimits"];
+            /** Instruct Requires */
+            instruct_requires: ("clone" | "clone_no_transcript" | "preset" | "design" | "auto" | "trained")[];
             /** Design Attributes */
             design_attributes: {
                 [key: string]: string[];
@@ -4366,6 +4368,8 @@ export interface components {
              */
             normalize: "none" | "peak" | "loudness";
             stats: components["schemas"]["ProjectStats"];
+            /** Instruct Unused */
+            instruct_unused: string[];
             /** Created At */
             created_at: string;
             /** Updated At */

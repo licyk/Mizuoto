@@ -103,6 +103,9 @@ class Project(Record):
     """Every take is resampled to it when exported (speakers may use models of different rates)."""
     normalize: Literal["none", "peak", "loudness"] = "loudness"
     stats: ProjectStats = Field(default_factory=ProjectStats)
+    instruct_unused: list[str] = Field(default_factory=list)
+    """Computed when the project is read: the speakers whose model, with their voice, follows no style
+    instruction. Theirs and their lines' are kept (for a model that does) but not sent."""
     created_at: str
     updated_at: str
 

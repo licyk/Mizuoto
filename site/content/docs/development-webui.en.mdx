@@ -134,6 +134,15 @@ Every engine is installed with Mizuoto, but one can still be *missing* something
 - **`ModelsView`** marks each engine group whose engine is unavailable and says what it needs.
 - **`SettingsView`** shows the torch check under **Compute** (the doctor's `torch` finding): the installed version and build, and the command that installs the recommended build when they differ.
 
+## Forms that follow the model
+
+Speak and a project's cast show only what the chosen model takes, and keep what was set for another model so that choosing it again brings it back. The server refuses what a model does not take (an explicit request is never trimmed), so a hidden value that was sent would fail the synthesis. Hence one rule: **a value the form does not show is never sent.**
+
+- **Speak** builds its request only in `components/speakForm.ts` (`speakRequest(spec, form)`), from the model's spec (`ModelParamSpecs`), with the same functions the template uses to decide what to show: `emotionWays`/`shownWay`, `instructFit` (the instruction and `instruct_requires`, the voice modes it needs), `designFor`, `speaks`, `fieldsFor`, `takesSeed`. A new field on the form gets its rule there and a case in `speakForm.test.ts`; a rule the server checks a request against belongs in the spec, so the UI can follow it.
+- Form state lives in the view, not in child components: `EmotionPanel` holds no values of its own. A child's state cannot be reset reliably on a model change, because the child may be unmounted in the same update (its section hidden, or the new spec still loading), and its watchers go with it.
+- Parameters and engine options are a model's own: a new model starts from its defaults or its default preset. "Run again" sets them for the new model in the same watcher that resets them.
+- **Projects** keep a speaker's settings on disk across changes of model, made from any screen or the CLI, so the server applies the rule: `ProjectService._request` sends a line's model only the instruction, parameters and options it takes (`TtsService.settings_fit`), and `Project.instruct_unused` (computed when read, never stored) names the speakers whose instruction is kept but not used. The voice and the language are sent as they are and fail clearly.
+
 ## Stores
 
 | Store | Holds |
