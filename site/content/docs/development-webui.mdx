@@ -33,7 +33,7 @@ mizuoto/webui/src/
 | --- | --- |
 | `scheme.ts` | 用 `@material/material-color-utilities` 的 Tonal Spot 方案，从一个种子色生成全部颜色角色（`primary`、`on-primary`、`surface-container`、`outline`……），亮色与暗色各一套，对比度 0（标准）、0.5（中）、1（高） |
 | `applyTheme.ts` | 把角色写成 `:root` 上的 `--md-sys-color-*`，并设置 `data-theme` |
-| `tokens.css` | 静态令牌：15 种字号（`--md-sys-typescale-*`，Roboto Flex 可变字体）、圆角（`--md-sys-shape-corner-*`）、动效的缓动和时长（`--md-sys-motion-*`）、状态层不透明度（悬停 8%、聚焦 12%、按下 12%、拖动 16%，取自 `@material/web` 2.5.0 的令牌文件；禁用的内容 38%、容器 12%）、阴影、间距（4px 为单位）、层内 z 序和随窗口变化的宽度；还有首帧用的回退颜色 |
+| `tokens.css` | 静态令牌：15 种字号（`--md-sys-typescale-*`，Roboto Flex 可变字体）、圆角（`--md-sys-shape-corner-*`）、动效的缓动和时长（`--md-sys-motion-*`）、状态层不透明度（悬停 8%、聚焦 10%、按下 10%、拖动 16%，取自 `@material/web` 2.5.0 的令牌文件；禁用的内容 38%、容器 12%，取自其组件令牌）、阴影、间距（4px 为单位）、层内 z 序和随窗口变化的宽度；还有首帧用的回退颜色 |
 | `breakpoints.ts` | M3 的窗口尺寸分级：compact（&lt; 600px）、medium（&lt; 840px）、expanded（&lt; 1200px）、large（&lt; 1600px）、extra-large |
 
 - **颜色只来自种子色。** 默认种子色是 `#4f6b3a`；用户可以在“设置 › 外观”里换任意颜色、对比度、亮暗（跟随系统、亮、暗）和动效。偏好存在 localStorage，并经 `/api/v1/client-state/{key}` 同步到服务器。`index.html` 里的一小段脚本在打包代码运行前读取偏好、设置 `data-theme`，避免首屏闪烁。

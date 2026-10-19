@@ -53,10 +53,11 @@
   --md-sys-motion-duration-long1: 450ms; --md-sys-motion-duration-long2: 500ms;
   --md-sys-motion-duration-long3: 550ms; --md-sys-motion-duration-long4: 600ms;
 
-  /* State layers (values from Google's token file in @material/web 2.5.0) */
+  /* State layers (@material/web 2.5.0, tokens/versions/latest/sass/_md-sys-state.scss); disabled content and container
+     opacities from its component tokens (_md-comp-filled-button.scss: label 0.38, container 0.12) */
   --md-sys-state-hover-state-layer-opacity: 0.08;
-  --md-sys-state-focus-state-layer-opacity: 0.12;
-  --md-sys-state-pressed-state-layer-opacity: 0.12;
+  --md-sys-state-focus-state-layer-opacity: 0.1;
+  --md-sys-state-pressed-state-layer-opacity: 0.1;
   --md-sys-state-dragged-state-layer-opacity: 0.16;
   --app-disabled-content-opacity: 0.38;
   --app-disabled-container-opacity: 0.12;
