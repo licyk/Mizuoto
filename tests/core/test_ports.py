@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import errno
 import socket
 
 import pytest
 
+from mizuoto.core.net import ports
 from mizuoto.core.net.ports import PortUnavailableError, bind_first_free_port, is_loopback
 
 
@@ -24,7 +26,7 @@ def test_a_taken_port_moves_to_the_next_unless_strict():
         port = first.getsockname()[1]
         if port >= 65535:
             pytest.skip("the system gave the last port")
-        nxt = bind_first_free_port("127.0.0.1", port, attempts=20)
+        nxt = bind_first_free_port("127.0.0.1", port)
         try:
             assert nxt.getsockname()[1] > port
         finally:
@@ -33,6 +35,61 @@ def test_a_taken_port_moves_to_the_next_unless_strict():
             bind_first_free_port("127.0.0.1", port, strict=True)
     finally:
         first.close()
+
+
+def _taken(port: int) -> OSError:
+    return OSError(errno.EADDRINUSE, f"port {port} is taken")
+
+
+def test_search_has_no_attempt_limit(monkeypatch):
+    # Far more taken ports than the old cap of 20.
+    tried = []
+
+    def fake_bind(host, port):
+        tried.append(port)
+        if port < 8000 + 500:
+            raise _taken(port)
+        return port
+
+    monkeypatch.setattr(ports, "_bind", fake_bind)
+    assert bind_first_free_port("127.0.0.1", 8000) == 8500
+    assert tried == list(range(8000, 8501))
+
+
+def test_search_wraps_around_below_the_start(monkeypatch):
+    def fake_bind(host, port):
+        if port >= 65000:
+            raise _taken(port)
+        return port
+
+    monkeypatch.setattr(ports, "_bind", fake_bind)
+    assert bind_first_free_port("127.0.0.1", 65000) == ports.LOWEST_FALLBACK_PORT
+
+
+def test_every_port_taken_fails_after_trying_each_once(monkeypatch):
+    tried = []
+
+    def fake_bind(host, port):
+        tried.append(port)
+        raise _taken(port)
+
+    monkeypatch.setattr(ports, "_bind", fake_bind)
+    with pytest.raises(PortUnavailableError, match="No free port"):
+        bind_first_free_port("127.0.0.1", 8000)
+    assert sorted(tried) == list(range(ports.LOWEST_FALLBACK_PORT, ports.MAX_PORT + 1))
+
+
+def test_an_error_another_port_would_not_fix_stops_the_search(monkeypatch):
+    tried = []
+
+    def fake_bind(host, port):
+        tried.append(port)
+        raise OSError(errno.EADDRNOTAVAIL, "address not available")
+
+    monkeypatch.setattr(ports, "_bind", fake_bind)
+    with pytest.raises(PortUnavailableError, match="Cannot bind"):
+        bind_first_free_port("127.0.0.1", 8000)
+    assert tried == [8000]
 
 
 def test_out_of_range_ports_are_refused():
