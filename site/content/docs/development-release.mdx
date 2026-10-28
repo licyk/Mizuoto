@@ -8,7 +8,7 @@ icon: Package
 
 ## 依赖
 
-Mizuoto 是一个环境：核心、API、命令行、Web UI 和每个引擎的依赖都写在 `pyproject.toml` 里，一次安装。每个新依赖都要回答：它在 CI 覆盖的每个平台（Linux x86_64、Windows x86_64、macOS arm64，CPython 3.10–3.13）上有没有 wheel，它会不会改变结果，它会不会改动进程级状态。
+Mizuoto 是一个环境：核心、API、命令行、Web UI 和每个引擎的依赖都写在 `pyproject.toml` 里，一次安装。每个新依赖都要回答：它在 CI 覆盖的每个平台（Linux x86_64、Windows x86_64、macOS arm64，CPython 3.10–3.14）上有没有 wheel，它会不会改变结果，它会不会改动进程级状态。
 
 ### 必需的依赖
 
@@ -17,7 +17,7 @@ Mizuoto 是一个环境：核心、API、命令行、Web UI 和每个引擎的�
 | Web 与命令行 | fastapi（≥ 0.115.3）、starlette（≥ 0.40）、uvicorn、websockets、python-socketio、pydantic 2、httpx、typer（&lt; 0.28）、rich、tomli-w、tomli（Python &lt; 3.11）、send2trash | Starlette 0.40 起 `FileResponse` 支持 Range，播放器可以拖动；uvicorn 要有 websockets 才能处理 WebSocket；typer 锁上限，因为命令行用到它的私有模块 |
 | 音频 | av（PyAV）、numpy | 解码、编码、重采样都用 PyAV，其余用 numpy；不调用 ffmpeg 或 sox 程序 |
 | 运行时 | torch（≥ 2.8）、safetensors、soxr、tokenizers | torch 的构建由用户选（见下）；soxr 是 librosa 调用的同一个重采样器；tokenizers 构建与 transformers 相同的 BPE |
-| 文本 | pypinyin、rjieba、jieba、opencc、kaldifst、inflect、tiktoken、regex、wordsegment、budoux、ToJyutping、fasttext-predict、pyyaml | 很多版本是**锁定**的（如 `pypinyin==0.55.0`、`opencc==1.4.2`、`inflect==7.3.1`）：引擎的输出依赖这些版本，换版本会改变音素和音频 |
+| 文本 | pypinyin、rjieba、jieba、opencc、kaldifst、inflect、tiktoken、regex、wordsegment、budoux、ToJyutping、fasttext-predict（Python 3.14 上为 fasttext-predict-v2：源码相同，发布了 3.14 的 wheel）、pyyaml | 很多版本是**锁定**的（如 `pypinyin==0.55.0`、`opencc==1.4.2`、`inflect==7.3.1`）：引擎的输出依赖这些版本，换版本会改变音素和音频 |
 
 需要接受许可的包各自带少量依赖：`mizuoto-fishspeech` 需要 tokenizers 和 safetensors，`mizuoto-indextts` 需要 sentencepiece。它们也写明自己直接导入、Mizuoto 已经带来的包（torch 和 numpy；`mizuoto-indextts` 还有 pyyaml 和 tiktoken），版本范围与 Mizuoto 相同，这样自己的依赖不靠 Mizuoto 的依赖成立。
 
@@ -26,7 +26,7 @@ Mizuoto 是一个环境：核心、API、命令行、Web UI 和每个引擎的�
 | 附加依赖 | 包 | 作用 |
 | --- | --- | --- |
 | `mizuoto[gptsovits-ja]` | `pyopenjtalk==0.4.1` | GPT-SoVITS 的日语前端；只发布源码包，安装时需要 CMake 和 C++ 编译器 |
-| `mizuoto[gptsovits-ko]` | `python-mecab-ko==1.3.7`、`jamo==0.4.1` | GPT-SoVITS 的韩语前端 |
+| `mizuoto[gptsovits-ko]` | `python-mecab-ko==1.3.7`、`jamo==0.4.1` | GPT-SoVITS 的韩语前端（python-mecab-ko 的 wheel 只到 Python 3.12，更新的 Python 要基于 mecab-ko 构建） |
 | `mizuoto-indextts[ja]` | fugashi、unidic-lite | IndexTTS-2.5 的日语分词 |
 
 缺少附加依赖时，相应语言的文本以 `capability_not_supported` 失败，提示里带安装命令；`mizuoto doctor` 也会列出各引擎缺哪些附加依赖。可选的注意力加速包（flash-attn、xFormers、SageAttention）不是附加依赖：它们要与用户的 torch 版本匹配，`mizuoto doctor` 给出保留现有 torch 的安装命令（`--no-deps`），见[注意力加速](/docs/development-acceleration)。
@@ -63,7 +63,7 @@ torch 是依赖，但它的构建由用户先装：从 download.pytorch.org 与�
 | Apple 芯片（MPS） | macOS arm64 |
 | CPU | 全部 |
 
-CI 在 Linux x86_64、Windows x86_64 和 macOS arm64 上，用 CPU 版 torch 测试 Python 3.10–3.13 的每个组合，并分别用 torch 2.8.0 和最新版测试。
+CI 在 Linux x86_64、Windows x86_64 和 macOS arm64 上，用 CPU 版 torch 测试 Python 3.10–3.14 的每个组合，并分别用 torch 2.8.0 和最新版测试。
 
 <Callout type="warn" title="ROCm、XPU 和 MPS">
 代码为这些设备准备了相应的路径（设备探测、没有 float64 的设备上把 float64 模块放在 CPU、MPS 上不编译、只在 CUDA 上用 CUDA 图和半精度），并在模拟的设备上测试过，但还没有在 AMD、Intel 或 Apple 的硬件上验证。
@@ -130,7 +130,7 @@ python scripts/smoke_wheels.py --dist dist --others none   # 只装 dist/ 里的
 1. `plan`：`python scripts/ci.py release` 决定这次发布什么。推送发布它改动了版本文件的每个发行包（文件列表来自 compare API）；标签发布它指明的那个，且必须等于其版本（Mizuoto 0.2.0 对应 `v0.2.0`，mizuoto-indextts 0.2.1 对应 `mizuoto-indextts-v0.2.1`）；手动触发发布输入指定的。
 2. `checks`：把 `ci.yml` 本身作为可复用工作流调用，检查这次推送改动的内容（版本文件检查它所属的发行包；标签或手动触发检查全部）。CI 自己对同一次推送到 `main` 的运行会跳过它的作业，所以不会重复运行。
 3. `build`（Ubuntu、Python 3.11、uv；构建 Mizuoto 的 Web UI 时还有 bun）：只构建要发布的，`build_wheels.py host` 和/或 `build_wheels.py native <id>…`；`twine check dist/*`；`dist/` 作为 `dist` 产物上传。
-4. `smoke`（Ubuntu，Python 3.10 和 3.13）：下载产物，运行 `smoke_wheels.py --dist dist --python <版本> --others index`，让这次发布与 PyPI 上已发布的其他发行包一起试用。
+4. `smoke`（Ubuntu，Python 3.10 和 3.14）：下载产物，运行 `smoke_wheels.py --dist dist --python <版本> --others index`，让这次发布与 PyPI 上已发布的其他发行包一起试用。
 5. `publish`：在 `pypi` 环境中（可以要求审批），用 `TWINE_PASSWORD` 密钥（PyPI API 令牌，用户名 `__token__`）先 `twine upload --skip-existing` Mizuoto，再上传需要接受许可的 wheel，所以需要新 Mizuoto 的包不会先于它出现。PyPI 上已有的版本会被跳过。
 6. `github-release`（仅标签）：以标签命名的 GitHub 发布，附上该发行包的文件，说明从同一发行包的上一个标签起自动生成；需要接受许可的引擎的发布不标记为 latest。
 

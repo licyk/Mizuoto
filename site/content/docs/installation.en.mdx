@@ -11,8 +11,8 @@ Mizuoto is one Python distribution: the server, the web UI, the command line and
 | Item | Requirement |
 | --- | --- |
 | Operating system | Linux, Windows, macOS |
-| Python | 3.10–3.13 |
-| torch | 2.8 or newer, the build for your hardware (CUDA, ROCm, XPU, Apple silicon or CPU) |
+| Python | 3.10–3.14 |
+| torch | 2.8 or newer (2.9 or newer on Python 3.14, the first with its wheels), the build for your hardware (CUDA, ROCm, XPU, Apple silicon or CPU) |
 | Disk | A few GB for torch, plus the models |
 | GPU | An NVIDIA GPU is recommended; AMD (ROCm, Linux), Intel (XPU) and Apple silicon (MPS) work too (not yet tested on real hardware), and every engine also runs on a CPU, slowly |
 | Network | Installing reaches PyPI and the PyTorch download site; downloading models reaches Hugging Face, hf-mirror or ModelScope (chosen in **Settings › Downloads**) |
@@ -93,7 +93,7 @@ Some languages need packages that are not installed by default. Without them, te
 | Extra | For | Note |
 | --- | --- | --- |
 | `pip install 'mizuoto[gptsovits-ja]'` | GPT-SoVITS's Japanese | pyopenjtalk 0.4.1 is published as source only: building it needs CMake and a C++ compiler |
-| `pip install 'mizuoto[gptsovits-ko]'` | GPT-SoVITS's Korean | python-mecab-ko and jamo |
+| `pip install 'mizuoto[gptsovits-ko]'` | GPT-SoVITS's Korean | python-mecab-ko and jamo; python-mecab-ko 1.3.7 publishes wheels for Python 3.10–3.12 only, so on 3.13 and 3.14 it is built from source and needs mecab-ko installed (`mecab-config`) |
 | `pip install 'mizuoto-indextts[ja]'` | IndexTTS-2.5's Japanese | fugashi and unidic-lite |
 
 ## Checking the installation

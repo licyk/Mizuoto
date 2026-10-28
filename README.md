@@ -98,7 +98,7 @@ Mizuoto **0.2.0** is the first release under this name.
 
 ## Install
 
-You need Python 3.10–3.13 and torch 2.8 or newer, in the build for your hardware (CUDA, ROCm, XPU, Apple silicon or
+You need Python 3.10–3.14 and torch 2.8 or newer, in the build for your hardware (CUDA, ROCm, XPU, Apple silicon or
 CPU). Install torch first, from the index that matches your machine, then Mizuoto. `mizuoto doctor` checks the build
 against the hardware and prints the exact command when they do not match. An NVIDIA GPU is recommended; every engine
 also runs on a CPU, slowly.

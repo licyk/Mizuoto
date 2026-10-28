@@ -7,7 +7,7 @@ A frame is a 4-byte big-endian length, then a 1-byte kind, then the body:
   float32 little-endian mono).
 
 The host ⇄ agent connection (``wire.py``) speaks these. ``multiprocessing.connection`` is not used: its
-authentication handshake differs across Python versions, and a host and its agents may run different ones (3.10 to 3.13).
+authentication handshake differs across Python versions, and a host and its agents may run different ones (3.10 to 3.14).
 """
 
 from __future__ import annotations

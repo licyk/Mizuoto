@@ -3,8 +3,9 @@ library it calls, split-lang 2.1.1 (``LangSplitter``; MIT, DoodleBears), and fas
 
 Upstream points fast-langdetect's global detector at its model and builds a ``LangSplitter`` per call (whose
 constructor calls ``logging.basicConfig``). Here a ``LangSegmenter`` owns its fastText model (``lid.176.bin``, the
-``gptsovits/encoders`` asset, through ``fasttext-predict``) and its two BudouX parsers; the splitting rules are
-split-lang's, as GPT-SoVITS configures them (``merge_across_digit=False``, punctuation and newlines merged).
+``gptsovits/encoders`` asset, through ``fasttext-predict``, or ``fasttext-predict-v2`` on 3.14) and its two BudouX
+parsers; the splitting rules are split-lang's, as GPT-SoVITS configures them (``merge_across_digit=False``,
+punctuation and newlines merged).
 """
 
 from __future__ import annotations

@@ -11,8 +11,8 @@ Mizuoto 是一个 Python 发行包：服务器、网页界面、命令行和所�
 | 项目 | 要求 |
 | --- | --- |
 | 操作系统 | Linux、Windows、macOS |
-| Python | 3.10–3.13 |
-| torch | 2.8 或更新版本，适合本机硬件的构建（CUDA、ROCm、XPU、Apple 芯片或 CPU） |
+| Python | 3.10–3.14 |
+| torch | 2.8 或更新版本（Python 3.14 上为 2.9 或更新，从 2.9 起才有它的 wheel），适合本机硬件的构建（CUDA、ROCm、XPU、Apple 芯片或 CPU） |
 | 磁盘 | torch 需要数 GB，另加模型的大小 |
 | 显卡 | 推荐 NVIDIA 显卡；AMD（ROCm，Linux）、Intel（XPU）和 Apple 芯片（MPS）也可以（尚未在真实硬件上测试），所有引擎也能在 CPU 上运行，但较慢 |
 | 网络 | 安装时需要访问 PyPI 和 PyTorch 下载站；下载模型时需要访问 Hugging Face、hf-mirror 或 ModelScope（在 **设置 › 下载** 中选择） |
@@ -93,7 +93,7 @@ docker run --gpus all -p 7869:7869 -v mizuoto-data:/data \
 | 扩展 | 用途 | 说明 |
 | --- | --- | --- |
 | `pip install 'mizuoto[gptsovits-ja]'` | GPT-SoVITS 的日语 | pyopenjtalk 0.4.1 只发布了源码包：构建它需要 CMake 和 C++ 编译器 |
-| `pip install 'mizuoto[gptsovits-ko]'` | GPT-SoVITS 的韩语 | python-mecab-ko 和 jamo |
+| `pip install 'mizuoto[gptsovits-ko]'` | GPT-SoVITS 的韩语 | python-mecab-ko 和 jamo；python-mecab-ko 1.3.7 只为 Python 3.10–3.12 发布了 wheel，在 3.13 和 3.14 上要从源码构建，需要先装好 mecab-ko（`mecab-config`） |
 | `pip install 'mizuoto-indextts[ja]'` | IndexTTS-2.5 的日语 | fugashi 和 unidic-lite |
 
 ## 检查安装

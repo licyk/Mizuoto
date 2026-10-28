@@ -3,11 +3,16 @@
 from __future__ import annotations
 
 import gzip
+import sys
 from importlib import resources
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from importlib.abc import Traversable
+    # importlib.abc's alias is gone in 3.14; importlib.resources.abc has it from 3.11.
+    if sys.version_info >= (3, 11):
+        from importlib.resources.abc import Traversable
+    else:
+        from importlib.abc import Traversable
 
 
 def data_file(name: str) -> Traversable:

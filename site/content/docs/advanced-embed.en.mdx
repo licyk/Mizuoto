@@ -7,7 +7,7 @@ icon: Puzzle
 Mizuoto's web UI, command line and HTTP API are built on one core (`mizuoto.core`). A Python program can use that core directly, or start a whole Mizuoto server inside its own process.
 
 <Callout type="info" title="What it needs">
-Your program needs the `mizuoto` package in the same Python environment (Python 3.10–3.13), and torch for the engines (see [Installation](/docs/installation)). The engines run in your program's process. Importing `mizuoto.core.context` loads neither torch nor FastAPI: torch loads when the first model does.
+Your program needs the `mizuoto` package in the same Python environment (Python 3.10–3.14), and torch for the engines (see [Installation](/docs/installation)). The engines run in your program's process. Importing `mizuoto.core.context` loads neither torch nor FastAPI: torch loads when the first model does.
 </Callout>
 
 ## Calling the core

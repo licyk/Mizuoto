@@ -8,7 +8,7 @@ A release produces three distributions: `mizuoto` (wheel and sdist, with the bui
 
 ## Dependencies
 
-Mizuoto is one environment: the dependencies of the core, the API, the command line, the web UI and every engine are in `pyproject.toml` and install at once. Every new dependency must answer three questions: does it have wheels for every platform CI covers (Linux x86_64, Windows x86_64, macOS arm64, CPython 3.10–3.13), does it change results, does it change process-wide state.
+Mizuoto is one environment: the dependencies of the core, the API, the command line, the web UI and every engine are in `pyproject.toml` and install at once. Every new dependency must answer three questions: does it have wheels for every platform CI covers (Linux x86_64, Windows x86_64, macOS arm64, CPython 3.10–3.14), does it change results, does it change process-wide state.
 
 ### Required
 
@@ -17,7 +17,7 @@ Mizuoto is one environment: the dependencies of the core, the API, the command l
 | Web and command line | fastapi (≥ 0.115.3), starlette (≥ 0.40), uvicorn, websockets, python-socketio, pydantic 2, httpx, typer (&lt; 0.28), rich, tomli-w, tomli (Python &lt; 3.11), send2trash | Starlette 0.40's `FileResponse` honours Range, so the player seeks; uvicorn speaks WebSocket only with websockets installed; typer has an upper bound because the command line uses its private modules |
 | Audio | av (PyAV), numpy | Decoding, encoding and resampling through PyAV, the rest with numpy; no ffmpeg or sox program is called |
 | Runtime | torch (≥ 2.8), safetensors, soxr, tokenizers | torch's build is the user's (below); soxr is the resampler librosa calls; tokenizers builds the BPE transformers builds |
-| Text | pypinyin, rjieba, jieba, opencc, kaldifst, inflect, tiktoken, regex, wordsegment, budoux, ToJyutping, fasttext-predict, pyyaml | Many versions are **pinned** (`pypinyin==0.55.0`, `opencc==1.4.2`, `inflect==7.3.1`…): the engines' output depends on them, and another version changes phones and audio |
+| Text | pypinyin, rjieba, jieba, opencc, kaldifst, inflect, tiktoken, regex, wordsegment, budoux, ToJyutping, fasttext-predict (fasttext-predict-v2 on Python 3.14: the same sources, released with 3.14 wheels), pyyaml | Many versions are **pinned** (`pypinyin==0.55.0`, `opencc==1.4.2`, `inflect==7.3.1`…): the engines' output depends on them, and another version changes phones and audio |
 
 The licence-gated packages bring a few of their own: `mizuoto-fishspeech` needs tokenizers and safetensors, `mizuoto-indextts` sentencepiece. Each also names the packages it imports directly that Mizuoto already brings (torch and numpy; `mizuoto-indextts` also pyyaml and tiktoken), with Mizuoto's bounds, so its dependencies do not rest on Mizuoto's.
 
@@ -26,7 +26,7 @@ The licence-gated packages bring a few of their own: `mizuoto-fishspeech` needs 
 | Extra | Packages | For |
 | --- | --- | --- |
 | `mizuoto[gptsovits-ja]` | `pyopenjtalk==0.4.1` | GPT-SoVITS's Japanese front end; published as a source distribution only, so installing it needs CMake and a C++ compiler |
-| `mizuoto[gptsovits-ko]` | `python-mecab-ko==1.3.7`, `jamo==0.4.1` | GPT-SoVITS's Korean front end |
+| `mizuoto[gptsovits-ko]` | `python-mecab-ko==1.3.7`, `jamo==0.4.1` | GPT-SoVITS's Korean front end (python-mecab-ko's wheels stop at Python 3.12; later Pythons build it against mecab-ko) |
 | `mizuoto-indextts[ja]` | fugashi, unidic-lite | IndexTTS-2.5's Japanese segmentation |
 
 Without an extra, text in that language fails with `capability_not_supported` and the install command in the hint; `mizuoto doctor` lists each engine's missing extras too. The optional attention packages (flash-attn, xFormers, SageAttention) are not extras: they must match the user's torch, and `mizuoto doctor` prints install commands that keep the installed torch (`--no-deps`); see [Attention acceleration](/docs/development-acceleration).
@@ -63,7 +63,7 @@ torch is a dependency, but its build is installed by the user first: from the do
 | Apple silicon (MPS) | macOS arm64 |
 | CPU | All |
 
-CI tests every combination of Linux x86_64, Windows x86_64 and macOS arm64 with Python 3.10–3.13 on CPU torch, and separately torch 2.8.0 and the latest release.
+CI tests every combination of Linux x86_64, Windows x86_64 and macOS arm64 with Python 3.10–3.14 on CPU torch, and separately torch 2.8.0 and the latest release.
 
 <Callout type="warn" title="ROCm, XPU and MPS">
 The code has paths for these devices (device probing, float64 modules on the CPU where a device lacks float64, no compilation on MPS, CUDA graphs and half precision only on CUDA) and they are tested on simulated devices, but they have not been verified on AMD, Intel or Apple hardware.
@@ -130,7 +130,7 @@ It tries the built distributions as a user gets them. In a temporary folder outs
 1. `plan`: `python scripts/ci.py release` decides what this run releases. A push releases each distribution whose version file it changed (the compare API's files); a tag releases the one it names and must equal its version (`v0.2.0` for Mizuoto 0.2.0, `mizuoto-indextts-v0.2.1` for mizuoto-indextts 0.2.1); a manual run, its input.
 2. `checks`: `ci.yml` itself, called as a reusable workflow, for what the push changed (a version file checks its distribution; a tag or a manual run, everything). CI's own run of the same push to `main` skips its jobs, so nothing runs twice.
 3. `build` (Ubuntu, Python 3.11, uv; bun for Mizuoto's web UI): `build_wheels.py host` and/or `build_wheels.py native <id>…`, only what is released; `twine check dist/*`; `dist/` is uploaded as the `dist` artifact.
-4. `smoke` (Ubuntu, Python 3.10 and 3.13): downloads the artifact and runs `smoke_wheels.py --dist dist --python <version> --others index`, so the release is tried with the other distributions as released on PyPI.
+4. `smoke` (Ubuntu, Python 3.10 and 3.14): downloads the artifact and runs `smoke_wheels.py --dist dist --python <version> --others index`, so the release is tried with the other distributions as released on PyPI.
 5. `publish`: in the `pypi` environment (which can require an approval), with the `TWINE_PASSWORD` secret (a PyPI API token; user `__token__`), `twine upload --skip-existing` of Mizuoto first, then the gated wheels, so a package that needs a new Mizuoto never appears before it. A version already on PyPI is skipped.
 6. `github-release` (tags only): a GitHub release named after the tag, with that distribution's files and notes generated from the previous tag of the same distribution; a gated engine's release is not marked latest.
 

@@ -8,7 +8,7 @@ icon: Ruler
 
 ## 代码风格
 
-- **Python ≥ 3.10**，支持 3.10–3.13。`ty` 以 3.10 为目标检查类型，所以不要用 3.11 之后才有的语法和标准库（`tomllib` 要有 `tomli` 回退）。
+- **Python ≥ 3.10**，支持 3.10–3.14。`ty` 以 3.10 为目标检查类型，所以不要用 3.11 之后才有的语法和标准库（`tomllib` 要有 `tomli` 回退）。
 - **ruff 与 ty 不锁版本**，`pyproject.toml` 把 `lint.select` 逐条写出（`E4`、`E7`、`E9`、`F`、`I`、`UP`、`B`、`SIM`、`RUF100`、`ANN`），所以升级 ruff 不会悄悄改变规则集。行宽 180，缩进 4。ty 以 `error-on-warning` 运行。`python scripts/dev.py format` 格式化并做安全的自动修复，`lint` 和 `typecheck-py` 只检查。
 - **每个函数都有类型标注**（`mizuoto/` 和 `packages/native/` 下；测试和脚本除外）。`Any` 只用在值确实可以是任何东西的地方（JSON）。
 - **跨越 API 边界的模型都继承 `Record`**（`mizuoto/core/record.py`，pydantic v2，`json_schema_serialization_defaults_required`）：设置、请求、响应、事件、`--json` 的输出都是。有默认值的字段在输出模式里是必填的，生成的 TypeScript 类型因此与服务器实际发送的一致。
@@ -67,7 +67,7 @@ Mizuoto 的每个引擎都是对上游项目的移植，必须给出与上游**�
 
 ## 测试要求
 
-- **每个改动都带测试**，并让 `python scripts/dev.py check`（lint、typecheck-py、test-py、test-web、typegen-check）通过。CI 在 Linux、Windows、macOS 和 Python 3.10–3.13 上运行同样的测试，所以注意路径、编码和换行在 Windows 上的行为。
+- **每个改动都带测试**，并让 `python scripts/dev.py check`（lint、typecheck-py、test-py、test-web、typegen-check）通过。CI 在 Linux、Windows、macOS 和 Python 3.10–3.14 上运行同样的测试，所以注意路径、编码和换行在 Windows 上的行为。
 - 核心的行为用 dummy 引擎测（不需要 torch 和模型）；外部网络用 `httpx.MockTransport` 替代；测试用 `make_services` 得到隔离的数据目录和空环境变量。
 - **改动引擎或训练器**：更新 `tests/engines_native/` 的小模型测试（包括模拟设备上的流式加载检查），用真实模型跑[契约套件](/docs/development-testing#真实引擎的契约套件)，并用[对照工具](/docs/development-testing#与参照实现对照)与上游比较。
 - API 改了就重新生成类型并提交，否则 `typegen-check` 失败。界面改动要通过规则测试（导入、令牌、布局、浮层、i18n 键一致）。

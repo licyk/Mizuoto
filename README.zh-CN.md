@@ -91,7 +91,7 @@ Mizuoto **0.2.0** 是以此名称发布的第一个版本。
 
 ## 安装
 
-需要 Python 3.10–3.13 与 torch 2.8 及以上版本，并选用与硬件匹配的构建（CUDA、ROCm、XPU、Apple 芯片或 CPU）：
+需要 Python 3.10–3.14 与 torch 2.8 及以上版本，并选用与硬件匹配的构建（CUDA、ROCm、XPU、Apple 芯片或 CPU）：
 先从与本机匹配的索引安装 torch，再安装 Mizuoto。`mizuoto doctor` 会检查 torch 构建与硬件是否匹配，不匹配时给出
 确切的安装命令。推荐 NVIDIA 显卡；所有引擎也能在 CPU 上运行，但较慢。
 

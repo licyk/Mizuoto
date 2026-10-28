@@ -8,7 +8,7 @@ This page lists the conventions a change to Mizuoto must follow. Most of them ar
 
 ## Code style
 
-- **Python ≥ 3.10**, with 3.10–3.13 supported. `ty` checks types for 3.10, so do not use syntax or standard-library modules newer than that (`tomllib` needs its `tomli` fallback).
+- **Python ≥ 3.10**, with 3.10–3.14 supported. `ty` checks types for 3.10, so do not use syntax or standard-library modules newer than that (`tomllib` needs its `tomli` fallback).
 - **ruff and ty are unpinned**, and `pyproject.toml` writes `lint.select` out rule by rule (`E4`, `E7`, `E9`, `F`, `I`, `UP`, `B`, `SIM`, `RUF100`, `ANN`), so a ruff upgrade cannot quietly change the rule set. Line length 180, indent 4. ty runs with `error-on-warning`. `python scripts/dev.py format` formats and applies the safe fixes; `lint` and `typecheck-py` only check.
 - **Every function is annotated** (under `mizuoto/` and `packages/native/`; tests and scripts are exempt). `Any` only where the value really is anything (JSON).
 - **Every model that crosses the API boundary is a `Record`** (`mizuoto/core/record.py`, pydantic v2, `json_schema_serialization_defaults_required`): settings, requests, responses, events, `--json` output. Defaulted fields are required in the output schema, so the generated TypeScript types match what the server sends.
@@ -67,7 +67,7 @@ Each Mizuoto engine is a port of an upstream project and must give **the same** 
 
 ## Tests a change needs
 
-- **Every change comes with tests**, and `python scripts/dev.py check` (lint, typecheck-py, test-py, test-web, typegen-check) passes. CI runs the same tests on Linux, Windows and macOS with Python 3.10–3.13, so mind how paths, encodings and line endings behave on Windows.
+- **Every change comes with tests**, and `python scripts/dev.py check` (lint, typecheck-py, test-py, test-web, typegen-check) passes. CI runs the same tests on Linux, Windows and macOS with Python 3.10–3.14, so mind how paths, encodings and line endings behave on Windows.
 - The core's behaviour is tested with the dummy engine (no torch, no model); the network is replaced by `httpx.MockTransport`; tests get an isolated data folder and an empty environment from `make_services`.
 - **A change to an engine or trainer**: update its tiny-model tests in `tests/engines_native/` (including the streaming check on a simulated device), run the [contract suite](/docs/development-testing#real-engines-the-contract-suite) with real models, and compare with upstream through the [parity harness](/docs/development-testing#parity-with-the-references).
 - When the API changes, regenerate the types and commit them, or `typegen-check` fails. UI changes pass the rule tests (imports, tokens, layout, layers, i18n keys).

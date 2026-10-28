@@ -41,7 +41,7 @@ Every engine is implemented in Mizuoto and runs in the server's own process, in 
 | Engine | Needs | Optional extras | Devices |
 | --- | --- | --- | --- |
 | Qwen3-TTS, CosyVoice, F5-TTS, OmniVoice, VoxCPM, speech recognition | torch (2.8 or newer) | — | GPU (NVIDIA, AMD, Intel, Apple), CPU |
-| GPT-SoVITS | torch | `mizuoto[gptsovits-ja]` (Japanese: pyopenjtalk 0.4.1, built from source with CMake and a C++ compiler), `mizuoto[gptsovits-ko]` (Korean: python-mecab-ko, jamo) | GPU (NVIDIA, AMD, Intel, Apple), CPU |
+| GPT-SoVITS | torch | `mizuoto[gptsovits-ja]` (Japanese: pyopenjtalk 0.4.1, built from source with CMake and a C++ compiler), `mizuoto[gptsovits-ko]` (Korean: python-mecab-ko, jamo; on Python 3.13 and 3.14 python-mecab-ko is built from source against mecab-ko) | GPU (NVIDIA, AMD, Intel, Apple), CPU |
 | Fish Speech | torch, the `mizuoto-fishspeech` distribution | — | GPU (NVIDIA, AMD, Intel, Apple), CPU |
 | IndexTTS | torch, the `mizuoto-indextts` distribution | `mizuoto-indextts[ja]` (IndexTTS-2.5's Japanese: fugashi, unidic-lite) | GPU (NVIDIA, AMD, Intel, Apple), CPU |
 

@@ -7,7 +7,7 @@ icon: Puzzle
 Mizuoto 的网页界面、命令行和 HTTP 接口都建立在同一个核心（`mizuoto.core`）之上。Python 程序可以直接使用这个核心，也可以在进程里启动一个完整的 Mizuoto 服务器。
 
 <Callout type="info" title="需要什么环境">
-你的程序需要和 `mizuoto` 包装在同一个 Python 环境里（Python 3.10–3.13），引擎还需要 torch（见 [安装](/docs/installation)）。引擎就在你的程序的进程里运行。导入 `mizuoto.core.context` 不会加载 torch，也不会加载 FastAPI：torch 在第一个模型加载时才加载。
+你的程序需要和 `mizuoto` 包装在同一个 Python 环境里（Python 3.10–3.14），引擎还需要 torch（见 [安装](/docs/installation)）。引擎就在你的程序的进程里运行。导入 `mizuoto.core.context` 不会加载 torch，也不会加载 FastAPI：torch 在第一个模型加载时才加载。
 </Callout>
 
 ## 直接调用核心
