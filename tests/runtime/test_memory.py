@@ -125,6 +125,84 @@ def test_a_unit_read_outside_its_forward_fails_in_strict_mode():
         model.blocks[0][0].weight.sum().item()
 
 
+class RowExperts(nn.Module):
+    """A stack of experts read by the row (``runtime.rows``): each row of ``ids`` picks one expert per input row."""
+
+    STREAM_ROWS = True
+
+    def __init__(self, experts: int, width: int, generator: torch.Generator) -> None:
+        super().__init__()
+        self.weight = nn.Parameter(torch.randn(experts, width, width, generator=generator) / width**0.5)
+        self.scale = nn.Parameter(torch.randn(experts, width, generator=generator))
+
+    def row_reserve(self) -> int:
+        return 2 * (self.weight[0].numel() + self.scale[0].numel()) * 4
+
+    def forward(self, x: torch.Tensor, ids: torch.Tensor) -> torch.Tensor:
+        from mizuoto.runtime.rows import source
+
+        rows = source(self)
+        out = []
+        for i, e in enumerate(ids.tolist()):
+            w, s = (self.weight[e], self.scale[e]) if rows is None else (rows.take(self, "weight", e), rows.take(self, "scale", e))
+            out.append((x[i] @ w.T) * s)
+        return torch.stack(out)
+
+
+class Mixture(nn.Module):
+    """Blocks of a dense layer then a stack of experts: each block one unit."""
+
+    def __init__(self, n: int = 3, experts: int = 16, width: int = 128) -> None:  # a block of 1 MB: a unit
+        super().__init__()
+        g = torch.Generator().manual_seed(3)
+        self.inp = ops.default.Linear(width, width)
+        self.blocks: Any = nn.ModuleList(nn.ModuleDict({"dense": ops.default.Linear(width, width), "experts": RowExperts(experts, width, g)}) for _ in range(n))
+        ops.init_random(self, g)
+
+    def forward(self, x: torch.Tensor, ids: torch.Tensor) -> torch.Tensor:
+        x = self.inp(x)
+        for b in self.blocks:
+            x = b["experts"](torch.tanh(b["dense"](x)), ids)
+        return x
+
+
+def test_row_layers_stream_only_the_rows_a_call_reads():
+    from mizuoto.runtime.rows import source
+
+    model = Mixture()
+    x = torch.randn(2, 128, generator=torch.Generator().manual_seed(1))
+    ids = torch.tensor([9, 1])
+    with torch.inference_mode():
+        expected = model(x, ids)
+    h = ModelHandle(model, name="m", load_device="cpu", kind="sequence")
+    h.simulated = h.strict = h.keep_host = True
+    assert all(len(u.rows) == 2 for u in h.units)  # each block: the dense layer, the experts' two stacks
+    experts = model.blocks[0]["experts"]
+    expert_bytes = (experts.weight[0].numel() + experts.scale[0].numel()) * 4
+    dense_bytes = sum(t.numel() * 4 for t in model.blocks[0]["dense"].parameters())
+    assert h.units[0].reserve == dense_bytes + 2 * expert_bytes < h.units[0].bytes
+    streamer = Streamer("cpu")
+    h.load(h.fixed_bytes + h.units[0].bytes + h.stream_reserve(h.units, 1), streamer)
+    assert [u.resident for u in h.units] == [True, False, False]
+    assert source(model.blocks[0]["experts"]) is None and source(model.blocks[1]["experts"]) is not None
+    assert not h.graphable()
+    with torch.inference_mode():
+        assert torch.equal(model(x, ids), expected)
+    # the streamed blocks copied their dense layers whole and two rows of each stack
+    assert streamer.copied_bytes == 2 * (dense_bytes + 2 * expert_bytes)
+    # at rest nothing of a streamed block is there (strict), its experts included
+    assert model.blocks[1]["experts"].weight.device.type == "meta"
+    h.load(None, streamer)  # whole: the experts are read where they are
+    assert source(model.blocks[1]["experts"]) is None
+    with torch.inference_mode():
+        assert torch.equal(model(x, ids), expected)
+    h.offload()
+    h.unpark()
+    assert source(model.blocks[1]["experts"]) is None
+    with torch.inference_mode():
+        assert torch.equal(model(x, ids), expected)
+
+
 def test_oneshot_handles_keep_their_largest_units_and_hot_units_first():
     class Mixed(nn.Module):
         def __init__(self) -> None:

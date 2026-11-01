@@ -142,7 +142,8 @@ Details: `development-runtime`, `development-memory`, `development-acceleration`
   runs out of memory runs again (at most twice) with more streamed and its generators put back: identical, slower.
   Partial placements are explained in the log and in `meta.memory.partial`. Host memory is registered in place
   (`cudaHostRegister`) only by `runtime/pinning.py`, which releases it with the storage. Only linear/conv weights
-  stream; code that reads a unit's weights outside its forward must mark it `fixed`. New engines must pass
+  stream, and stacks of experts by the row (`STREAM_ROWS`, `runtime/rows.py`: a call copies the experts it uses); code
+  that reads a unit's weights outside its forward must mark it `fixed`. New engines must pass
   `tests/engines_native/streaming.py` (every unit streamed, half, none: identical on a simulated device). Mark an
   autoregressive model's handle `kind="sequence"`: its streamed layers are never prefetched (a token's work hides no
   copy; prefetching only took room from resident weights), while models run once per input prefetch on side streams.

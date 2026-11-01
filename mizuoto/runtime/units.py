@@ -8,6 +8,9 @@ norms between blocks, every buffer) is *fixed*: on the device whenever the model
 - Only the weights of linear and convolution layers stream (as ComfyUI streams only its ops layers), and of layers whose
   class says ``STREAMABLE = True``: their ``forward`` is where they are read. Any other parameter of a unit (norms,
   scales, embeddings: codebooks are read through their ``weight``) stays with the fixed parts.
+- Layers whose class says ``STREAM_ROWS = True`` (stacks of experts, ``runtime.rows``) stream by the row: their
+  parameters belong to the unit (resident with it), but when it streams they stay on the host and the layer copies the
+  rows a call reads. Their slots are the unit's ``rows``.
 - A module may name its units: ``memory_units() -> list[nn.Module]`` (ComfyUI's ``get_dynamic_vram__units``).
 - Otherwise each child of a ``ModuleList`` or ``Sequential`` of at least ``UNIT_MIN_BYTES`` is a unit (the outermost
   lists: a unit is never split further).
@@ -28,6 +31,8 @@ from __future__ import annotations
 import functools
 from dataclasses import dataclass, field
 from typing import Any, Literal
+
+from mizuoto.runtime.rows import row_reserve, streams_rows
 
 Priority = Literal["hot", "normal", "cold"]
 Mark = Literal["fixed", "hot", "normal", "cold"]
@@ -61,10 +66,19 @@ class Unit:
     bytes: int
     index: int
     priority: Priority = "normal"
+    rows: frozenset[int] = frozenset()
+    """Indices into ``slots`` of the parameters of row-streamed layers (``runtime.rows``): never copied whole."""
+    reserve: int = -1
+    """Device bytes a streamed call holds: its other weights and the rows its layers hold at once (``bytes`` when it has
+    no rows)."""
     resident: bool = False
     hooks: list[Any] = field(default_factory=list)
     entered: int = 0
     """Depth of calls into the unit's own module (its weights are all there meanwhile)."""
+
+    def __post_init__(self) -> None:
+        if self.reserve < 0:
+            self.reserve = self.bytes
 
     def leaves(self) -> dict[int, tuple[Any, list[int]]]:
         """The modules holding the unit's parameters: id → (module, indices into ``slots``)."""
@@ -149,9 +163,13 @@ def split(root: Any, marks: dict[int, Mark] | None = None) -> Split:
         if inside & excluded or any(marks.get(i) == "fixed" for i in inside):
             continue
         slots: list[Slot] = []
+        row_modules: list[Any] = []
         for m in module.modules():
-            if not isinstance(m, streamable()) and not getattr(type(m), "STREAMABLE", False):
+            by_row = streams_rows(m)
+            if not isinstance(m, streamable()) and not getattr(type(m), "STREAMABLE", False) and not by_row:
                 continue  # other modules' weights stay with the fixed parts (ComfyUI streams only its ops layers)
+            if by_row:
+                row_modules.append(m)
             for pname, p in m._parameters.items():
                 if p is None or p is first:
                     continue
@@ -163,7 +181,10 @@ def split(root: Any, marks: dict[int, Mark] | None = None) -> Split:
         size = sum(_nbytes(getattr(m, n)) for m, n in slots)
         if size == 0 or size < (TINY_BYTES if named else UNIT_MIN_BYTES):
             continue
-        units.append(Unit(name, module, slots, size, index, inherited.get(id(module), "normal")))
+        rows = frozenset(i for i, (m, _) in enumerate(slots) if streams_rows(m))
+        # a streamed call holds at most the whole unit
+        reserve = min(size, sum(_nbytes(getattr(m, n)) for i, (m, n) in enumerate(slots) if i not in rows) + sum(row_reserve(m) for m in row_modules))
+        units.append(Unit(name, module, slots, size, index, inherited.get(id(module), "normal"), rows, reserve))
         in_unit |= inside
 
     unit_params = {id(m._parameters[n]) for u in units for m, n in u.slots}

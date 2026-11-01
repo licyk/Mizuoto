@@ -17,6 +17,8 @@ before it runs (a forward pre-hook) and back after (a forward hook; ``runtime.st
 - **Freeing** drops everything with no copy back.
 - **Never changed in place on the device.** A weight that changes after placement goes through the handle
   (``replace``), so a host copy is never stale.
+- **Rows.** A unit's row-streamed layers (``runtime.rows``: stacks of experts) are never copied whole when it streams:
+  the layer copies the rows a call reads through the handle (``RowSource``), counted with the streamer's copies.
 - ``simulated``: the load device is the CPU playing an accelerator (tests and the parity harness: ``DeviceService``'s
   ``simulate``); placing then copies, so a streamed unit really leaves and comes back. ``strict`` (tests) rests streamed
   weights as meta tensors, so code reading a unit's weight outside its ``forward`` fails.
@@ -29,6 +31,7 @@ from collections.abc import Iterable
 from typing import TYPE_CHECKING, Any, Literal
 
 from mizuoto.runtime import pinning
+from mizuoto.runtime.rows import ATTRIBUTE as ROWS_ATTRIBUTE
 from mizuoto.runtime.units import Mark, Split, Unit, split
 
 if TYPE_CHECKING:
@@ -138,8 +141,8 @@ class ModelHandle:
 
     def stream_reserve(self, streamed: Iterable[Unit], copies: int) -> int:
         """Device bytes the copies of streamed units need at once: the ``copies`` largest (the running unit and those in
-        flight)."""
-        sizes = sorted((u.bytes for u in streamed), reverse=True)
+        flight; a unit with row-streamed layers holds its other weights and the rows they read at once)."""
+        sizes = sorted((u.reserve for u in streamed), reverse=True)
         return sum(sizes[:copies])
 
     # -- where it is ------------------------------------------------------------------
@@ -201,6 +204,8 @@ class ModelHandle:
                 return True
             if self.kind != "sequence" or self._streamer is None or not self._placed:
                 return False
+            if any(u.rows for u in self.units if not u.resident):
+                return False  # which rows a step copies is learnt from the device, which a graph cannot wait for
             hosts = [self._host.get((id(m), n)) for u in self.units if not u.resident for m, n in u.slots]
             return all(h is not None and h.is_pinned() for h in hosts)
 
@@ -408,6 +413,7 @@ class ModelHandle:
         self._remove_hooks(u)
         for m, n in u.slots:
             self._to_device(m, n)
+        self._row_source(u, False)
         u.resident = True
 
     def _make_streamed(self, u: Unit) -> None:
@@ -420,6 +426,7 @@ class ModelHandle:
                 self._host[key] = current if (not self.simulated and _same_device(str(current.device), self.offload_device)) else _copy(current, self.offload_device)
             _assign(m, n, _rest(self._host[key], self.strict))
         u.resident = False
+        self._row_source(u, True)
         self._install_hooks(u)
 
     def _rest_unit(self, u: Unit) -> None:
@@ -431,7 +438,25 @@ class ModelHandle:
                 _assign(m, n, host)
             elif not _same_device(str(p.data.device), self.offload_device) or self.simulated:
                 _assign(m, n, _copy(p.data, self.offload_device))
+        self._row_source(u, False)
         u.resident = False
+
+    def _row_source(self, u: Unit, streamed: bool) -> None:
+        """Give ``u``'s row-streamed layers this handle's rows while it streams (``runtime.rows.source``), none otherwise."""
+        for i in u.rows:
+            m = u.slots[i][0]
+            if streamed:
+                m.__dict__[ROWS_ATTRIBUTE] = _Rows(self)
+            else:
+                m.__dict__.pop(ROWS_ATTRIBUTE, None)
+
+    def take_row(self, module: Any, name: str, row: int) -> Any:
+        """Row ``row`` of a streamed row layer's parameter on the load device (``runtime.rows.RowSource.take``)."""
+        host = self._host[(id(module), name)]
+        t = _copy(host[row], self.load_device)
+        if self._streamer is not None:
+            self._streamer.copied_bytes += t.numel() * t.element_size()
+        return t
 
     def _home(self, slots: list[tuple[Any, str]]) -> None:
         for m, n in slots:
@@ -472,11 +497,15 @@ class ModelHandle:
                 self._remove_hooks(u)
 
     def _fetch(self, u: Unit) -> list[Any]:
+        """Device copies of ``u``'s weights but its rows (``_copied``'s order)."""
         from mizuoto.runtime.context import check_cancel
 
         assert self._streamer is not None
         check_cancel()
-        return self._streamer.fetch(self, u, [self._host[(id(m), n)] for m, n in u.slots])
+        slots = _copied(u)
+        if not slots:
+            return []  # rows only: the layer takes them itself
+        return self._streamer.fetch(self, u, [self._host[(id(m), n)] for m, n in slots])
 
     def _enter(self, u: Unit) -> None:
         if u.resident or self._streamer is None:
@@ -484,7 +513,7 @@ class ModelHandle:
         u.entered += 1
         if u.entered > 1:
             return
-        for (m, n), t in zip(u.slots, self._fetch(u), strict=True):
+        for (m, n), t in zip(_copied(u), self._fetch(u), strict=True):
             _assign(m, n, t)
 
     def _exit(self, u: Unit) -> None:
@@ -501,6 +530,9 @@ class ModelHandle:
     def _enter_leaf(self, u: Unit, indices: list[int]) -> None:
         if u.resident or u.entered or self._streamer is None:
             return
+        indices = [i for i in indices if i not in u.rows]
+        if not indices:
+            return  # a row layer: it takes its rows itself
         if _capturing(self._streamer.device):
             # a CUDA graph being captured (``graphable``): this leaf's weights only, copied inside it, so that each weight
             # is copied once per step though a unit's leaves sit in different graphs (around its attention)
@@ -509,9 +541,10 @@ class ModelHandle:
                 _assign(m, n, _copy(self._host[(id(m), n)], self._streamer.device))
             return
         tensors = self._fetch(u)
+        position = {i: k for k, i in enumerate(i for i in range(len(u.slots)) if i not in u.rows)}
         for i in indices:
             m, n = u.slots[i]
-            _assign(m, n, tensors[i])
+            _assign(m, n, tensors[position[i]])
 
     def _exit_leaf(self, u: Unit, indices: list[int]) -> None:
         if u.resident or u.entered:
@@ -538,6 +571,22 @@ class ModelHandle:
 
     def __repr__(self) -> str:
         return f"ModelHandle({self.name!r}, {self.size_bytes / 2**20:.0f} MB, on {self.device})"
+
+
+class _Rows:
+    """A handle as the ``RowSource`` of its streamed row layers."""
+
+    def __init__(self, handle: ModelHandle) -> None:
+        self.handle = handle
+        self.device = handle.load_device
+
+    def take(self, module: Any, name: str, row: int) -> Any:
+        return self.handle.take_row(module, name, row)
+
+
+def _copied(u: Unit) -> list[tuple[Any, str]]:
+    """The slots a streamed unit copies when it is entered: all but its rows."""
+    return [s for i, s in enumerate(u.slots) if i not in u.rows] if u.rows else u.slots
 
 
 def _assign(module: Any, name: str, t: Any) -> None:

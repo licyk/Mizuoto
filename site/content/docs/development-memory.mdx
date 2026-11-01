@@ -77,6 +77,7 @@ audio = ctx.run("codec decoder", [self.h_decoder], decode, self._decoder_memory(
 
 - 模块可以用 `memory_units() -> list[nn.Module]` 指定自己的单元。否则，每个 `ModuleList` 或 `Sequential` 中不小于 1 MB 的子模块是一个单元（取最外层的列表；单元不会再往下拆）。
 - **只有 `nn.Linear`、`Conv1d/2d`、`ConvTranspose1d/2d` 的权重会流式加载**，以及声明了 `STREAMABLE = True` 的类（IndexTTS 的 GPT-2 `Conv1D`）。这些层的权重只在其 `forward` 中读取。
+- **专家堆按行流式加载。** 声明了 `STREAM_ROWS = True` 的类（`mizuoto/runtime/rows.py`；Fish Speech Drama 3 的专家）持有第一维为行（一个专家）的权重堆，并且只通过 `rows.source(self)` 读取它们。它的参数属于所在单元，随单元常驻；单元流式加载时，这些参数留在主机内存（与其他流式权重一样页锁定），每次调用只复制它读到的行：`source.take(module, name, row)` 把一行放到设备上，计入 `meta.memory.streamed_mb`。进入单元时，单元的其他权重照常复制。单元的 `reserve`（流式调用时在设备上占用的字节）是这些其他权重加上该模块的 `row_reserve()`（同时持有的行），且不超过整个单元。一步需要哪些行要从设备上读出，所以按行流式加载的句柄不能用 CUDA 图。Drama 3 每层 256 个专家，每个 token 用 8 个：整层流式加载时，每个 token 都要把一层的专家整个传过去（FP8 下 0.8 GB，每帧 32 GB）；按行加载时，一个解码步每层只复制约 25 MB。
 - **其余都是固定部分**：只要组件在设备上，它们就在设备上。包括嵌入（码本经常通过 `.weight` 直接读取）、归一化、缩放系数、缓冲区、与单元外模块共享的参数（共享的嵌入与输出头）、模型的第一个参数（代码通过它判断模型所在设备）、小于 64 KB 的单元、标为 `fixed` 的模块，以及固定在 CPU 上的模块（`DeviceService.pin_to_cpu`，从不移动）之下的一切。
 
 引擎用 `handle.mark(module, mark)` 在句柄上标记子模块：
