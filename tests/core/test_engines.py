@@ -304,3 +304,12 @@ def test_a_parameter_default_may_differ_by_variant(services):
     s2 = {f.name: f.default for f in param_fields(m, "s2_pro")}
     assert (drama3["temperature"], drama3["top_p"], drama3["top_k"]) == (0.7, 0.7, 30)
     assert (s2["temperature"], s2["top_p"]) == (0.8, 0.8) and "top_k" not in s2
+
+
+def test_drama3_cuts_its_own_long_text(services):
+    """Drama 3 chunks long text itself, each chunk's prompt holding the first and latest chunks (upstream's
+    generate_long_drama3): Mizuoto must not cut it into requests of its own first (``long_text``)."""
+    from mizuoto.core.engines.registry import load_manifest
+
+    m = load_manifest(MANIFESTS_DIR / "fishspeech.toml")
+    assert "long_text" in m.variants["drama3"].capabilities

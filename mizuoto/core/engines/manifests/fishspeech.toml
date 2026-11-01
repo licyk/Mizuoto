@@ -40,7 +40,8 @@ max_references = 4
 [variants.drama3]
 title = "Drama 3"
 sample_rate = 44100
-capabilities = ["clone", "multi_reference", "auto_voice", "inline_tags", "dialogue", "stream_audio", "seed"]
+# long_text: the engine cuts the text itself (about 300 bytes, three speakers, the first and latest chunks as history)
+capabilities = ["clone", "multi_reference", "auto_voice", "inline_tags", "dialogue", "long_text", "stream_audio", "seed"]
 stream_granularity = "segment"
 
 [variants.drama3.reference]
@@ -90,7 +91,7 @@ help = "No effect: neither S2 Pro's sampler nor Drama 3's uses it (upstream's ne
 target = "max_new_tokens"
 type = "int"
 min = 0
-max = 8192
+max = 10240
 default = 1024
 help = "At most this many frames per text segment (0: S2 Pro, no limit but the model's; Drama 3, 600, or 2048 with single_chunk)."
 
@@ -98,7 +99,7 @@ help = "At most this many frames per text segment (0: S2 Pro, no limit but the m
 target = "top_k"
 type = "int"
 min = 0
-max = 4096
+max = 8192
 default = 30
 variants = ["drama3"]
 help = "Candidates per draw. 0 lifts the cap, which only the reference sampler allows."

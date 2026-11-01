@@ -40,6 +40,16 @@ def dequantize_fp8_blocks(weight: torch.Tensor, scale_inv: torch.Tensor, dtype: 
     return scaled.view(*lead, rows, cols).to(dtype)
 
 
+def dense(weight: torch.Tensor, scale_inv: torch.Tensor, dtype: torch.dtype) -> torch.Tensor:
+    """FP8 experts in ``dtype`` as upstream's dense experts hold them where its FP8 kernel does not run: dequantized in
+    float32, saturated to float16's range for a float16 model (``clamp_to_float16``), then cast. For float32 and
+    bfloat16 these are ``dequantize_fp8_blocks``' values."""
+    out = dequantize_fp8_blocks(weight, scale_inv, torch.float32)
+    if dtype == torch.float16:
+        out = out.clamp(-FLOAT16_MAX, FLOAT16_MAX)
+    return out.to(dtype)
+
+
 def select_fp8(weight: torch.Tensor, index: torch.Tensor | int) -> torch.Tensor:
     """``weight[index]`` for a float8 tensor (advanced indexing has no float8 kernel)."""
     return weight.view(torch.uint8)[index].view(weight.dtype)
@@ -107,7 +117,7 @@ class Experts(nn.Module):
             w13, w2 = stacks
             return w13[index].to(dtype), w2[index].to(dtype)
         w13, w2, s13, s2 = stacks
-        return dequantize_fp8_blocks(select_fp8(w13, index), s13[index], dtype), dequantize_fp8_blocks(select_fp8(w2, index), s2[index], dtype)
+        return dense(select_fp8(w13, index), s13[index], dtype), dense(select_fp8(w2, index), s2[index], dtype)
 
     def _own(self) -> tuple[torch.Tensor, ...]:
         return tuple(getattr(self, name) for name in self._names())
