@@ -118,7 +118,7 @@ def param_fields(manifest: EngineManifest, variant: str) -> list[ParamField]:
                     name=name,
                     kind="common",
                     type=spec.type,
-                    default=spec.default,
+                    default=spec.defaults.get(variant, spec.default),
                     min=spec.min,
                     max=spec.max,
                     step=spec.step,

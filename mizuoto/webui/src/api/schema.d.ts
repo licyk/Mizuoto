@@ -4044,6 +4044,10 @@ export interface components {
             step: number | null;
             /** Default */
             default: unknown;
+            /** Defaults */
+            defaults: {
+                [key: string]: unknown;
+            };
             /**
              * Help
              * @default

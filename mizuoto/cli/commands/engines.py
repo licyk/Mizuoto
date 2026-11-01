@@ -41,12 +41,16 @@ def engine_info(engine_id: Annotated[str, typer.Argument(help="Engine id")], jso
             return
         console.print(f"[bold]{manifest.title}[/bold] ({manifest.id}) — {manifest.description}", highlight=False)
         console.print(
-            f"Licence: {manifest.licence.name}{'' if status.licence_accepted else ' — not accepted'}   Available: {'yes' if status.available else 'needs ' + ', '.join(status.missing)}",
+            f"Licence: {status.licence.name}{'' if status.licence_accepted else ' — not accepted'}   Available: {'yes' if status.available else 'needs ' + ', '.join(status.missing)}",
             highlight=False,
         )
         for v in manifest.variants.values():
             console.print(f"\n[bold]{v.id}[/bold] {v.title} · {v.sample_rate} Hz · {', '.join(v.capabilities)}", highlight=False)
-        print_table("Parameters", ["Name", "Engine name", "Range", "Default"], [(k, p.target, f"{p.min}–{p.max}", p.default) for k, p in manifest.params.items()])
+        print_table(
+            "Parameters",
+            ["Name", "Engine name", "Range", "Default"],
+            [(k, p.target, f"{p.min}–{p.max}", " ".join([str(p.default), *(f"({v}: {d})" for v, d in p.defaults.items())])) for k, p in manifest.params.items()],
+        )
         print_table("Models", ["Id", "Variant", "Title"], [(m.id, m.variant, m.title) for m in manifest.models])
 
 
@@ -54,10 +58,11 @@ def engine_accept_licence(engine_id: Annotated[str, typer.Argument(help="Engine 
     """Accept a licence-gated engine's licence (after reading it)."""
     with open_services() as services:
         manifest = services.engines.manifest(engine_id)
-        if not manifest.licence.gated:
-            console.print(f"{manifest.title} needs no licence acceptance ({manifest.licence.name}).")
+        licence = services.engines.status(engine_id).licence  # every licence of the engine (its variants' too)
+        if not licence.gated:
+            console.print(f"{manifest.title} needs no licence acceptance ({licence.name}).")
             return
-        console.print(f"{manifest.title} is licensed under {manifest.licence.name}: {manifest.licence.url}", highlight=False)
+        console.print(f"{manifest.title} is licensed under {licence.name}: {licence.url}", highlight=False)
         if not yes:
             text = services.engines.licence_text(engine_id).text
             if text:

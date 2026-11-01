@@ -108,6 +108,8 @@ class ParamSpec(Record):
     step: float | None = None
     default: Any = None
     """The engine's own default (shown in the UI); Mizuoto never imposes it."""
+    defaults: dict[str, Any] = Field(default_factory=dict)
+    """Per variant, the engine's own default where it is not ``default`` (Fish Speech's Drama 3 samples at 0.7)."""
     help: str = ""
     approximate: bool = False
     """The engine's parameter only resembles the common one; a result carries a warning."""

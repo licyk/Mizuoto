@@ -292,3 +292,15 @@ def test_parameters_without_effect_are_accepted_but_not_offered():
     params, _ = check_params(manifest, "s2_pro", {"repetition_penalty": 1.2}, strict=True)
     assert params["repetition_penalty"] == 1.2
     assert check_options(manifest, "s2_pro", {"normalize": False}) == {"normalize": False}
+
+
+def test_a_parameter_default_may_differ_by_variant(services):
+    """The form shows each variant's own default (and the UI leaves a value equal to it unset, so the engine's applies):
+    Fish Speech's Drama 3 samples at 0.7, S2 Pro at 0.8."""
+    from mizuoto.core.engines.params import param_fields
+
+    m = services.engines.manifest("fishspeech")
+    drama3 = {f.name: f.default for f in param_fields(m, "drama3")}
+    s2 = {f.name: f.default for f in param_fields(m, "s2_pro")}
+    assert (drama3["temperature"], drama3["top_p"], drama3["top_k"]) == (0.7, 0.7, 30)
+    assert (s2["temperature"], s2["top_p"]) == (0.8, 0.8) and "top_k" not in s2
