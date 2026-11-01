@@ -7,7 +7,9 @@
 - ``release``: the distributions a run of Release publishes. A push to main releases those whose version file it
   changes; a tag releases the one it names (``v<version>`` Mizuoto, ``mizuoto-<id>-v<version>`` a gated engine) and
   must match its version; a manual run releases what its ``packages`` input names (``all``, or names).
-- ``lower-bound <id>``: the oldest Mizuoto a gated engine's package says it works with (CI tests the package on it).
+- ``lower-bound <id>``: the oldest Mizuoto a gated engine's package says it works with (CI tests the package on it), and
+  where CI gets it: ``pypi``, or ``checkout`` when the bound is the Mizuoto at this commit, released with the package
+  (a package that needs what this Mizuoto adds: the release publishes Mizuoto first).
 
 With ``GITHUB_OUTPUT`` set, the answers are also written there as ``key=value`` lines for the workflow. Standard
 library only.
@@ -123,6 +125,12 @@ def lower_bound(engine_id: str) -> str:
     return found.group(1)
 
 
+def bound_source(version: str) -> str:
+    """Where CI gets a package's oldest Mizuoto: this checkout when the bound is its version (not on PyPI until the
+    release that publishes it, Mizuoto first, then the package), else PyPI."""
+    return "checkout" if version == version_of(distributions()[0]) else "pypi"
+
+
 def write_outputs(values: dict[str, object]) -> None:
     """``values`` on standard output as JSON, and as ``key=value`` lines in ``GITHUB_OUTPUT`` when it is set."""
     print(json.dumps(values, indent=1))
@@ -174,7 +182,8 @@ def main(argv: list[str]) -> int:
             }
         )
     else:
-        write_outputs({"version": lower_bound(args.engine)})
+        version = lower_bound(args.engine)
+        write_outputs({"version": version, "source": bound_source(version)})
     return 0
 
 

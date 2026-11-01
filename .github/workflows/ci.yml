@@ -181,7 +181,8 @@ jobs:
   oldest-mizuoto:
     # A gated engine's package on the oldest Mizuoto its pyproject.toml allows, from PyPI: it must not use what that
     # release lacks. The tests run outside the checkout, with only its tests/ on the path, so `import mizuoto` finds
-    # the released one.
+    # the released one. A bound that is this commit's Mizuoto (released with the package, Mizuoto first) is installed
+    # from the checkout: it is not on PyPI before that release.
     name: ${{ matrix.engine }} · oldest Mizuoto
     needs: scope
     if: needs.scope.outputs.run == 'true' && needs.scope.outputs.gated != '[]'
@@ -200,10 +201,13 @@ jobs:
           enable-cache: false
       - name: Environment
         run: |
-          oldest=$(python scripts/ci.py lower-bound "${{ matrix.engine }}" | python -c 'import json, sys; print(json.load(sys.stdin)["version"])')
-          echo "The oldest Mizuoto mizuoto-${{ matrix.engine }} allows: $oldest"
+          bound=$(python scripts/ci.py lower-bound "${{ matrix.engine }}")
+          oldest=$(python -c 'import json, sys; print(json.load(sys.stdin)["version"])' <<< "$bound")
+          source=$(python -c 'import json, sys; print(json.load(sys.stdin)["source"])' <<< "$bound")
+          echo "The oldest Mizuoto mizuoto-${{ matrix.engine }} allows: $oldest (from $source)"
           uv pip install torch --index-url "$TORCH_INDEX"
-          uv pip install "mizuoto==$oldest" -e "packages/native/${{ matrix.engine }}" pytest httpx tomli
+          if [ "$source" = checkout ]; then mizuoto="."; else mizuoto="mizuoto==$oldest"; fi
+          uv pip install "$mizuoto" -e "packages/native/${{ matrix.engine }}" pytest httpx tomli
       - name: Tests
         # Not the range check: it compares the range with Mizuoto at this commit, which the other jobs test.
         run: |

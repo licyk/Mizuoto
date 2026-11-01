@@ -62,6 +62,11 @@ def test_release_publishes_what_the_push_tag_or_input_names():
         ci.release("workflow_dispatch", "branch", "main", [], "mizuoto-nope")
 
 
+def test_a_bound_at_this_mizuoto_is_tested_on_the_checkout():
+    assert ci.bound_source(ci.version_of(ci.distributions()[0])) == "checkout"
+    assert ci.bound_source("0.2.0") == "pypi"
+
+
 def test_lower_bounds_are_released_versions():
     for engine in GATED:
         assert re.fullmatch(r"\d+\.\d+\.\d+", ci.lower_bound(engine)), engine

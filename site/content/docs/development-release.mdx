@@ -81,7 +81,7 @@ CI 在 Linux x86_64、Windows x86_64 和 macOS arm64 上，用 CPU 版 torch 测
 
 需要接受许可的包在自己的 `pyproject.toml` 里写明它适用的 Mizuoto 版本：`mizuoto>=0.2.0,<0.3`。它的代码跑在 Mizuoto 的运行时上，它的清单（选项、模型目录、许可）随 `mizuoto` 发布，所以：
 
-- **下限**是包含该包所用一切的最旧 Mizuoto 版本。CI 用 PyPI 上的这个版本测试该包（`oldest-mizuoto` 作业）；包开始用到更新的东西时提高下限，并先发布 Mizuoto。
+- **下限**是包含该包所用一切的最旧 Mizuoto 版本。CI 用 PyPI 上的这个版本测试该包（`oldest-mizuoto` 作业）；包开始用到更新的东西时提高下限，并先发布 Mizuoto。若下限正是同一提交中的 Mizuoto（该包需要这个版本新增的东西，如 mizuoto-fishspeech 0.3.0 的 Drama 3 需要 0.2.18 的按变体许可与按行流式加载），由于它还不在 PyPI 上，就改用检出的代码测试（`scripts/ci.py lower-bound` 给出 `checkout`）；两者在同一次运行中发布（手动运行 Release 并选 `all`）：其冒烟测试把两个 wheel 一起安装，并先发布 Mizuoto 再发布该包。单独发布 Mizuoto 会在那里失败：冒烟测试会用已发布的包运行 `mizuoto doctor`，而它已与新的清单不符。
 - **上限**在 Mizuoto 还是 0.x 时取下一个次版本。`check_gated_distribution`（在 `tests/core/test_engines.py`，由各包的 `test_<id>_package.py` 调用）在 Mizuoto 的版本超出范围时失败，所以 Mizuoto 发布越过上限时，也要提高范围并发布这两个包。
 - **改动一个需要接受许可的引擎的选项**，也会改动 `mizuoto` 里它的清单：先发布带新清单的 Mizuoto，再发布把下限提高到该版本的包。
 
