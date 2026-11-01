@@ -1,14 +1,14 @@
 ---
 title: "Fish Speech"
-description: "The Fish Speech S2 Pro engine as implemented in Mizuoto's separate mizuoto-fishspeech distribution: the dual-AR transformer and the 44.1 kHz codec, what reproduces upstream exactly, one wait per frame and CUDA graphs, the LoRA fine-tune, and its parity results."
+description: "The Fish Speech engine as implemented in Mizuoto's separate mizuoto-fishspeech distribution: S2 Pro's dual-AR transformer and the 44.1 kHz codec, Drama 3's mixture-of-experts backbone and codebook tower, what reproduces upstream exactly, one wait per frame and CUDA graphs, experts streamed by the row, the LoRA fine-tune, and parity results."
 icon: Fish
 ---
 
-Fish Audio S2 Pro ([fishaudio/fish-speech](https://github.com/fishaudio/fish-speech), Fish Audio Research License). The port is under the same licence, so it ships as a distribution of its own, `mizuoto-fishspeech` (`packages/native/fishspeech`, package `mizuoto_fishspeech`, with `LICENSE.md`), registered under the entry-point group `mizuoto.engines` (`fishspeech = mizuoto_fishspeech:FishSpeechEngine`). Downloading the model and speaking need the licence accepted. On the CPU in fp32 with the same seed its codes and audio are identical to upstream's seeded `generate_long` as Mizuoto 0.1 ran it, and its trainer gives 0.1's exported model bit for bit. User-facing details: [Engines in depth](/docs/advanced-engines#fish-speech).
+Fish Audio S2 Pro and Drama 3 ([fishaudio/fish-speech](https://github.com/fishaudio/fish-speech)). S2 Pro and its port are under the Fish Audio Research License; Drama 3 and its port (`mizuoto_fishspeech/drama3`, ported from fish-speech 0f8a12e8) under the Fish Audio Community License 1.0 (see [Drama 3](#drama-3)). The ports are under these licences, so they ship as a distribution of its own, `mizuoto-fishspeech` (`packages/native/fishspeech`, package `mizuoto_fishspeech`, with `LICENSE.md` and `drama3/LICENSE.md`), registered under the entry-point group `mizuoto.engines` (`fishspeech = mizuoto_fishspeech:FishSpeechEngine`). Downloading the model and speaking need the licence accepted. On the CPU in fp32 with the same seed its codes and audio are identical to upstream's seeded `generate_long` as Mizuoto 0.1 ran it, and its trainer gives 0.1's exported model bit for bit. User-facing details: [Engines in depth](/docs/advanced-engines#fish-speech).
 
 ## Variants and files
 
-One variant, `s2_pro` (catalogue model `fishspeech/s2-pro`): cloning from one to four clips, each with its transcript; inline tags; dialogue between speakers (`<|speaker:i|>`). The model folder holds `config.json`, the weights (`model.safetensors.index.json` and its shards, `model.safetensors`, or `model.pth`), `codec.pth` and the BPE tokenizer files. A voice's cache is `codes.pt`, each reference's codes.
+Two variants. `s2_pro` (catalogue model `fishspeech/s2-pro`, this page up to [Drama 3](#drama-3)): cloning from one to four clips, each with its transcript; inline tags; dialogue between speakers (`<|speaker:i|>`). The model folder holds `config.json`, the weights (`model.safetensors.index.json` and its shards, `model.safetensors`, or `model.pth`), `codec.pth` and the BPE tokenizer files. A voice's cache is `codes.pt`, each reference's codes.
 
 Precision: bf16 on a CUDA GPU, as upstream; fp32 elsewhere (bf16 is emulated on a CPU and far slower); `engines.fishspeech.dtype` overrides.
 
@@ -69,3 +69,56 @@ Codes identical to upstream's seeded `generate_long` on the CPU in fp32; the tok
 - About 22 GB of GPU memory to run the model whole; on a CPU it runs in fp32 and is slow.
 - `normalize` and `repetition_penalty` have no effect (as upstream), and top-k cannot be changed.
 - Results are under the Fish Audio Research License: not for commercial use, and not for training other engines.
+
+## Drama 3
+
+Variant `drama3`, catalogue model `fishspeech/drama-3` (fishaudio/drama-3 at 78e5ab79, 41.5 GB: the weights with the experts in block FP8, and S2's `codec.pth`, byte for byte the same file). Ported from fish-speech 0f8a12e8 (`fish_speech/models/text2semantic/fish_omni` and `generate_long_drama3`), as `mizuoto_fishspeech/drama3`. It clones from one to four clips (each with its transcript), speaks without a reference in a voice of its own, takes inline directions (`[whispering]`, `[laughing]`, `<whisper>…</whisper>`) and up to sixteen speakers (`<|speaker:0|>`…`<|speaker:15|>`; a reference's transcript may start with its speaker's tag). Licence: the Fish Audio Community License 1.0, the variant's own (`variants.drama3.licence`); the engine's acceptance covers both licences, and its outputs are tagged `fish-audio-community`.
+
+### How it works
+
+| Module | What it is |
+| --- | --- |
+| `drama3/config.py` | `config.json`: the backbone's text config, the tower's, the semantic band, checked as upstream checks them |
+| `drama3/layers.py` | Zero-centred RMSNorm, partial RoPE (halves), gated softmax attention, Gated DeltaNet (a causal depthwise convolution, then the gated delta rule: by chunks of 64 for a prompt, token by token after) |
+| `drama3/moe.py` | 256 routed experts a layer (8 per token) and a gated shared expert; the experts stacked, kept in FP8, streamed by the row |
+| `drama3/backbone.py` | Qwen3.5-MoE's hybrid text model (40 layers, every fourth softmax attention) and its `lm_head`; loading the per-expert FP8 tensors |
+| `drama3/tower.py` | The codebook tower: 4 shared and 9 residual layers attending over the frames, each residual layer's head drawing the next code; both samplers |
+| `drama3/prompt.py` | The prompt (a chat: system turn with `[Reference i]` blocks, earlier chunks as finished turns, the open voice turn), text checks, long-text chunks and their history |
+| `drama3/generate.py` | Prefill in blocks of 128 rows (teacher-forcing the tower's caches), the decoding loop, chunk after chunk |
+| `drama3/engine.py` | `LoadedDrama3`: S2's codec, references and operations (it subclasses `LoadedFishSpeech`) with the backbone and tower |
+
+A frame is ten codes: the backbone predicts its main token (the end of the turn or a semantic token, whose place in the band is code 0) from the frames so far, each prompt row's embedding being its token's plus, for audio rows, its code 1 (scaled by 1/√2). The tower then takes the backbone's hidden state and draws codes 1–9, one residual layer per code, its first shared layer also seeing the previous frame's codes 2–9. Text is cut into chunks of about 300 UTF-8 bytes with at most three speakers each (sentence ends, then clause marks, then spaces; never inside a tag or bracket), each generated with the first chunk and the latest one in its prompt as history; `single_chunk` generates the whole text at once.
+
+### What reproduces upstream
+
+On the CPU, upstream's modules and the port give the same hidden states, logits, frames and audio, bit for bit and sample for sample (see [Parity](#parity-1)). In particular:
+
+- **Every operation in upstream's order**: the norms in float32, the rotary tables computed per call, the delta rule's chunked form for prompts (`solve_triangular` per chunk) and its recurrence for steps, the GQA attention (a single query row folds each key head's query heads into rows; more rows repeat the key heads) through `mizuoto.runtime.accel.attention` with SDPA and a boolean mask, the tower's interleaved RoPE, its float32-output down projection for float16; in float16 the experts are dequantized in float32 and saturated to float16's range before the cast, as upstream's dense experts are.
+- **The experts**: up to 64 (token, expert) pairs in one batched matmul over the gathered experts (a decoding step), more expert by expert, summed in float32 by `index_add_` in the experts' order (a prompt): the two paths give different bits, so both are kept. The router's softmax and top-k in float32, the weights renormalised.
+- **The prompt**, each literal tokenised alone, references checked and tagged as upstream tags them; the chunking (upstream's tests' cases are the package's tests) and the history (the first chunk pinned, the latest one, dropped oldest first when the prompt passes 8192 rows).
+- **Sampling** draws from the request's generator in upstream's order: per frame, the main token twice (at the request's settings over the end and the semantic band, then at 1.0, top-k 30, top-p 0.95; the second replaces the first when the first is an audio token among the last 16 main tokens), then the nine codes. A draw is `argmax(p / E)` with `E ~ Exp(1)`. The `sampler` option selects Fish Audio's reference sampler (`reference_argmax` / `reference_ras`, upstream's `--reference-sampling`): an epsilon cutoff for the main token (`epsilon_cutoff`, 0.001 by default), every repeated main token replaced (the end included), the codes drawn only from the codec's 1024.
+- **Upstream's limits**: at most 8192 prompt rows and 10 240 rows in all (its CUDA graphs' capacity; a chunk's frames are clamped to what is left), the defaults of Fish Audio's SDK (temperature 0.7, top-p 0.7, top-k 30, 1024 frames per chunk; `max_new_tokens = 0`: 600, or 2048 with `single_chunk`).
+- **The codec**: S2's, its weight norm folded once in float32 before the cast to the model's precision (upstream's `load_codec_model` for Drama 3), decoding under autocast in that precision; references encoded in it.
+
+### Deviations
+
+- **Devices and precision.** Upstream runs Drama 3 only on NVIDIA GPUs, in bfloat16 (float16 before SM80, with a float32 residual stream); its entry points refuse the CPU and float32. The port runs on every device kind, in float32 on the CPU (as S2 Pro): the reference it is checked against is upstream's modules run there in float32, unchanged.
+- **The experts stay in FP8**, the experts a call uses dequantized as it runs, as upstream does wherever its FP8 kernel does not run; upstream's other path dequantizes them all at load. Both give the same values (the tiny parity checks both against the port): 32 GB of experts instead of 64 GB in bfloat16 or 129 GB in float32. **Upstream's W8A8 kernel** (Triton, SM89 and newer, which also quantizes the activations to FP8) is not ported: its results differ, so it could only come as an opt-in, and it cannot be measured here.
+- **No multi-GPU layer split and no cache kept between requests.** Upstream spreads the layers over up to four GPUs and keeps caches sized for the largest request so far; here the model manager places the layers (streaming what does not fit) and each request has its own caches. Attention reads only the attended prefix either way.
+- **Non-finite logits** are refused, as upstream refuses them, but checked once per frame (at the frame's one wait for the device) rather than before each draw.
+- **The audio is the chunks' audio joined**, unclipped, as upstream's; S2 Pro's engine clips each batch. The variant declares `long_text`, so Mizuoto hands the engine the whole text and upstream's chunking and history apply (cut by Mizuoto into separate requests, the history would never cross them).
+- **What Mizuoto does before any engine** applies here too: the text and each reference's transcript are stripped of surrounding white space; a reference is stored in the voice library as mono 16-bit WAV (a float, 24-bit or stereo clip is converted, so its codes can differ from upstream reading the original file); one longer than 30 s is trimmed under `tts.reference_policy`; seeds are not negative (upstream takes the absolute value).
+- **Not ported**: upstream's CUDA graphs for Drama 3 (Mizuoto's would replay the same kernels; not yet written for this variant), its fine-tuning (upstream removed its training code with Drama 3, so the LoRA method is S2 Pro's only), and "director revision" across turns (not in the open code).
+
+### Memory and speed
+
+Handles: the backbone (`kind="sequence"`; each layer two units, its attention `hot` and its MoE, and the output head `hot`), the tower (`sequence`) and the codec. The experts stream **by the row** ([Development: memory](/docs/development-memory#units-what-streams)): a layer whose MoE unit is not resident keeps its 256 experts in pinned host memory and each call copies the experts its tokens are routed to (a decoding step: 8 a layer, about 25 MB; a prompt block: expert by expert), so a GPU far smaller than the model runs it. Whole, the model needs about 44 GB; its dense part (attention, shared experts, embeddings and head, the tower) is about 7.5 GB in bfloat16. Working memory per request: the softmax layers' and the tower's caches for the request's rows (at most 10 240), the DeltaNet states, a prompt block's activations and the experts a step dequantizes.
+
+On the CPU, in float32 with 16 threads, a frame takes about 2.1 s, upstream's modules as long (a second of speech is 21.5 frames: some 45 s of compute); a prompt of 230 rows about 35 s. A GPU run is pending (no GPU was visible when this was measured).
+
+### Parity
+
+Against upstream's own modules (fish-speech 0f8a12e8) on the CPU in float32, the same seed and thread count, with the real model (2026-11-01; workspace `experiment/fish-drama3`, `scripts/real_upstream.py`, `real_native.py`, `real_compare.py`): seven cases, the reference clips' codes, every chunk's codes and the audio **identical** sample for sample: English and Chinese cloning, no reference, inline tags (`[laughing]`, `[whispering]`), a two-speaker dialogue with two references, the reference sampler (`reference_ras`, cutoff 0.002), and a long text generated as two chunks with history (542 frames, 25 s). Upstream repeated itself exactly before being compared. Upstream ran as its `TTSInferenceEngine` runs a request (references through its loader and codec, `set_seed`, `generate_long_drama3`, its codec's decoding), the port as the server runs it (`synthesize`). On a tiny random model (`scripts/tiny_parity.py`) twelve cases more (no cap on top-k, top-k 10 at temperature 1.2, single chunk, `max_new_tokens = 0`, Chinese with paired tags…) are identical in float32 and bfloat16, against upstream's FP8 experts and its dequantized ones, with the backbone's hidden states and logits bit for bit.
+
+A source review against upstream found Mizuoto cutting Drama 3's long text itself (fixed: the variant declares `long_text`) and float16's experts unclamped (fixed), and the request-level differences listed under Deviations.
+

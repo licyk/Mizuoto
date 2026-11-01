@@ -1,14 +1,14 @@
 ---
 title: "Fish Speech"
-description: "Mizuoto 单独发行包 mizuoto-fishspeech 中实现的 Fish Speech S2 Pro 引擎：双自回归 transformer 与 44.1 kHz 编解码器，哪些做法与上游完全一致，每帧只等待设备一次与 CUDA 图，LoRA 微调，以及对照结果。"
+description: "Mizuoto 单独发行包 mizuoto-fishspeech 中实现的 Fish Speech 引擎：S2 Pro 的双自回归 transformer 与 44.1 kHz 编解码器，Drama 3 的混合专家主干与码本塔，哪些做法与上游完全一致，每帧只等待设备一次与 CUDA 图，按行流式加载的专家，LoRA 微调，以及对照结果。"
 icon: Fish
 ---
 
-Fish Audio S2 Pro（[fishaudio/fish-speech](https://github.com/fishaudio/fish-speech)，Fish Audio Research License）。移植版同样受该许可约束，所以作为单独的发行包发布：`mizuoto-fishspeech`（`packages/native/fishspeech`，包名 `mizuoto_fishspeech`，附 `LICENSE.md`），注册在入口点组 `mizuoto.engines` 下（`fishspeech = mizuoto_fishspeech:FishSpeechEngine`）。下载模型和合成都需要先接受许可。在 CPU 上以 fp32、相同种子运行时，它的编码和音频与 Mizuoto 0.1 所运行的上游带种子 `generate_long` 完全相同，训练器导出的模型与 0.1 逐位相同。面向用户的说明见 [引擎详解](/docs/advanced-engines#fish-speech)。
+Fish Audio S2 Pro 与 Drama 3（[fishaudio/fish-speech](https://github.com/fishaudio/fish-speech)）。S2 Pro 及其移植版采用 Fish Audio Research License；Drama 3 及其移植版（`mizuoto_fishspeech/drama3`，移植自 fish-speech 0f8a12e8）采用 Fish Audio Community License 1.0（见 [Drama 3](#drama-3)）。移植版受这些许可约束，所以作为单独的发行包发布：`mizuoto-fishspeech`（`packages/native/fishspeech`，包名 `mizuoto_fishspeech`，附 `LICENSE.md` 与 `drama3/LICENSE.md`），注册在入口点组 `mizuoto.engines` 下（`fishspeech = mizuoto_fishspeech:FishSpeechEngine`）。下载模型和合成都需要先接受许可。在 CPU 上以 fp32、相同种子运行时，它的编码和音频与 Mizuoto 0.1 所运行的上游带种子 `generate_long` 完全相同，训练器导出的模型与 0.1 逐位相同。面向用户的说明见 [引擎详解](/docs/advanced-engines#fish-speech)。
 
 ## 变体与文件
 
-只有一个变体 `s2_pro`（目录模型 `fishspeech/s2-pro`）：用一到四段参考音频克隆，每段都带参考文本；行内标签；说话人之间的对话（`<|speaker:i|>`）。模型目录中有 `config.json`、权重（`model.safetensors.index.json` 及其分片、`model.safetensors` 或 `model.pth`）、`codec.pth` 和 BPE 分词器文件。音色缓存是 `codes.pt`，即每段参考音频的编码。
+两个变体。`s2_pro`（目录模型 `fishspeech/s2-pro`，本页 [Drama 3](#drama-3) 之前的内容都关于它）：用一到四段参考音频克隆，每段都带参考文本；行内标签；说话人之间的对话（`<|speaker:i|>`）。模型目录中有 `config.json`、权重（`model.safetensors.index.json` 及其分片、`model.safetensors` 或 `model.pth`）、`codec.pth` 和 BPE 分词器文件。音色缓存是 `codes.pt`，即每段参考音频的编码。
 
 精度：与上游相同，CUDA GPU 上用 bf16；其他设备用 fp32（bf16 在 CPU 上是模拟的，慢得多）；`engines.fishspeech.dtype` 可以覆盖。
 
@@ -69,3 +69,55 @@ Fish Audio S2 Pro（[fishaudio/fish-speech](https://github.com/fishaudio/fish-sp
 - 完整运行模型需要约 22 GB 显存；在 CPU 上以 fp32 运行，速度慢。
 - `normalize` 和 `repetition_penalty` 没有效果（与上游相同），top-k 不能更改。
 - 结果受 Fish Audio Research License 约束：不可商用，也不能用于训练其他引擎。
+
+## Drama 3
+
+变体 `drama3`，目录模型 `fishspeech/drama-3`（fishaudio/drama-3 的 78e5ab79，41.5 GB：专家为分块 FP8 的权重，以及 S2 的 `codec.pth`，与 S2 Pro 的逐字节相同）。移植自 fish-speech 0f8a12e8（`fish_speech/models/text2semantic/fish_omni` 与 `generate_long_drama3`），即 `mizuoto_fishspeech/drama3`。它用一到四段参考音频克隆（每段带参考文本），没有参考音频时用自带的音色说话，接受写在文本中的指示（`[whispering]`、`[laughing]`、`<whisper>…</whisper>`），最多十六个说话人（`<|speaker:0|>`…`<|speaker:15|>`；参考文本可以以其说话人标签开头）。许可：Fish Audio Community License 1.0，是该变体自己的许可（`variants.drama3.licence`）；接受引擎的许可即同时接受两份，它的结果标记为 `fish-audio-community`。
+
+### 工作原理
+
+| 模块 | 内容 |
+| --- | --- |
+| `drama3/config.py` | `config.json`：主干的文本配置、码本塔的配置、语义区间，按上游的方式检查 |
+| `drama3/layers.py` | 零中心 RMSNorm、部分 RoPE（前后两半）、带门控的 softmax 注意力、Gated DeltaNet（先一个因果深度卷积，再门控 delta 规则：提示按 64 一块分块计算，之后逐 token 递推） |
+| `drama3/moe.py` | 每层 256 个路由专家（每个 token 用 8 个）和一个带门控的共享专家；专家堆叠存放，保持 FP8，按行流式加载 |
+| `drama3/backbone.py` | Qwen3.5-MoE 的混合文本模型（40 层，每第四层为 softmax 注意力）及其 `lm_head`；加载逐专家的 FP8 张量 |
+| `drama3/tower.py` | 码本塔：4 个共享层和 9 个残差层，在帧序列上做注意力，每个残差层的输出头抽取下一个编码；两种采样器 |
+| `drama3/prompt.py` | 提示（一段对话：带 `[Reference i]` 块的系统轮、作为已完成轮次的前面片段、未结束的语音轮），文本检查，长文本切分及其历史 |
+| `drama3/generate.py` | 以 128 行为一块的预填充（同时以教师强制填充码本塔的缓存），解码循环，一段接一段 |
+| `drama3/engine.py` | `LoadedDrama3`：S2 的编解码器、参考音频处理与操作（继承 `LoadedFishSpeech`），加上主干和码本塔 |
+
+一帧是十个编码：主干根据已有的帧预测该帧的主 token（轮次结束，或一个语义 token，它在区间中的位置就是编码 0），提示中每一行的嵌入是其 token 的嵌入，音频行再加上它的编码 1（乘以 1/√2）。然后码本塔接过主干的隐藏状态，逐个抽取编码 1–9，每个编码一个残差层；第一个共享层还会看到上一帧的编码 2–9。文本按约 300 个 UTF-8 字节、每段最多三个说话人切分（先按句末，再按分句标点，再按空格；不会切开标签或方括号），每段生成时都把第一段和最近一段作为历史放进提示；`single_chunk` 一次生成全文。
+
+### 与上游一致的做法
+
+在 CPU 上，上游的模块与移植版给出的隐藏状态、logits、帧和音频逐位、逐采样相同（见下文 [对照结果](#对照结果-1)）。具体包括：
+
+- **每个运算都按上游的顺序**：归一化在 float32 中计算，旋转表每次调用时计算，delta 规则对提示用分块形式（每块 `solve_triangular`），对单步用递推形式，GQA 注意力（单个查询行时把每个键头的查询头折叠成行；多行时重复键头）经 `mizuoto.runtime.accel.attention` 以 SDPA 和布尔掩码计算，码本塔的交错式 RoPE，以及 float16 下输出为 float32 的下投影；float16 下专家先在 float32 中反量化并截到 float16 的范围再转换，与上游的稠密专家相同。
+- **专家**：不超过 64 个（token, 专家）对时，对取出的专家做一次批量矩阵乘法（解码步）；更多时逐个专家计算，按专家顺序用 `index_add_` 在 float32 中累加（提示）：两条路径的结果位不同，所以两者都保留。路由的 softmax 和 top-k 在 float32 中计算，权重重新归一化。
+- **提示**：每段字面文本单独分词，参考音频按上游的方式检查和加标签；切分（上游测试中的用例即本包的测试）和历史（固定第一段，加上最近一段；提示超过 8192 行时从最旧的开始丢弃）。
+- **采样**按上游的顺序从请求的生成器抽取：每帧先抽两次主 token（用请求的设置在“轮次结束 + 语义区间”上抽一次，再用 1.0、top-k 30、top-p 0.95 抽一次；第一次是最近 16 个主 token 中出现过的音频 token 时用第二次的结果），再抽九个编码。每次抽取是 `argmax(p / E)`，`E ~ Exp(1)`。`sampler` 选项可选用 Fish Audio 的参考采样器（`reference_argmax` / `reference_ras`，即上游的 `--reference-sampling`）：主 token 有 epsilon 截断（`epsilon_cutoff`，默认 0.001），任何重复的主 token 都会被替换（包括轮次结束），编码只从编解码器的 1024 个中抽取。
+- **上游的限制**：提示最多 8192 行，总共最多 10 240 行（上游 CUDA 图的容量；每段的帧数被截到剩余的行数），默认值与 Fish Audio SDK 相同（temperature 0.7、top-p 0.7、top-k 30、每段 1024 帧；`max_new_tokens = 0` 时为 600，`single_chunk` 时为 2048）。
+- **编解码器**：S2 的编解码器，权重归一化在转换到模型精度之前先在 float32 中折叠一次（上游为 Drama 3 加载编解码器的 `load_codec_model`），在该精度的 autocast 下解码；参考音频也用它编码。
+
+### 有意的差异
+
+- **设备与精度。** 上游只在 NVIDIA GPU 上以 bfloat16 运行 Drama 3（SM80 之前用 float16，残差流为 float32）；它的入口拒绝 CPU 和 float32。移植版在所有设备上运行，在 CPU 上用 float32（与 S2 Pro 相同）：对照的基准是上游的模块原样在 CPU 上以 float32 运行的结果。
+- **专家保持 FP8**，每次调用用到的专家在运行时反量化，上游在其 FP8 核函数不运行的地方也是这样做的；上游的另一条路径在加载时把全部专家反量化。两者给出相同的数值（小模型对照把两者都与移植版比较）：专家占 32 GB，而 bfloat16 下是 64 GB，float32 下是 129 GB。**上游的 W8A8 核函数**（Triton，SM89 及以上，它还把激活量化为 FP8）没有移植：它的结果不同，只能作为可选项提供，而且这里无法测量。
+- **没有多 GPU 分层，也不在请求之间保留缓存。** 上游把层分布到最多四块 GPU 上，并按至今最大的请求保留缓存；这里由模型管理器放置各层（放不下的部分流式加载），每个请求有自己的缓存。两种方式下注意力都只读取已关注的前缀。
+- **非有限的 logits** 与上游一样会被拒绝，但每帧只检查一次（在该帧唯一一次等待设备时），而不是每次抽取前检查。
+- **音频是各段音频直接拼接**，不裁剪，与上游相同；S2 Pro 的引擎会裁剪每一批。该变体声明了 `long_text`，所以 Mizuoto 把整段文本交给引擎，上游的切分与历史都会生效（如果由 Mizuoto 切成单独的请求，历史就无法跨越它们）。
+- **Mizuoto 对所有引擎都会做的预处理**在这里同样适用：文本和每段参考文本会去掉首尾空白；参考音频在音色库中存为单声道 16 位 WAV（浮点、24 位或立体声的音频会被转换，因此其编码可能与上游直接读取原文件时不同）；超过 30 秒的参考音频按 `tts.reference_policy` 截短；种子不能为负（上游取绝对值）。
+- **没有移植的**：上游为 Drama 3 写的 CUDA 图（Mizuoto 的会重放相同的核函数；尚未为这个变体编写），它的微调（上游在加入 Drama 3 时删除了训练代码，所以 LoRA 方法只适用于 S2 Pro），以及跨轮次的“导演式修改”（不在开源代码中）。
+
+### 显存与速度
+
+句柄：主干（`kind="sequence"`；每层两个单元，注意力为 `hot`，其次是 MoE；输出头为 `hot`）、码本塔（`sequence`）和编解码器。专家**按行流式加载**（[开发：显存](/docs/development-memory#单元哪些会流式加载)）：某层的 MoE 单元不常驻时，它的 256 个专家留在页锁定的主机内存中，每次调用只复制其 token 被路由到的专家（一个解码步：每层 8 个，约 25 MB；一个提示块：逐个专家），所以远小于模型的 GPU 也能运行。完整运行模型需要约 44 GB；其稠密部分（注意力、共享专家、嵌入和输出头、码本塔）在 bfloat16 下约 7.5 GB。每个请求的工作内存：softmax 层和码本塔对请求行数（最多 10 240）的缓存、DeltaNet 状态、一个提示块的激活值，以及一步反量化的专家。
+
+在 CPU 上以 float32、16 个线程运行时，每帧约 2.1 秒，上游的模块同样如此（一秒语音是 21.5 帧：约 45 秒计算）；230 行的提示约 35 秒。GPU 上的运行尚待进行（测量时看不到 GPU）。
+
+### 对照结果
+
+与上游自己的模块（fish-speech 0f8a12e8）在 CPU 上以 float32、相同种子和线程数、真实模型对照（2026-11-01；工作区 `experiment/fish-drama3`，`scripts/real_upstream.py`、`real_native.py`、`real_compare.py`）：七个用例中，参考音频的编码、每段的编码和音频都**逐采样相同**：英文和中文克隆、无参考音频、行内标签（`[laughing]`、`[whispering]`）、两段参考音频的双人对话、参考采样器（`reference_ras`，截断 0.002），以及带历史、分两段生成的长文本（542 帧，25 秒）。对照之前先确认上游自身能完全重复。上游按其 `TTSInferenceEngine` 处理请求的方式运行（参考音频经它的加载器和编解码器，`set_seed`，`generate_long_drama3`，它的编解码器解码），移植版按服务器的方式运行（`synthesize`）。在小型随机模型上（`scripts/tiny_parity.py`），另外十二个用例（不限制 top-k、temperature 1.2 下 top-k 10、单段、`max_new_tokens = 0`、带成对标签的中文……）在 float32 和 bfloat16 下、与上游的 FP8 专家和反量化专家相比都相同，主干的隐藏状态和 logits 逐位相同。
+
+对照上游源码的审查发现 Mizuoto 会自行切分 Drama 3 的长文本（已修复：该变体声明了 `long_text`），以及 float16 下专家没有截断（已修复），另有“有意的差异”中列出的请求层面差异。

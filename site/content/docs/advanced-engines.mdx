@@ -28,7 +28,7 @@ Web UI 中，**模型** › **引擎** 列出每个引擎的可用状态、设�
 | GPT-SoVITS（`gptsovits`） | v2、v2Pro、v2ProPlus、v4、v5 Turbo | 32 / 48 kHz | 中英日韩粤 | 3–10 秒少样本克隆，音色专属权重 | 音色权重 | MIT |
 | OmniVoice（`omnivoice`） | OmniVoice | 24 kHz | 600 多种 | 多语言、按属性设计音色、自带音色 | 全量、LoRA | Apache-2.0 |
 | VoxCPM（`voxcpm`） | VoxCPM2、1.5、0.5B | 48 / 44.1 / 16 kHz | 30 种（1.5 和 0.5B：zh、en） | 有无文本均可克隆、按描述设计音色、指令 | 全量、LoRA | Apache-2.0 |
-| Fish Speech（`fishspeech`） | S2 Pro | 44.1 kHz | 约 50 种 | 表现力强的克隆、多段参考、对话 | LoRA | Fish Audio Research License（需接受） |
+| Fish Speech（`fishspeech`） | S2 Pro、Drama 3 | 44.1 kHz | 约 50 种（Drama 3：80 多种） | 表现力强的克隆、多段参考、对话；Drama 3：按指示表演、自带音色 | LoRA（S2 Pro） | Fish Audio Research License；Drama 3：Fish Audio Community License（需接受） |
 | IndexTTS（`indextts`） | IndexTTS-1.5、2、2.5 | 24 / 22.05 kHz | 中、英（2.5 加日、西） | 无文本克隆、情感控制 | 无 | bilibili Model Use License（需接受） |
 | 语音识别（`asr`） | Whisper large-v3-turbo | 16 kHz | 约 100 种 | 为参考音频和数据集生成文本 | 无 | MIT |
 
@@ -53,7 +53,7 @@ Web UI 中，**模型** › **引擎** 列出每个引擎的可用状态、设�
 
 | 许可 | 引擎 | 说明 |
 | --- | --- | --- |
-| 需接受（gated） | Fish Speech（`fish-audio-research@2026-03-07`）、IndexTTS（`bilibili-model-use@2025-09-09`） | 引擎是单独的包（`mizuoto-fishspeech`、`mizuoto-indextts`）；下载模型和共享文件、合成都要求先接受许可：**模型** › **引擎** 的 **接受许可**，或 `mizuoto engine accept-licence <id>`。`mizuoto engine licence <id>` 打印全文 |
+| 需接受（gated） | Fish Speech（`fish-audio-research+fish-audio-community@2026-03-07+1.0`）、IndexTTS（`bilibili-model-use@2025-09-09`） | 引擎是单独的包（`mizuoto-fishspeech`、`mizuoto-indextts`）；下载模型和共享文件、合成都要求先接受许可：**模型** › **引擎** 的 **接受许可**，或 `mizuoto engine accept-licence <id>`。`mizuoto engine licence <id>` 打印全文 |
 | 非商用权重 | F5-TTS | 预训练权重为 CC-BY-NC-4.0，不需要接受，但结果带有非商用标记和提示 |
 | 不能用于训练其他引擎 | Fish Speech、IndexTTS（`trains_others = false`） | 它们合成的结果不能加入其他引擎的训练数据集 |
 
@@ -182,17 +182,19 @@ OpenBMB 的无离散分词语音合成：逐个“块”（patch）生成连续�
 
 ## Fish Speech
 
-Fish Audio S2 Pro：双自回归模型，约一千万小时、五十种左右语言的训练数据。适合：富有表现力的克隆、自由形式的行内标签（如 `[laughing]`）和多说话人对话。
+Fish Audio S2 Pro：双自回归模型，约一千万小时、五十种左右语言的训练数据；以及 Drama 3：面向按指示表演的 35B 混合专家模型（每个 token 激活 3B）。适合：富有表现力的克隆、自由形式的行内标签（如 `[laughing]`、`[whispering]`）和多说话人对话。
 
 | 模型 | 变体 | 大小 | 显存 | 推荐 |
 | --- | --- | --- | --- | --- |
 | `fishspeech/s2-pro` | S2 Pro | 10.5 GB | 22 GB | 是 |
+| `fishspeech/drama-3` | Drama 3 | 38.7 GB | 44 GB（显存少得多也能运行：专家从内存流式加载） | |
 
-- **能力**：**克隆音色**、**多段参考**（最多 4 段）、**行内标签**、**对话**、**流式输出**（按段）、**种子**。采样率 44.1 kHz。
+- **能力**：**克隆音色**、**多段参考**（最多 4 段）、**行内标签**、**对话**、**流式输出**（按段）、**种子**；Drama 3 还有 **自带音色**（不需要参考音频）。采样率 44.1 kHz。
 - **参考音频**：2–30 秒。
+- **Drama 3** 接受写在文本中的自然语言指示（`[whispering]`、`[laughing]`、`[sighs]`、`<whisper>…</whisper>`），最多十六个说话人（`<|speaker:0|>`…`<|speaker:15|>`）；参考文本以某个说话人标签开头时，该段参考音频就是这个说话人的音色。长文本切成约 300 字节、每段最多三个说话人的片段（`single_chunk` 则一次生成全文）。参数默认与上游相同：temperature 0.7、top-p 0.7、top-k 30（`top_k`，仅 Drama 3）、每段最多 1024 帧。`sampler` 选项可选用 Fish Audio 的参考采样器（`reference_argmax`、`reference_ras`）及其 `epsilon_cutoff`。它需要约 45 GB 空闲内存：GPU 放不下时专家（32 GB，保持 FP8）留在内存中，每个 token 只复制它用到的专家（比能放下整个模型的 GPU 慢，但 24 GB 甚至更小的显卡也能运行）。在 CPU 上以 fp32 运行，每帧约两秒（一秒语音 21.5 帧）。上游只支持 48 GB 显存的 NVIDIA GPU；Drama 3 没有 LoRA 训练（上游没有）。
 - **许可**：S2 Pro 采用 Fish Audio Research License（不可商用），Drama 3 采用 Fish Audio Community License 1.0（年收入低于 50 万美元时才可商用，且不可提供托管的语音合成服务；请阅读全文）。该引擎需要同时接受两份许可：接受后记录为 `fish-audio-research+fish-audio-community@2026-03-07+1.0`，因此之前只接受了研究许可的需要重新接受。结果不能用于训练其他引擎，结果下方显示 "Built with Fish Audio"；每条结果按其模型的许可打标签。
-- **设备**：GPU 上用 bf16；CPU 上用 fp32（bf16 在 CPU 上是模拟的，慢得多）。显存需求约 22 GB。
-- **训练**：**Fine-tune with LoRA**（`lora`，GPU 或 CPU）：上游的 LoRA 流程（提取语义 token、打包、训练、合并），导出为新模型。上游提醒它学到的更多是说话风格而不是音色；需要 24 GB 显存，结果仍受 Fish Audio 研究许可约束。
+- **设备**：GPU 上用 bf16；CPU 上用 fp32（bf16 在 CPU 上是模拟的，慢得多）。S2 Pro 显存需求约 22 GB。
+- **训练**（S2 Pro）：**Fine-tune with LoRA**（`lora`，GPU 或 CPU）：上游的 LoRA 流程（提取语义 token、打包、训练、合并），导出为新模型。上游提醒它学到的更多是说话风格而不是音色；需要 24 GB 显存，结果仍受 Fish Audio 研究许可约束。
 - Mizuoto 目录中没有 int8 版本（官方没有公开该仓库）。
 
 ## IndexTTS

@@ -220,7 +220,7 @@ When requests are batched: [Performance](/docs/advanced-performance).
 | Key | Default | Meaning | UI (engine card) |
 | --- | --- | --- | --- |
 | `enabled` | `true` | Whether the engine is enabled | **Enable** / **Disable** |
-| `accepted_licence` | none | The licence id and version accepted, such as `fish-audio-research@2026-03-07` (licence-gated engines) | **Accept the licence** |
+| `accepted_licence` | none | The licence id and version accepted, such as `bilibili-model-use@2025-09-09` (licence-gated engines; an engine whose variants have licences of their own records them all, joined by `+`: `fish-audio-research+fish-audio-community@2026-03-07+1.0`) | **Accept the licence** |
 | `device` | `auto` | Where the engine runs: `auto`, `cpu`, `cuda:1`…; `<host>/<device>` (such as `gpu-box/cuda:0`) runs it on a [remote host](/docs/advanced-remote) | **Device** |
 | `dtype` | `auto` | Precision: `auto`, `fp32`, `fp16`, `bf16` | **Precision** |
 | `load_options` | `{}` | Engine-specific load options (CosyVoice's `fp16`, IndexTTS's `use_qwen_emo`…); see [Engines in depth](/docs/advanced-engines) | **Options** |

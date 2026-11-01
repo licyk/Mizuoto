@@ -16,7 +16,7 @@ This section records, engine by engine, what that took, where an engine delibera
 | [F5-TTS](/docs/engines-f5tts) | `v1_base`, `base`, `e2_base` | `mizuoto/engines/f5tts` | identical in all 6 stack cases | `full` |
 | [OmniVoice](/docs/engines-omnivoice) | `v0` | `mizuoto/engines/omnivoice` | identical in all 4 stack cases | `full`, `lora` |
 | [CosyVoice](/docs/engines-cosyvoice) | `v1_base`, `v1_sft`, `v1_instruct`, `v2`, `v3` | `mizuoto/engines/cosyvoice` | identical given the same voice prompt; through the whole stack 23–68 dB SNR (CAM++'s float noise) | `llm`, `llm_flow` |
-| [Fish Speech](/docs/engines-fishspeech) | `s2_pro` | `packages/native/fishspeech` (`mizuoto-fishspeech`) | identical codes and audio in both stack cases | `lora` |
+| [Fish Speech](/docs/engines-fishspeech) | `s2_pro`, `drama3` | `packages/native/fishspeech` (`mizuoto-fishspeech`) | identical codes and audio in both stack cases; Drama 3 against upstream's modules: identical frames and audio in every case | `lora` (S2 Pro) |
 | [IndexTTS](/docs/engines-indextts) | `v1_5`, `v2`, `v2_5` | `packages/native/indextts` (`mizuoto-indextts`) | identical in all 4 stack cases | none |
 | [GPT-SoVITS](/docs/engines-gptsovits) | `v2`, `v2pro`, `v2proplus`, `v4`, `v5turbo` | `mizuoto/engines/gptsovits` | identical in all 15 stack cases | `speaker` |
 | [VoxCPM](/docs/engines-voxcpm) | `v2`, `v1_5`, `v1` | `mizuoto/engines/voxcpm` | identical to upstream's own package in all 27 stack cases, in bf16 and fp32 | `full`, `lora` |
@@ -98,7 +98,7 @@ How the runtime places these models in memory, streams their weights and retries
 
 ## Licence-gated engines
 
-Fish Speech and IndexTTS are ports of code whose licences (the Fish Audio Research License, the bilibili Model Use License) also cover the port. They are therefore separate distributions, `mizuoto-fishspeech` and `mizuoto-indextts`, each shipping its licence, installed into the same environment and registered under the entry-point group `mizuoto.engines`. Their manifests ship with `mizuoto`, so the catalogue and the licence text are there before the distribution is installed. They follow the same rules as the built-in engines and import nothing from another engine.
+Fish Speech and IndexTTS are ports of code whose licences (the Fish Audio Research License and, for Drama 3, the Fish Audio Community License; the bilibili Model Use License) also cover the port. They are therefore separate distributions, `mizuoto-fishspeech` and `mizuoto-indextts`, each shipping its licence, installed into the same environment and registered under the entry-point group `mizuoto.engines`. Their manifests ship with `mizuoto`, so the catalogue and the licence text are there before the distribution is installed. They follow the same rules as the built-in engines and import nothing from another engine.
 
 ## Limitations
 

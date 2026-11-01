@@ -220,7 +220,7 @@ mizuoto webui
 | 键 | 默认值 | 说明 | 界面（引擎卡片） |
 | --- | --- | --- | --- |
 | `enabled` | `true` | 是否启用 | **启用** / **停用** |
-| `accepted_licence` | 无 | 已接受的许可 id 和版本，如 `fish-audio-research@2026-03-07`（需要接受许可的引擎） | **接受许可** |
+| `accepted_licence` | 无 | 已接受的许可 id 和版本，如 `bilibili-model-use@2025-09-09`（需要接受许可的引擎；变体有各自许可的引擎会记录全部许可，用 `+` 连接：`fish-audio-research+fish-audio-community@2026-03-07+1.0`） | **接受许可** |
 | `device` | `auto` | 引擎运行的设备：`auto`、`cpu`、`cuda:1`……；`<主机名>/<设备>`（如 `gpu-box/cuda:0`）表示在 [远程主机](/docs/advanced-remote) 上运行 | **设备** |
 | `dtype` | `auto` | 精度：`auto`、`fp32`、`fp16`、`bf16` | **精度** |
 | `load_options` | `{}` | 引擎专用的加载选项（CosyVoice 的 `fp16`、IndexTTS 的 `use_qwen_emo`……），见 [引擎详解](/docs/advanced-engines) | **选项** |

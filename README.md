@@ -75,7 +75,7 @@ weights streamed from RAM.
 | GPT-SoVITS | v2, v2Pro, v2ProPlus, v4, v5 Turbo | few-shot cloning, a voice's own GPT and SoVITS weights | a voice's weights | MIT |
 | OmniVoice | OmniVoice | 600+ languages, voices from attributes, inline tags | full, LoRA | Apache-2.0 |
 | VoxCPM | VoxCPM2, 1.5, 0.5B | tokenizer-free; VoxCPM2: 30 languages at 48 kHz, cloning with or without a transcript, voices from a description, style instructions | full, LoRA | Apache-2.0 |
-| Fish Speech | S2 Pro | expressive cloning | LoRA | Fish Audio Research License (licence-gated) |
+| Fish Speech | S2 Pro, Drama 3 | expressive cloning, directed performance (Drama 3) | LoRA (S2 Pro) | Fish Audio Research License; Drama 3: Fish Audio Community License (licence-gated) |
 | IndexTTS | 1.5, 2, 2.5 | emotion from weights, a clip or a description | — | bilibili Model Use License (licence-gated) |
 
 Speech recognition (Whisper large-v3-turbo) is built in for transcripts. The licence-gated engines are separate

@@ -16,7 +16,7 @@ Mizuoto 的每个引擎都是一个移植版：把上游项目的模型代码，
 | [F5-TTS](/docs/engines-f5tts) | `v1_base`、`base`、`e2_base` | `mizuoto/engines/f5tts` | 6 个完整链路用例全部相同 | `full` |
 | [OmniVoice](/docs/engines-omnivoice) | `v0` | `mizuoto/engines/omnivoice` | 4 个完整链路用例全部相同 | `full`、`lora` |
 | [CosyVoice](/docs/engines-cosyvoice) | `v1_base`、`v1_sft`、`v1_instruct`、`v2`、`v3` | `mizuoto/engines/cosyvoice` | 音色提示相同时完全相同；走完整链路时 SNR 为 23–68 dB（CAM++ 的浮点噪声） | `llm`、`llm_flow` |
-| [Fish Speech](/docs/engines-fishspeech) | `s2_pro` | `packages/native/fishspeech`（`mizuoto-fishspeech`） | 两个完整链路用例的编码和音频都相同 | `lora` |
+| [Fish Speech](/docs/engines-fishspeech) | `s2_pro`、`drama3` | `packages/native/fishspeech`（`mizuoto-fishspeech`） | 两个完整链路用例的编码和音频都相同；Drama 3 与上游模块对照：每个用例的帧和音频都相同 | `lora`（S2 Pro） |
 | [IndexTTS](/docs/engines-indextts) | `v1_5`、`v2`、`v2_5` | `packages/native/indextts`（`mizuoto-indextts`） | 4 个完整链路用例全部相同 | 无 |
 | [GPT-SoVITS](/docs/engines-gptsovits) | `v2`、`v2pro`、`v2proplus`、`v4`、`v5turbo` | `mizuoto/engines/gptsovits` | 15 个完整链路用例全部相同 | `speaker` |
 | [VoxCPM](/docs/engines-voxcpm) | `v2`、`v1_5`、`v1` | `mizuoto/engines/voxcpm` | 与上游自己的包相比，27 个完整链路用例在 bf16 和 fp32 下全部相同 | `full`、`lora` |
@@ -98,7 +98,7 @@ CPU、fp32（VoxCPM 还有它默认的 bf16）、同一个种子、同一个 tor
 
 ## 需接受许可的引擎
 
-Fish Speech 和 IndexTTS 移植的代码，其许可（Fish Audio Research License、bilibili Model Use License）同样约束移植版。因此它们是单独的发行包 `mizuoto-fishspeech` 和 `mizuoto-indextts`，各自附带许可，安装在同一个环境里，并在入口点组 `mizuoto.engines` 下注册。它们的清单随 `mizuoto` 一起发布，所以在发行包安装之前，模型目录和许可全文就已经在了。它们遵守与内置引擎相同的规则，也不从其他引擎导入任何东西。
+Fish Speech 和 IndexTTS 移植的代码，其许可（Fish Audio Research License，Drama 3 为 Fish Audio Community License；bilibili Model Use License）同样约束移植版。因此它们是单独的发行包 `mizuoto-fishspeech` 和 `mizuoto-indextts`，各自附带许可，安装在同一个环境里，并在入口点组 `mizuoto.engines` 下注册。它们的清单随 `mizuoto` 一起发布，所以在发行包安装之前，模型目录和许可全文就已经在了。它们遵守与内置引擎相同的规则，也不从其他引擎导入任何东西。
 
 ## 限制
 

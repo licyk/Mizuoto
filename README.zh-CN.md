@@ -70,7 +70,7 @@ IndexTTS——共用一个网页界面、一个命令行和一套 HTTP 接口：
 | GPT-SoVITS | v2、v2Pro、v2ProPlus、v4、v5 Turbo | 少样本克隆，音色专属的 GPT 与 SoVITS 权重 | 音色权重 | MIT |
 | OmniVoice | OmniVoice | 600 多种语言，按属性生成音色，行内标签 | 全量、LoRA | Apache-2.0 |
 | VoxCPM | VoxCPM2、1.5、0.5B | 无离散分词；VoxCPM2：30 种语言、48 kHz，有无参考文本均可克隆，按描述生成音色，风格指令 | 全量、LoRA | Apache-2.0 |
-| Fish Speech | S2 Pro | 富有表现力的克隆 | LoRA | Fish Audio Research License（需接受许可） |
+| Fish Speech | S2 Pro、Drama 3 | 富有表现力的克隆、按指示表演（Drama 3） | LoRA（S2 Pro） | Fish Audio Research License；Drama 3：Fish Audio Community License（需接受许可） |
 | IndexTTS | 1.5、2、2.5 | 情感可由权重、参考音频或描述控制 | — | bilibili 模型使用许可（需接受许可） |
 
 内置语音识别（Whisper large-v3-turbo）用于生成参考文本。需接受许可的引擎是单独的软件包

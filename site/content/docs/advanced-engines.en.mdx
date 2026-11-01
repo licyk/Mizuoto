@@ -28,7 +28,7 @@ How each engine is implemented, and how exactly it reproduces its upstream proje
 | GPT-SoVITS (`gptsovits`) | v2, v2Pro, v2ProPlus, v4, v5 Turbo | 32 / 48 kHz | zh en ja ko yue | few-shot cloning from 3–10 s, a voice's own weights | a voice's weights | MIT |
 | OmniVoice (`omnivoice`) | OmniVoice | 24 kHz | 600+ | many languages, voices from attributes, its own voice | full, LoRA | Apache-2.0 |
 | VoxCPM (`voxcpm`) | VoxCPM2, 1.5, 0.5B | 48 / 44.1 / 16 kHz | 30 (1.5 and 0.5B: zh, en) | cloning with or without a transcript, voices from a description, instructions | full, LoRA | Apache-2.0 |
-| Fish Speech (`fishspeech`) | S2 Pro | 44.1 kHz | about 50 | expressive cloning, several clips, dialogue | LoRA | Fish Audio Research License (gated) |
+| Fish Speech (`fishspeech`) | S2 Pro, Drama 3 | 44.1 kHz | about 50 (Drama 3: 80+) | expressive cloning, several clips, dialogue; Drama 3: directed performance, its own voice | LoRA (S2 Pro) | Fish Audio Research License; Drama 3: Fish Audio Community License (gated) |
 | IndexTTS (`indextts`) | IndexTTS-1.5, 2, 2.5 | 24 / 22.05 kHz | zh, en (2.5 adds ja, es) | cloning without a transcript, emotion control | none | bilibili Model Use License (gated) |
 | Speech recognition (`asr`) | Whisper large-v3-turbo | 16 kHz | about 100 | transcripts for reference clips and datasets | none | MIT |
 
@@ -53,7 +53,7 @@ Every engine is implemented in Mizuoto and runs in the server's own process, in 
 
 | Licence | Engines | What it means |
 | --- | --- | --- |
-| Gated | Fish Speech (`fish-audio-research@2026-03-07`), IndexTTS (`bilibili-model-use@2025-09-09`) | The engine is a distribution of its own (`mizuoto-fishspeech`, `mizuoto-indextts`); downloading models and shared files, and synthesis, need the licence accepted first: **Accept the licence** in **Models** › **Engines**, or `mizuoto engine accept-licence <id>`. `mizuoto engine licence <id>` prints the full text |
+| Gated | Fish Speech (`fish-audio-research+fish-audio-community@2026-03-07+1.0`), IndexTTS (`bilibili-model-use@2025-09-09`) | The engine is a distribution of its own (`mizuoto-fishspeech`, `mizuoto-indextts`); downloading models and shared files, and synthesis, need the licence accepted first: **Accept the licence** in **Models** › **Engines**, or `mizuoto engine accept-licence <id>`. `mizuoto engine licence <id>` prints the full text |
 | Non-commercial weights | F5-TTS | The pretrained weights are CC-BY-NC-4.0; nothing to accept, but results are tagged and carry a notice |
 | Not for training other engines | Fish Speech, IndexTTS (`trains_others = false`) | Their results cannot be added to another engine's training datasets |
 
@@ -182,17 +182,19 @@ OpenBMB's tokenizer-free TTS: it generates continuous speech latents patch by pa
 
 ## Fish Speech
 
-Fish Audio S2 Pro: a dual-autoregressive model trained on about ten million hours in some fifty languages. Best for: expressive cloning, free-form inline tags such as `[laughing]`, and dialogue between speakers.
+Fish Audio S2 Pro, a dual-autoregressive model trained on about ten million hours in some fifty languages, and Drama 3, a 35B mixture-of-experts model (3B active per token) for directed performance. Best for: expressive cloning, free-form inline tags such as `[laughing]` or `[whispering]`, and dialogue between speakers.
 
 | Model | Variant | Size | GPU memory | Recommended |
 | --- | --- | --- | --- | --- |
 | `fishspeech/s2-pro` | S2 Pro | 10.5 GB | 22 GB | yes |
+| `fishspeech/drama-3` | Drama 3 | 38.7 GB | 44 GB (runs with far less: its experts stream from RAM) | |
 
-- **Capabilities**: **Clone a voice**, **Several clips** (up to 4), **Inline tags**, **Dialogue**, **Streaming** (by segment), **Seed**. 44.1 kHz.
+- **Capabilities**: **Clone a voice**, **Several clips** (up to 4), **Inline tags**, **Dialogue**, **Streaming** (by segment), **Seed**; Drama 3 also **Its own voice** (no reference). 44.1 kHz.
 - **Reference clips**: 2–30 s.
+- **Drama 3** takes natural directions inline (`[whispering]`, `[laughing]`, `[sighs]`, `<whisper>…</whisper>`) and up to sixteen speakers (`<|speaker:0|>`…`<|speaker:15|>`); a reference whose transcript starts with a speaker's tag gives that speaker's voice. Long text is cut into chunks of about 300 bytes with at most three speakers each (`single_chunk` generates it at once). Its parameters default to upstream's: temperature 0.7, top-p 0.7, top-k 30 (`top_k`, Drama 3 only), up to 1024 frames per chunk. The `sampler` option selects Fish Audio's reference sampler (`reference_argmax`, `reference_ras`) with its `epsilon_cutoff`. It needs about 45 GB of free RAM: its experts (32 GB, kept in FP8) stay in RAM when the GPU cannot hold them, and each token copies only the experts it uses (slower than a GPU that holds the whole model, but it runs on 24 GB cards or less). On a CPU it runs in fp32, about two seconds a frame (a second of speech is 21.5 frames). Upstream supports only NVIDIA GPUs with 48 GB; there is no LoRA training for Drama 3 (upstream has none).
 - **Licence**: S2 Pro is under the Fish Audio Research License (not for commercial use), Drama 3 under the Fish Audio Community License 1.0 (commercial use only below USD 500,000 annual revenue, no hosted text-to-speech service; read it). The engine is gated by both: accepting it records `fish-audio-research+fish-audio-community@2026-03-07+1.0`, so an earlier acceptance of the research licence alone has to be renewed. Results cannot train other engines and show "Built with Fish Audio"; each result is tagged with its model's licence.
-- **Devices**: bf16 on a GPU; fp32 on a CPU (bf16 is emulated there, far slower). About 22 GB of GPU memory.
-- **Training**: **Fine-tune with LoRA** (`lora`, GPU or CPU): upstream's LoRA recipe (semantic tokens, packing, training, merging), exported as a new model. Upstream warns that it learns speaking style more than timbre; 24 GB of GPU memory; the result stays under Fish Audio's research licence.
+- **Devices**: bf16 on a GPU; fp32 on a CPU (bf16 is emulated there, far slower). S2 Pro: about 22 GB of GPU memory.
+- **Training** (S2 Pro): **Fine-tune with LoRA** (`lora`, GPU or CPU): upstream's LoRA recipe (semantic tokens, packing, training, merging), exported as a new model. Upstream warns that it learns speaking style more than timbre; 24 GB of GPU memory; the result stays under Fish Audio's research licence.
 - The catalogue has no int8 version: no public repository exists for it.
 
 ## IndexTTS
