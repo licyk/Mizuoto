@@ -8,7 +8,9 @@ descript-audio-codec, MIT): ``encode`` audio → 10 codebooks at ~21.5 frames/s,
   semantic codebook (4096) and 9 residual codebooks (1024, factorised through 8 dimensions); decoding reverses it.
 
 Weight norm is kept as upstream keeps it (``weight_g``/``weight_v`` and ``parametrizations.weight.original0/1``)
-and recomputed on every forward, so reduced-precision runs match upstream's too.
+and recomputed on every forward, so reduced-precision runs match upstream's too. Upstream's Drama 3 loader folds it
+once in float32 before casting the codec (``load_codec_model``): ``FishCodec.fold_weight_norm`` does the same (in
+float32 the weights are the ones recomputed on every forward).
 Attention masks are built per call (upstream allocates 32k × 32k boolean masks per transformer).
 """
 
@@ -42,7 +44,19 @@ class WN(nn.Module):
         self.__dict__["_conv"] = conv  # its settings only, not a submodule
 
     def weight(self) -> torch.Tensor:
+        folded = self._parameters.get("folded")
+        if folded is not None:
+            return folded
         return torch._weight_norm(self.weight_v, self.weight_g, 0)
+
+    def fold(self) -> None:
+        """``remove_parametrizations(…, leave_parametrized=True)``: the weight computed once from ``g`` and ``v`` in
+        float32 (as stored) and kept in their place, as ``folded``."""
+        with torch.no_grad():
+            weight = torch._weight_norm(self.weight_v.float(), self.weight_g.float(), 0)
+        del self.weight_g
+        del self.weight_v
+        self.folded = nn.Parameter(weight)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         conv: Any = self.__dict__["_conv"]
@@ -462,6 +476,13 @@ class FishCodec(nn.Module):
 
     def from_indices(self, indices: torch.Tensor) -> torch.Tensor:
         return self.decoder(self.quantizer.decode(indices))
+
+    def fold_weight_norm(self) -> FishCodec:
+        """Fold every weight norm (before a cast to half precision, as upstream's Drama 3 loader does)."""
+        for m in self.modules():
+            if isinstance(m, WN):
+                m.fold()
+        return self
 
 
 IGNORED = ("*.freqs_cis", "*.causal_mask")

@@ -7,7 +7,7 @@ import pytest
 
 from tests.engines_native.accel_checks import check_mask_info, count_sites
 
-SITES_TESTED = {"fishspeech.slow", "fishspeech.step", "fishspeech.fast", "fishspeech.codec"}
+SITES_TESTED = {"fishspeech.slow", "fishspeech.step", "fishspeech.fast", "fishspeech.codec", "fishspeech.drama3.backbone", "fishspeech.drama3.tower"}
 """The attention sites the tiny Fish Speech engine reaches (``MIZUOTO_TEST_ACCEL=count``)."""
 
 

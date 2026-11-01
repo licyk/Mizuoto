@@ -1,4 +1,5 @@
-"""Fish Speech S2 Pro, native: cloning from one or several clips, inline tags, dialogue.
+"""Fish Speech S2 Pro, native: cloning from one or several clips, inline tags, dialogue. (Drama 3, the engine's other
+variant, is ``mizuoto_fishspeech.drama3``; it shares this module's codec, references and operations.)
 
 The engine does what Mizuoto's v1 adapter did through upstream's ``TTSInferenceEngine`` and
 ``launch_thread_safe_queue``, without the daemon thread and its 32k-position caches:
@@ -56,13 +57,21 @@ class FishSpeechEngine(Engine):
             config = json.loads((model_dir / "config.json").read_text(encoding="utf-8"))
         except (OSError, ValueError):
             return None
+        from mizuoto_fishspeech.drama3.config import is_drama3
         from mizuoto_fishspeech.model import is_s2
 
+        if is_drama3(config):
+            return "drama3"
         return "s2_pro" if is_s2(config) else None
 
     def load(self, spec: LoadSpec, runtime: Runtime, ctx: RequestContext) -> LoadedEngine:
-        if spec.model_dir is None or self.detect_variant(spec.model_dir) is None:
-            raise EngineError(f"{spec.model_id} is not a Fish Speech S2 model", code=codes.INVALID_INPUT)
+        variant = self.detect_variant(spec.model_dir) if spec.model_dir is not None else None
+        if variant is None:
+            raise EngineError(f"{spec.model_id} is not a Fish Speech S2 or Drama 3 model", code=codes.INVALID_INPUT)
+        if variant == "drama3":
+            from mizuoto_fishspeech.drama3.engine import LoadedDrama3
+
+            return LoadedDrama3(spec, ctx)
         return LoadedFishSpeech(spec, ctx, runtime.options.cuda_graphs)
 
 

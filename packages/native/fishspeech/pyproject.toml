@@ -4,11 +4,12 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "mizuoto-fishspeech"
-description = "Fish Speech S2 for Mizuoto's native runtime (Fish Audio Research License)"
+description = "Fish Speech S2 Pro and Drama 3 for Mizuoto's native runtime (Fish Audio Research License; Drama 3: Fish Audio Community License)"
 requires-python = ">=3.10"
 dynamic = ["version"]
-license = "LicenseRef-Fish-Audio-Research"
-# A separate distribution because the Fish Audio Research License covers this port. It runs inside Mizuoto's own environment and registers itself as an engine.
+license = "LicenseRef-Fish-Audio-Research AND LicenseRef-Fish-Audio-Community"
+# A separate distribution because the Fish Audio Research License covers this port (and the Fish Audio Community License
+# its Drama 3 part, mizuoto_fishspeech/drama3, ported from code under it). It runs inside Mizuoto's own environment and registers itself as an engine.
 # The Mizuoto versions it works with: its code uses Mizuoto's runtime, and its manifest ships in mizuoto. The lower bound is
 # the oldest release with everything it uses (CI tests it); the upper one the next minor, while Mizuoto is 0.x.
 dependencies = ["mizuoto>=0.2.0,<0.3", "torch>=2.8", "numpy>=1.26,<3", "tokenizers>=0.20", "safetensors"]
@@ -21,7 +22,7 @@ where = ["."]
 include = ["mizuoto_fishspeech*"]
 
 [tool.setuptools.package-data]
-mizuoto_fishspeech = ["LICENSE.md"]
+mizuoto_fishspeech = ["LICENSE.md", "drama3/LICENSE.md"]
 
 [tool.setuptools.dynamic]
 version = { attr = "mizuoto_fishspeech.version.VERSION" }
