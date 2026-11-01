@@ -223,7 +223,37 @@ def test_licence_training_rule(services):
     gated = {e: services.engines.manifest(e).licence for e in ("fishspeech", "indextts")}
     assert all(lic.gated and lic.file for lic in gated.values())
     text = services.engines.licence_text("fishspeech")
-    assert "FISH AUDIO RESEARCH LICENSE" in text.text and text.key == "fish-audio-research@2026-03-07" and not text.accepted
+    # S2 Pro is under the research licence, Drama 3 (a variant with a licence of its own) under the community one:
+    # the engine shows and gates both, and accepting it records the key of both
+    assert "FISH AUDIO RESEARCH LICENSE" in text.text and "FISH AUDIO COMMUNITY LICENSE" in text.text and not text.accepted
+    assert text.key == "fish-audio-research+fish-audio-community@2026-03-07+1.0"
+    assert training_refusal(services.engines, ["fish-audio-community"], "gptsovits")
+    assert training_refusal(services.engines, ["fish-audio-community"], "fishspeech") is None
+
+
+def test_variant_licences(services):
+    from mizuoto.core.engines.registry import engine_licence, output_licence_tags, variant_licence
+    from mizuoto.core.errors import LicenceError
+
+    m = services.engines.manifest("fishspeech")
+    assert variant_licence(m, "s2_pro").id == "fish-audio-research" and variant_licence(m, "drama3").id == "fish-audio-community"
+    assert output_licence_tags(m, "s2_pro") == ["fish-audio-research"] and output_licence_tags(m, "drama3") == ["fish-audio-community"]
+    lic = engine_licence(m)
+    assert lic.gated and not lic.commercial and not lic.trains_others and lic.name == "Fish Audio Research License + Fish Audio Community License"
+    status = services.engines.status("fishspeech")
+    # the web UI builds the key it accepts from the status's licence
+    assert f"{status.licence.id}@{status.licence.version}" == services.engines.licence_key(m)
+    # an acceptance of the research licence alone (before Drama 3) no longer covers the engine
+    services.settings.update({"engines": {"fishspeech": {"accepted_licence": "fish-audio-research@2026-03-07"}}})
+    assert not services.engines.licence_accepted("fishspeech")
+    with pytest.raises(LicenceError):
+        services.engines.check_licence("fishspeech")
+    with pytest.raises(LicenceError):
+        services.models.download(["fishspeech/drama-3"])
+    services.engines.accept_licence("fishspeech", status.licence.id + "@" + status.licence.version)
+    assert services.engines.licence_accepted("fishspeech")
+    # an engine without variant licences keeps its own key
+    assert services.engines.licence_key(services.engines.manifest("indextts")) == "bilibili-model-use@" + services.engines.manifest("indextts").licence.version
 
 
 def test_gated_downloads_need_the_licence(services):

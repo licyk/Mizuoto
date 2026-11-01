@@ -190,7 +190,7 @@ Fish Audio S2 Pro: a dual-autoregressive model trained on about ten million hour
 
 - **Capabilities**: **Clone a voice**, **Several clips** (up to 4), **Inline tags**, **Dialogue**, **Streaming** (by segment), **Seed**. 44.1 kHz.
 - **Reference clips**: 2–30 s.
-- **Licence**: Fish Audio Research License, gated (`fish-audio-research@2026-03-07`); not for commercial use; results cannot train other engines; results show "Built with Fish Audio".
+- **Licence**: S2 Pro is under the Fish Audio Research License (not for commercial use), Drama 3 under the Fish Audio Community License 1.0 (commercial use only below USD 500,000 annual revenue, no hosted text-to-speech service; read it). The engine is gated by both: accepting it records `fish-audio-research+fish-audio-community@2026-03-07+1.0`, so an earlier acceptance of the research licence alone has to be renewed. Results cannot train other engines and show "Built with Fish Audio"; each result is tagged with its model's licence.
 - **Devices**: bf16 on a GPU; fp32 on a CPU (bf16 is emulated there, far slower). About 22 GB of GPU memory.
 - **Training**: **Fine-tune with LoRA** (`lora`, GPU or CPU): upstream's LoRA recipe (semantic tokens, packing, training, merging), exported as a new model. Upstream warns that it learns speaking style more than timbre; 24 GB of GPU memory; the result stays under Fish Audio's research licence.
 - The catalogue has no int8 version: no public repository exists for it.

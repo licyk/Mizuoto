@@ -1,7 +1,8 @@
-# Fish Speech / Fish Audio S2. Licence-gated.
+# Fish Speech / Fish Audio S2 and Drama 3. Licence-gated: S2 Pro under the Fish Audio Research License, Drama 3 under
+# the Fish Audio Community License (its variant's own licence; accepting the engine's accepts both).
 id = "fishspeech"
 title = "Fish Speech"
-description = "Fish Audio S2 Pro: a dual-autoregressive model trained on about ten million hours in some fifty languages; cloning from one or several clips, free-form inline tags such as [laughing], and dialogue by speaker tags."
+description = "Fish Audio S2 Pro, a dual-autoregressive model trained on about ten million hours in some fifty languages, and Drama 3, a 35B mixture-of-experts model (3B active) for directed performance: cloning from one or several clips, free-form inline tags such as [laughing] or [whisper], and dialogue by speaker tags."
 devices = ["cuda", "rocm", "xpu", "mps", "cpu"]
 languages = ["*"]
 ops = ["codec_encode", "codec_decode"]
@@ -13,7 +14,7 @@ commit = "bdd39477922a89b904c6f2c7397f2a9bbcc60a0c"
 [licence]
 id = "fish-audio-research"
 name = "Fish Audio Research License"
-url = "https://github.com/fishaudio/fish-speech/blob/main/LICENSE"
+url = "https://github.com/fishaudio/fish-speech/blob/bdd39477922a89b904c6f2c7397f2a9bbcc60a0c/LICENSE"
 version = "2026-03-07"
 gated = true
 commercial = false
@@ -34,10 +35,35 @@ min_seconds = 2.0
 max_seconds = 30.0
 max_references = 4
 
+# Drama 3 (fish-speech 0f8a12e8, ``fish_speech/models/text2semantic/fish_omni``): a Qwen3.5-MoE backbone with FP8
+# experts, a codebook tower, S2's codec. Without a reference it speaks in a voice of its own.
+[variants.drama3]
+title = "Drama 3"
+sample_rate = 44100
+capabilities = ["clone", "multi_reference", "auto_voice", "inline_tags", "dialogue", "stream_audio", "seed"]
+stream_granularity = "segment"
+
+[variants.drama3.reference]
+min_seconds = 2.0
+max_seconds = 30.0
+max_references = 4
+
+[variants.drama3.licence]
+id = "fish-audio-community"
+name = "Fish Audio Community License"
+url = "https://huggingface.co/fishaudio/drama-3/blob/main/LICENSE"
+version = "1.0"
+gated = true
+commercial = false
+file = "fish-audio-community.md"
+trains_others = false
+notice = "Built with Fish Audio"
+
 # -- common parameters ----------------------------------------------------------------
 
 [params.temperature]
 target = "temperature"
+help = "Drama 3's default is 0.7."
 min = 0.1
 max = 1.0
 step = 0.05
@@ -45,6 +71,7 @@ default = 0.8
 
 [params.top_p]
 target = "top_p"
+help = "Drama 3's default is 0.7."
 min = 0.1
 max = 1.0
 step = 0.01
@@ -57,7 +84,7 @@ max = 2.0
 step = 0.01
 default = 1.1
 hidden = true
-help = "No effect: S2 Pro's sampler does not use it (upstream's neither); accepted so that requests sending it keep working."
+help = "No effect: neither S2 Pro's sampler nor Drama 3's uses it (upstream's neither); accepted so that requests sending it keep working."
 
 [params.max_new_tokens]
 target = "max_new_tokens"
@@ -65,7 +92,16 @@ type = "int"
 min = 0
 max = 8192
 default = 1024
-help = "At most this many semantic tokens per segment (0: no limit but the model's)."
+help = "At most this many frames per text segment (0: S2 Pro, no limit but the model's; Drama 3, 600, or 2048 with single_chunk)."
+
+[params.top_k]
+target = "top_k"
+type = "int"
+min = 0
+max = 4096
+default = 30
+variants = ["drama3"]
+help = "Candidates per draw. 0 lifts the cap, which only the reference sampler allows."
 
 [params.seed]
 target = "seed"
@@ -81,7 +117,29 @@ default = 200
 min = 100
 max = 1000
 step = 10
-help = "How long, in text bytes, the text segments upstream generates one after the other are."
+variants = ["s2_pro"]
+help = "How long, in text bytes, the text segments upstream generates one after the other are (Drama 3 cuts its own, about 300 bytes with at most three speakers each)."
+
+[options.single_chunk]
+type = "bool"
+default = false
+variants = ["drama3"]
+help = "Generate the whole text in one pass instead of segments of about 300 bytes."
+
+[options.sampler]
+type = "enum"
+default = "default"
+choices = ["default", "reference_argmax", "reference_ras"]
+variants = ["drama3"]
+help = "default: upstream's sampler. reference_*: Fish Audio's reference sampler (upstream's --reference-sampling), whose repeated main token falls back to the most probable one (argmax) or to a redraw (ras)."
+
+[options.epsilon_cutoff]
+type = "float"
+min = 0.0
+max = 0.999
+step = 0.001
+variants = ["drama3"]
+help = "The reference sampler's epsilon cutoff for the main token (empty: 0.001; 0: off). Only with a reference_* sampler."
 
 [options.normalize]
 type = "bool"
@@ -100,10 +158,19 @@ vram_mb = 22000
 recommended = true
 files = { hf = "fishaudio/s2-pro", exclude = [".gitattributes", "*.md", "*.png"], manifest = "fishspeech-s2-pro.files.json" }
 
+[[models]]
+id = "fishspeech/drama-3"
+variant = "drama3"
+title = "Fish Audio Drama 3"
+description = "Drama 3's weights (experts in FP8) and the S2 codec, about 41 GB. Runs on the CPU or a GPU; with less GPU memory than the whole model, its experts stream from RAM (about 45 GB free RAM needed)."
+vram_mb = 44000
+files = { hf = "fishaudio/drama-3", exclude = [".gitattributes", "*.md", "*.png"], manifest = "fishspeech-drama-3.files.json" }
+
 [training.lora]
 title = "Fine-tune with LoRA"
 description = "Upstream's LoRA fine-tune: the clips' semantic tokens through the codec (extract_vq), packed (build_dataset), fish_speech/train.py with text2semantic_finetune and a LoRA config, then merged into a new model (merge_lora). Upstream warns it learns speaking style more than timbre. A GPU with 24 GB; the result is under Fish Audio's research licence."
 export = "model"
+variants = ["s2_pro"]
 min_seconds = 30.0
 devices = ["cuda", "rocm", "xpu", "mps", "cpu"]
 stages = [

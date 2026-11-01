@@ -7,7 +7,8 @@ Reads ``OUT/MIRROR.json`` (``mirror_fetch.py`` or ``mirror_models.py build``) an
 - ``LICENSES.md``: each engine's licence and link;
 - for each engine whose licence ships with Mizuoto (the gated ones), its text as ``<engine>/LICENSE<ext>``,
   and the notice file that licence asks for (Fish Audio's ``NOTICE.txt``): copies of the weights must
-  carry them.
+  carry them. A model whose variant has a licence of its own (Fish Speech's Drama 3) gets that licence's text
+  and notice in its own folder, as ``<engine>/<model>/LICENSE<ext>`` (unless the model ships one) and ``NOTICE.txt``.
 """
 
 from __future__ import annotations
@@ -25,10 +26,14 @@ sys.path.insert(0, str(ROOT / "scripts"))
 
 import mirror_models as mm  # noqa: E402
 
-from mizuoto.core.engines.registry import MANIFESTS_DIR  # noqa: E402
+from mizuoto.core.engines.registry import MANIFESTS_DIR, variant_licence  # noqa: E402
 
-NOTICES = {"fishspeech": "This model is licensed under the Fish Audio Research License, Copyright © 39 AI, INC. All Rights Reserved.\n"}
-"""Notice files a licence requires beside the weights (Fish Audio Research License §III.a)."""
+NOTICES = {
+    "fish-audio-research": "This model is licensed under the Fish Audio Research License, Copyright © 39 AI, INC. All Rights Reserved.\n",
+    "fish-audio-community": "These Fish Audio Materials are licensed under the Fish Audio Community License, Version 1.0. Copyright © 39 AI, INC. All Rights Reserved.\n",
+}
+"""Notice files a licence requires beside the weights, by licence id (Fish Audio Research License §III.a, Fish Audio
+Community License §IV.a)."""
 
 
 def folders(mirror: dict[str, Any]) -> dict[str, dict[str, Any]]:
@@ -53,7 +58,10 @@ def main(argv: list[str]) -> int:
     if not (out / "MIRROR.json").is_file():
         sys.exit(f"{out} is not a built mirror (no MIRROR.json)")
     rows = folders(json.loads((out / "MIRROR.json").read_text(encoding="utf-8")))
-    licences = {m.id: m.licence for m in mm.manifests()}
+    manifests = mm.manifests()
+    licences = {m.id: m.licence for m in manifests}
+    # models whose variant carries a licence of its own: folder → that licence
+    own = {e.id: variant_licence(m, e.variant) for m in manifests for e in m.models if variant_licence(m, e.variant).id != m.licence.id}
     engines = sorted({r["engine"] for r in rows.values()})
 
     notes = []
@@ -64,8 +72,8 @@ def main(argv: list[str]) -> int:
             name = f"LICENSE{Path(lic.file).suffix}"
             shutil.copyfile(MANIFESTS_DIR / "licences" / lic.file, out / engine / name)
             files.append(f"`{engine}/{name}`")
-            if engine in NOTICES:
-                (out / engine / "NOTICE.txt").write_text(NOTICES[engine], encoding="utf-8")
+            if lic.id in NOTICES:
+                (out / engine / "NOTICE.txt").write_text(NOTICES[lic.id], encoding="utf-8")
                 files.append(f"`{engine}/NOTICE.txt`")
         if files or lic.notice or not lic.commercial:
             line = f"- **{engine}** (`{engine}/`): {lic.name}" + (f" ({', '.join(files)})" if files else "") + "."
@@ -73,6 +81,26 @@ def main(argv: list[str]) -> int:
                 line += " Not for commercial use."
             if lic.notice:
                 line += f" {lic.notice.rstrip('.')}."
+            notes.append(line)
+        for folder, vlic in own.items():
+            if folder not in rows or rows[folder]["engine"] != engine:
+                continue
+            files = []
+            if vlic.file and (out / folder).is_dir():
+                name = f"LICENSE{Path(vlic.file).suffix}"
+                if not (out / folder / "LICENSE").exists():
+                    shutil.copyfile(MANIFESTS_DIR / "licences" / vlic.file, out / folder / name)
+                    files.append(f"`{folder}/{name}`")
+                else:
+                    files.append(f"`{folder}/LICENSE`")
+                if vlic.id in NOTICES:
+                    (out / folder / "NOTICE.txt").write_text(NOTICES[vlic.id], encoding="utf-8")
+                    files.append(f"`{folder}/NOTICE.txt`")
+            line = f"- **{folder}** (`{folder}/`): {vlic.name}" + (f" {vlic.version}" if vlic.version else "") + (f" ({', '.join(files)})" if files else "") + "."
+            if not vlic.commercial and "commercial" not in vlic.notice:
+                line += " Commercial use is restricted: read the licence."
+            if vlic.notice:
+                line += f" {vlic.notice.rstrip('.')}."
             notes.append(line)
 
     total = sum(r["size"] for r in rows.values())
@@ -110,21 +138,22 @@ def main(argv: list[str]) -> int:
         "",
         f"## Contents ({total / 1e9:.1f} GB)",
         "",
-        "| Folder | Engine licence | Files | Size | Origin |",
+        "| Folder | Licence | Files | Size | Origin |",
         "| --- | --- | ---: | ---: | --- |",
     ]
     for prefix, r in rows.items():
         origins = ", ".join(f"`{o}`" for o in r["origins"])
-        lines.append(f"| `{prefix}` | {licences[r['engine']].name} | {r['files']} | {r['size'] / 1e9:.2f} GB | {origins} |")
+        lines.append(f"| `{prefix}` | {(own.get(prefix) or licences[r['engine']]).name} | {r['files']} | {r['size'] / 1e9:.2f} GB | {origins} |")
     (out / "README.md").write_text("\n".join([*lines, ""]), encoding="utf-8")
 
     table = [f"| {e} | {licences[e].name} | {licences[e].url} |" for e in engines]
+    table += [f"| {folder} | {vlic.name} {vlic.version} | {vlic.url} |" for folder, vlic in own.items() if folder in rows]
     (out / "LICENSES.md").write_text(
         "\n".join(
             [
                 "# Licences",
                 "",
-                "| Engine | Licence | Link |",
+                "| Engine or model | Licence | Link |",
                 "| --- | --- | --- |",
                 *table,
                 "",

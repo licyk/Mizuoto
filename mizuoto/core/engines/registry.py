@@ -13,7 +13,7 @@ from typing import TYPE_CHECKING, Any
 
 from pydantic import ValidationError as PydanticValidationError
 
-from mizuoto.core.engines.models import EngineManifest, EngineStatus, LicenceText, ModelEntry, ModelParamSpecs, VariantInfo, VoiceMode
+from mizuoto.core.engines.models import EngineManifest, EngineStatus, LicenceInfo, LicenceText, ModelEntry, ModelParamSpecs, VariantInfo, VoiceMode
 from mizuoto.core.engines.params import param_fields
 from mizuoto.core.errors import EnvMissingError, LicenceError, NotFoundError, ValidationError
 from mizuoto.core.settings import SettingsService
@@ -60,6 +60,47 @@ def load_manifest(path: Path) -> EngineManifest:
         if variant.id != vid:
             raise ValidationError(f"{path.name}: variant {vid} has id {variant.id}")
     return manifest
+
+
+def licences(manifest: EngineManifest) -> list[LicenceInfo]:
+    """The engine's licence, then each distinct licence its variants carry of their own."""
+    out = [manifest.licence]
+    for variant in manifest.variants.values():
+        if variant.licence is not None and all(variant.licence.id != lic.id for lic in out):
+            out.append(variant.licence)
+    return out
+
+
+def engine_licence(manifest: EngineManifest) -> LicenceInfo:
+    """The licence the engine is shown and gated with: its own, or, when variants carry licences of their own, all of
+    them as one (names and versions joined by ``+``; gated when any is, commercial and open to training only when all
+    are). ``id@version`` of it is the key ``licence_key`` records."""
+    all_licences = licences(manifest)
+    if len(all_licences) == 1:
+        return manifest.licence
+    first = manifest.licence
+    return LicenceInfo(
+        id="+".join(lic.id for lic in all_licences),
+        name=" + ".join(lic.name for lic in all_licences),
+        url=first.url,
+        gated=any(lic.gated for lic in all_licences),
+        version="+".join(lic.version for lic in all_licences) if any(lic.version for lic in all_licences) else "",
+        commercial=all(lic.commercial for lic in all_licences),
+        notice=" ".join(dict.fromkeys(lic.notice for lic in all_licences if lic.notice)),
+        trains_others=all(lic.trains_others for lic in all_licences),
+    )
+
+
+def variant_licence(manifest: EngineManifest, variant_id: str) -> LicenceInfo:
+    """The licence a variant's weights and outputs are under: its own, else the engine's."""
+    variant = manifest.variants.get(variant_id)
+    return variant.licence if variant is not None and variant.licence is not None else manifest.licence
+
+
+def output_licence_tags(manifest: EngineManifest, variant_id: str) -> list[str]:
+    """The licence tags of an output a variant made: its licence's id when that licence is gated or not commercial."""
+    lic = variant_licence(manifest, variant_id)
+    return [lic.id] if lic.gated or not lic.commercial else []
 
 
 class EngineRegistry:
@@ -115,32 +156,48 @@ class EngineRegistry:
 
     def licence_accepted(self, engine_id: str) -> bool:
         m = self.manifest(engine_id)
-        if not m.licence.gated:
+        if not engine_licence(m).gated:
             return True
         accepted = self._engine_settings(engine_id).accepted_licence
         return accepted == self.licence_key(m)
 
     @staticmethod
     def licence_key(manifest: EngineManifest) -> str:
-        return f"{manifest.licence.id}@{manifest.licence.version}" if manifest.licence.version else manifest.licence.id
+        """What accepting the engine's licence records: ``id@version`` of ``engine_licence`` (the web UI builds it from
+        the engine's status the same way). A variant with a licence of its own changes it: the engine's licences are
+        read and accepted again."""
+        lic = engine_licence(manifest)
+        return f"{lic.id}@{lic.version}" if lic.version else lic.id
 
     def check_licence(self, engine_id: str) -> None:
         m = self.manifest(engine_id)
         if not self.licence_accepted(engine_id):
+            lic = engine_licence(m)
             raise LicenceError(
-                f"{m.title} is licensed under {m.licence.name}, which must be accepted first",
-                {"engine": engine_id, "licence": self.licence_key(m), "url": m.licence.url, "hint": f"Read it, then: mizuoto engine accept-licence {engine_id}"},
+                f"{m.title} is licensed under {lic.name}, which must be accepted first",
+                {"engine": engine_id, "licence": self.licence_key(m), "url": lic.url, "hint": f"Read it, then: mizuoto engine accept-licence {engine_id}"},
             )
 
     def licence_text(self, engine_id: str) -> LicenceText:
+        """The full text of every licence of the engine, each under its name when there are several."""
         m = self.manifest(engine_id)
-        text = ""
-        if m.licence.file:
-            try:
-                text = (MANIFESTS_DIR / "licences" / m.licence.file).read_text(encoding="utf-8")
-            except OSError:
-                text = ""
-        return LicenceText(engine=engine_id, key=self.licence_key(m), name=m.licence.name, url=m.licence.url, text=text, accepted=self.licence_accepted(engine_id))
+        all_licences = licences(m)
+        texts = []
+        for lic in all_licences:
+            text = ""
+            if lic.file:
+                try:
+                    text = (MANIFESTS_DIR / "licences" / lic.file).read_text(encoding="utf-8")
+                except OSError:
+                    text = ""
+            if len(all_licences) > 1:
+                scope = ", ".join(v.title or v.id for v in m.variants.values() if v.licence is not None and v.licence.id == lic.id) or "the engine"
+                text = f"==== {lic.name} ({scope}) ====\n{lic.url}\n\n{text}".rstrip() + "\n"
+            texts.append(text)
+        lic = engine_licence(m)
+        return LicenceText(
+            engine=engine_id, key=self.licence_key(m), name=lic.name, url=lic.url, text="\n\n".join(t for t in texts if t), accepted=self.licence_accepted(engine_id)
+        )
 
     def accept_licence(self, engine_id: str, key: str | None = None) -> EngineStatus:
         """Record that the user accepted the engine's licence. ``key`` (``id@version``), when given,
@@ -208,7 +265,7 @@ class EngineRegistry:
             id=m.id,
             title=m.title,
             description=m.description,
-            licence=m.licence,
+            licence=engine_licence(m),
             licence_accepted=self.licence_accepted(m.id),
             enabled=self.enabled(m.id),
             available=not missing,

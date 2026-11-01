@@ -5348,6 +5348,7 @@ export interface components {
             max_batch: number | null;
             /** Weights Version */
             weights_version: string | null;
+            licence: components["schemas"]["LicenceInfo"] | null;
         };
         /** VerifyResult */
         VerifyResult: {

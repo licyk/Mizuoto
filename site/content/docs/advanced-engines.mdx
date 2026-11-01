@@ -190,7 +190,7 @@ Fish Audio S2 Pro：双自回归模型，约一千万小时、五十种左右语
 
 - **能力**：**克隆音色**、**多段参考**（最多 4 段）、**行内标签**、**对话**、**流式输出**（按段）、**种子**。采样率 44.1 kHz。
 - **参考音频**：2–30 秒。
-- **许可**：Fish Audio Research License，需要接受（`fish-audio-research@2026-03-07`），不可商用，结果不能用于训练其他引擎，结果下方显示 "Built with Fish Audio"。
+- **许可**：S2 Pro 采用 Fish Audio Research License（不可商用），Drama 3 采用 Fish Audio Community License 1.0（年收入低于 50 万美元时才可商用，且不可提供托管的语音合成服务；请阅读全文）。该引擎需要同时接受两份许可：接受后记录为 `fish-audio-research+fish-audio-community@2026-03-07+1.0`，因此之前只接受了研究许可的需要重新接受。结果不能用于训练其他引擎，结果下方显示 "Built with Fish Audio"；每条结果按其模型的许可打标签。
 - **设备**：GPU 上用 bf16；CPU 上用 fp32（bf16 在 CPU 上是模拟的，慢得多）。显存需求约 22 GB。
 - **训练**：**Fine-tune with LoRA**（`lora`，GPU 或 CPU）：上游的 LoRA 流程（提取语义 token、打包、训练、合并），导出为新模型。上游提醒它学到的更多是说话风格而不是音色；需要 24 GB 显存，结果仍受 Fish Audio 研究许可约束。
 - Mizuoto 目录中没有 int8 版本（官方没有公开该仓库）。

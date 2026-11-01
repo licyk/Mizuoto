@@ -44,6 +44,9 @@ class FishSpeechEngine(Engine):
     OPTION_SCHEMA = {
         "chunk_length": OptionSpec("int", 200, 100, 1000),
         "normalize": OptionSpec("bool", True),
+        "single_chunk": OptionSpec("bool", False),
+        "sampler": OptionSpec("enum", "default", choices=("default", "reference_argmax", "reference_ras")),
+        "epsilon_cutoff": OptionSpec("float", None, 0.0, 0.999),
     }
 
     def detect_variant(self, model_dir: Path) -> str | None:

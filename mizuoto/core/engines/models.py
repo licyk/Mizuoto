@@ -156,6 +156,9 @@ class VariantInfo(Record):
     max_batch: int | None = None
     weights_version: str | None = None
     """The version a voice's own fine-tuned weights must have to be used with this variant (GPT-SoVITS: ``v2Pro``)."""
+    licence: LicenceInfo | None = None
+    """The licence of this variant's weights and outputs when it is not the engine's (Fish Speech's Drama 3). Accepting
+    the engine's licence accepts it too: the engine's acceptance names every licence of the engine."""
 
 
 class TrainingStage(Record):

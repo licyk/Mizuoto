@@ -28,7 +28,7 @@ from mizuoto.core.clock import now_iso
 from mizuoto.core.engines import languages
 from mizuoto.core.engines.models import EngineManifest, ModelParamSpecs, VariantInfo, VoiceMode
 from mizuoto.core.engines.params import accepted, check_options, check_params
-from mizuoto.core.engines.registry import EngineRegistry
+from mizuoto.core.engines.registry import EngineRegistry, output_licence_tags
 from mizuoto.core.errors import CapabilityError, LanguageError, NotFoundError, ReferenceInvalidError, ValidationError
 from mizuoto.core.inference.engine import AudioStream, EngineHandle, EngineRequest, ModelRef
 from mizuoto.core.inference.runtime import RuntimeService
@@ -380,7 +380,7 @@ class TtsService:
         fmt = out.format or settings.tts.output_format
         out_rate = out.sample_rate or settings.tts.output_sample_rate or variant.sample_rate
         normalize = out.normalize or settings.tts.normalize
-        licence_tags = [manifest.licence.id] if manifest.licence.gated or not manifest.licence.commercial else []
+        licence_tags = output_licence_tags(manifest, variant.id)
         es = settings.engines.get(engine)
         plan = SynthesisPlan(
             model=req.model,
@@ -867,7 +867,7 @@ class TtsService:
                 "timings": {"load": load_seconds, "total": total, "rtf": total / duration if duration else None},
                 "engine_options": t.payload.get("options", {}),
             },
-            licence_tags=[t.manifest.licence.id] if t.manifest.licence.gated or not t.manifest.licence.commercial else [],
+            licence_tags=output_licence_tags(t.manifest, t.variant),
             created_at=now_iso(),
         )
         self._outputs.add(output, ctx.job_id)
