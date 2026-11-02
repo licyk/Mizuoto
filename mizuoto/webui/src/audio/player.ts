@@ -30,6 +30,9 @@ export class AudioPlayer {
   private state: PlayerState = { track: null, side: 'a', playing: false, time: 0, duration: 0 };
   private listeners = new Set<Listener>();
   private frame: number | null = null;
+  // The latest place ``seekTrack`` was asked for, so a drag that starts on a track not yet loaded
+  // ends up where the pointer is once it plays, not where the drag began.
+  private wanted: { key: string; fraction: number } | null = null;
 
   constructor(el?: HTMLMediaElement) {
     this.el = el ?? new Audio();
@@ -124,6 +127,21 @@ export class AudioPlayer {
   seek(seconds: number): void {
     this.el.currentTime = Math.max(0, seconds);
     this.patch({ time: this.el.currentTime });
+  }
+
+  /**
+   * Seek ``track`` to ``fraction`` of its length, starting it first when it is not the one loaded.
+   * ``duration`` (seconds) stands in while the element does not know the length yet.
+   */
+  async seekTrack(track: Track, fraction: number, duration = 0): Promise<void> {
+    this.wanted = { key: track.key, fraction };
+    const length = () => this.state.duration || duration;
+    if (this.state.track?.key === track.key) {
+      this.seek(fraction * length());
+      return;
+    }
+    await this.play(track);
+    if (this.wanted?.key === track.key && this.state.track?.key === track.key) this.seek(this.wanted.fraction * length());
   }
 
   stop(): void {

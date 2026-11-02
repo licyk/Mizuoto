@@ -426,6 +426,7 @@ export default {
     addClip: '添加音频',
     retranscribe: '重新识别',
     transcriptSaved: '文本已保存',
+    seekReference: '参考音频播放位置',
     details: '详情',
     tags: '标签',
     compatibility: '哪些模型可以使用',

@@ -73,3 +73,21 @@ describe('playback position', () => {
     expect(player.snapshot.time).toBe(1.25);
   });
 });
+
+describe('seeking a track', () => {
+  it('seeks the loaded track, and starts another first, ending where the latest seek asked', async () => {
+    const el = new FakeMedia();
+    const player = new AudioPlayer(el as unknown as HTMLMediaElement);
+    const other = { key: 'r1', url: '/ref.wav', label: 'ref' };
+    // A drag that starts on a track not loaded: the moves made while it starts are not undone.
+    const started = player.seekTrack(other, 0.1, 20);
+    expect(player.snapshot.track?.key).toBe('r1');
+    void player.seekTrack(other, 0.5, 20);
+    await started;
+    expect(player.snapshot.playing).toBe(true);
+    expect(el.currentTime).toBe(10);
+    await player.seekTrack(other, 0.25, 20);
+    expect(el.currentTime).toBe(5);
+    expect(player.snapshot.playing).toBe(true);
+  });
+});

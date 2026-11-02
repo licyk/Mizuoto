@@ -15,6 +15,7 @@ export const usePlayerStore = defineStore('player', () => {
     toggle: () => player.toggle(),
     setSide: (side: Side) => player.setSide(side),
     seek: (seconds: number) => player.seek(seconds),
+    seekTrack: (track: Track, fraction: number, duration?: number) => player.seekTrack(track, fraction, duration),
     stop: () => player.stop(),
     isPlaying: (key: string) => state.value.track?.key === key && state.value.playing,
   };

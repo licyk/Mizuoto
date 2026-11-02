@@ -76,7 +76,9 @@ function saveDetails() {
 const transcripts = ref<Record<string, string>>({});
 watch(voice, (v) => (transcripts.value = Object.fromEntries((v?.references ?? []).map((r) => [r.sha256, r.transcript ?? '']))), { immediate: true });
 const refKey = (r: VoiceReference) => `${props.id}:${r.sha256}`;
-const play = (r: VoiceReference) => player.play({ key: refKey(r), url: voiceUrls.reference(props.id, r.sha256), label: voice.value?.name ?? '' });
+const refTrack = (r: VoiceReference) => ({ key: refKey(r), url: voiceUrls.reference(props.id, r.sha256), label: voice.value?.name ?? '' });
+const play = (r: VoiceReference) => player.play(refTrack(r));
+const seek = (r: VoiceReference, fraction: number) => player.seekTrack(refTrack(r), fraction, r.duration);
 function saveTranscript(r: VoiceReference) {
   actions.updateReference.mutate({ id: props.id, sha: r.sha256, patch: { transcript: transcripts.value[r.sha256] ?? '' } }, { onSuccess: () => snackbar.show(t('voices.transcriptSaved')), onError });
 }
@@ -150,7 +152,7 @@ function useInSpeak() {
           <li v-for="r in voice.references" :key="r.sha256" class="ref">
             <div class="ref-line">
               <IconButton :icon="player.isPlaying(refKey(r)) ? icons.Pause : icons.Play" :label="t('results.play')" @click="play(r)" />
-              <RefWave :voice-id="id" :sha="r.sha256" :progress="player.state.track?.key === refKey(r) && player.state.duration ? player.state.time / player.state.duration : 0" />
+              <RefWave :voice-id="id" :sha="r.sha256" :progress="player.state.track?.key === refKey(r) && player.state.duration ? player.state.time / player.state.duration : 0" :label="t('voices.seekReference')" @seek="seek(r, $event)" />
               <span class="type-body-small muted dur">{{ formatDuration(r.duration) }} · {{ r.sample_rate / 1000 }} kHz</span>
               <Badge v-if="r.primary" :value="t('voices.primary')" tone="primary" />
               <IconButton v-else :icon="icons.CircleDot" :label="t('voices.makePrimary')" @click="actions.updateReference.mutate({ id, sha: r.sha256, patch: { primary: true } }, { onError })" />
@@ -238,12 +240,14 @@ function useInSpeak() {
 <script lang="ts">
 import { defineComponent, h } from 'vue';
 
-/** A reference clip's waveform, from the server's peaks. */
+/** A reference clip's waveform, from the server's peaks; clicking or dragging it seeks. */
 const RefWave = defineComponent({
-  props: { voiceId: { type: String, required: true }, sha: { type: String, required: true }, progress: { type: Number, default: 0 } },
-  setup(p) {
+  props: { voiceId: { type: String, required: true }, sha: { type: String, required: true }, progress: { type: Number, default: 0 }, label: { type: String, default: '' } },
+  emits: { seek: (fraction: number) => typeof fraction === 'number' },
+  setup(p, { emit }) {
     const peaks = usePeaks(() => ({ kind: 'reference', id: `${p.voiceId}/${p.sha}` }), 400);
-    return () => h('div', { class: 'wave' }, [h(Waveform, { peaks: peaks.data.value?.data ?? null, progress: p.progress, height: 36 })]);
+    return () =>
+      h('div', { class: 'wave' }, [h(Waveform, { peaks: peaks.data.value?.data ?? null, progress: p.progress, height: 36, label: p.label, onSeek: (f: number) => emit('seek', f) })]);
   },
 });
 </script>

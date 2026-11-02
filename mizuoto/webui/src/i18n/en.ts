@@ -426,6 +426,7 @@ export default {
     addClip: 'Add a clip',
     retranscribe: 'Transcribe again',
     transcriptSaved: 'Transcript saved',
+    seekReference: 'Reference clip position',
     details: 'Details',
     tags: 'Tags',
     compatibility: 'Which models can use it',
