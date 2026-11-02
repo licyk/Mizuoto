@@ -10,8 +10,9 @@ GPU when a torch release changes how failed captures end (the fallback tests, ``
 import subprocess
 import sys
 
-WAYS = ["none", "reset", "synchronize", "end-if-capturing", "end-if-capturing+reset+synchronize", "take-pending-error"]
-"""``take-pending-error``: Mizuoto's cleanup (``mizuoto.runtime.graphs.take_pending_error``), what ``Graphs.capture`` does."""
+WAYS = ["none", "reset", "synchronize", "end-if-capturing", "end-if-capturing+reset+synchronize", "take-pending-error", "which-operation"]
+"""``take-pending-error``: Mizuoto's cleanup (``mizuoto.runtime.graphs.take_pending_error``), what ``Graphs.capture`` does.
+``which-operation``: no cleanup; the first eager work done one operation at a time, to see which reports the error."""
 
 CHILD = r"""
 import sys, torch
@@ -63,6 +64,20 @@ if "synchronize" in way:
         cleanup.append("synchronized")
     except Exception as e:
         cleanup.append(f"synchronize failed: {type(e).__name__}: {str(e).splitlines()[0]}")
+if way == "which-operation":
+    steps = [
+        ("allocate", lambda: torch.empty(1 << 20, device=device)),
+        ("kernel", lambda: torch.empty(16, device=device).fill_(1)),
+        ("host copy", lambda: torch.tensor([1], device=device)),
+        ("read back", lambda: torch.ones(1, device=device).item()),
+        ("synchronize", lambda: torch.cuda.synchronize(device)),
+    ]
+    for name, step in steps:
+        try:
+            step()
+            cleanup.append(f"{name}: ok")
+        except Exception as e:
+            cleanup.append(f"{name}: {type(e).__name__}")
 results = []
 for attempt in range(3):
     try:

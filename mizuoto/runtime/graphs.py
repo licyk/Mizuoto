@@ -41,16 +41,20 @@ def usable(device: torch.device | str, enabled: bool = True) -> bool:
     return torch.cuda.get_allocator_backend() != "cudaMallocAsync"
 
 
-def take_pending_error(device: torch.device | str) -> None:
-    """Launch one kernel on ``device`` and drop the error it reports. A failed capture can leave its error pending in the
-    CUDA runtime after the capture has ended (torch 2.15, CUDA 13.2, RTX 4060: ``cudaErrorStreamCaptureInvalidated``),
-    and the thread's next kernel launch reports it, once: without this, the caller's eager fallback failed at its first
-    kernel (``scripts/graph_failure_probe.py``)."""
-    try:
-        with torch.cuda.device(device):
-            torch.empty(1, device=device).zero_()
-    except Exception as e:  # the pending error, reported here instead of by the fallback
-        log.debug("cleared a CUDA error left by a failed capture: %s", str(e).splitlines()[0] if str(e) else type(e).__name__)
+def take_pending_error(device: torch.device | str, tries: int = 3) -> None:
+    """Run a little eager work on ``device`` (an allocation, a copy from the host, a kernel, a read back) until it runs,
+    dropping what it reports. A failed capture can leave its error pending after the capture has ended (torch 2.15,
+    CUDA 13.2, RTX 4060: ``cudaErrorStreamCaptureInvalidated``): the thread's next such work reports it, once, and a
+    kernel launch alone does not. Without this the caller's eager fallback failed at its first operation
+    (``scripts/graph_failure_probe.py``)."""
+    for _ in range(tries):
+        try:
+            with torch.cuda.device(device):
+                (torch.arange(8, device=device) + torch.tensor([1], device=device)).sum().item()
+            return
+        except Exception as e:  # the pending error, reported here instead of by the fallback
+            log.debug("a failed capture left a CUDA error: %s", str(e).splitlines()[0] if str(e) else type(e).__name__)
+    log.warning("CUDA work on %s still fails after a failed graph capture", device)
 
 
 def signature(modules: Sequence[torch.nn.Module]) -> tuple[int, ...]:
