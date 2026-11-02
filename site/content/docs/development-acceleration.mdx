@@ -184,6 +184,7 @@ GPU 上的自回归模型每一步要启动几千个小内核（Qwen3-TTS：每 
   - `capture(fn, state, pool)` 先运行一次 `fn`（惰性初始化），恢复它改动的张量（`state`）和生成器，然后捕获。它自己调用 `capture_begin`/`capture_end`：`torch.cuda.graph` 的 `gc.collect()` 和 `empty_cache()` 每次捕获要花几十毫秒，而一个 24 层的步骤要捕获 25 次。
   - 捕获之后，当前流等待捕获流：开始捕获时会在捕获流上重置生成器的 seed 和 offset 张量，第一次重放若抢在这些内核之前，就会从 offset 0 抽取随机数。
   - 捕获失败时换上一个状态相同的新生成器（中止的捕获会让旧生成器无法再用），调用方改为即时执行；只记录一次日志。
+  - 捕获失败后，即使捕获已经结束，它的错误也可能还挂在 CUDA 运行时里（torch 2.15、CUDA 13.2），由该线程的下一个核函数报告一次：`take_pending_error` 先启动一个核函数并丢弃这次报告，让即时执行的回退干净地开始（`scripts/graph_failure_probe.py` 可检查某个 torch 版本需要哪种清理）。
   - `drawing(generator)` 把请求的生成器状态装进图自己的生成器，结束后写回，所以带种子的请求抽到的随机数与即时执行相同。
 - **`LayerSteps`**：把一个层栈的单 token 步骤按两次注意力调用之间的每一段捕获为一个图，由每层的 `before`、`attend`、`after` 给出。注意力在图之间即时执行，作用于每步变长的键上，所以缓存和注意力内核都与即时执行相同；归一化、投影、旋转位置编码和 MLP 被重放。
 - **`DecoderSteps`**：用于 `QwenDecoder` 的 `LayerSteps`。

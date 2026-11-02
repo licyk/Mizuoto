@@ -10,7 +10,8 @@ GPU when a torch release changes how failed captures end (the fallback tests, ``
 import subprocess
 import sys
 
-WAYS = ["none", "reset", "synchronize", "end-if-capturing", "end-if-capturing+reset+synchronize"]
+WAYS = ["none", "reset", "synchronize", "end-if-capturing", "end-if-capturing+reset+synchronize", "take-pending-error"]
+"""``take-pending-error``: Mizuoto's cleanup (``mizuoto.runtime.graphs.take_pending_error``), what ``Graphs.capture`` does."""
 
 CHILD = r"""
 import sys, torch
@@ -51,6 +52,11 @@ if "reset" in way:
         cleanup.append("reset")
     except Exception as e:
         cleanup.append(f"reset failed: {type(e).__name__}")
+if way == "take-pending-error":
+    from mizuoto.runtime.graphs import take_pending_error
+
+    take_pending_error(device)
+    cleanup.append("took the pending error")
 if "synchronize" in way:
     try:
         torch.cuda.synchronize(device)

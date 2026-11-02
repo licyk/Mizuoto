@@ -41,6 +41,18 @@ def usable(device: torch.device | str, enabled: bool = True) -> bool:
     return torch.cuda.get_allocator_backend() != "cudaMallocAsync"
 
 
+def take_pending_error(device: torch.device | str) -> None:
+    """Launch one kernel on ``device`` and drop the error it reports. A failed capture can leave its error pending in the
+    CUDA runtime after the capture has ended (torch 2.15, CUDA 13.2, RTX 4060: ``cudaErrorStreamCaptureInvalidated``),
+    and the thread's next kernel launch reports it, once: without this, the caller's eager fallback failed at its first
+    kernel (``scripts/graph_failure_probe.py``)."""
+    try:
+        with torch.cuda.device(device):
+            torch.empty(1, device=device).zero_()
+    except Exception as e:  # the pending error, reported here instead of by the fallback
+        log.debug("cleared a CUDA error left by a failed capture: %s", str(e).splitlines()[0] if str(e) else type(e).__name__)
+
+
 def signature(modules: Sequence[torch.nn.Module]) -> tuple[int, ...]:
     """Where the modules' weights are: graphs captured over them are valid while this stays the same."""
     return tuple(t.data_ptr() for m in modules for t in (*m.parameters(), *m.buffers()))
@@ -102,6 +114,7 @@ class Graphs:
             # capture stream; the first replay (on the current stream) must not overtake them, or it draws from offset 0.
             current.wait_stream(self.stream)
         except BaseException:
+            take_pending_error(self.device)
             # An aborted capture leaves the generator expecting one (every later draw raises): callers falling back to
             # eager steps draw from a fresh generator in the same state (``generator`` after the call).
             fresh = torch.Generator(device=self.device)
