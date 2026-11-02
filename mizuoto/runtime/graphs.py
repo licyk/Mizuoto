@@ -44,9 +44,9 @@ def usable(device: torch.device | str, enabled: bool = True) -> bool:
 def take_pending_error(device: torch.device | str, tries: int = 3) -> None:
     """Run a little eager work on ``device`` (an allocation, a copy from the host, a kernel, a read back) until it runs,
     dropping what it reports. A failed capture can leave its error pending after the capture has ended (torch 2.15,
-    CUDA 13.2, RTX 4060: ``cudaErrorStreamCaptureInvalidated``): the thread's next such work reports it, once, and a
-    kernel launch alone does not. Without this the caller's eager fallback failed at its first operation
-    (``scripts/graph_failure_probe.py``)."""
+    CUDA 13.2, RTX 4060: ``cudaErrorStreamCaptureInvalidated``), and the check after the thread's next kernel launch
+    reports it, once: allocating, copying, reading back and synchronizing do not, nor did a ``zero_()``. Without this
+    the caller's eager fallback failed at its first kernel (``scripts/graph_failure_probe.py``, way ``which-operation``)."""
     for _ in range(tries):
         try:
             with torch.cuda.device(device):
