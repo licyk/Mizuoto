@@ -84,7 +84,8 @@ Fish Audio S2 Pro 与 Drama 3（[fishaudio/fish-speech](https://github.com/fisha
 | `drama3/backbone.py` | Qwen3.5-MoE 的混合文本模型（40 层，每第四层为 softmax 注意力）及其 `lm_head`；加载逐专家的 FP8 张量 |
 | `drama3/tower.py` | 码本塔：4 个共享层和 9 个残差层，在帧序列上做注意力，每个残差层的输出头抽取下一个编码；两种采样器 |
 | `drama3/prompt.py` | 提示（一段对话：带 `[Reference i]` 块的系统轮、作为已完成轮次的前面片段、未结束的语音轮），文本检查，长文本切分及其历史 |
-| `drama3/generate.py` | 以 128 行为一块的预填充（同时以教师强制填充码本塔的缓存），解码循环，一段接一段 |
+| `drama3/generate.py` | 以 128 行为一块的预填充（同时以教师强制填充码本塔的缓存），解码循环（`Decoder`），一段接一段 |
+| `drama3/steps.py` | 解码步骤以围绕注意力调用的 CUDA 图运行（`Stretches`），及其固定张量 |
 | `drama3/engine.py` | `LoadedDrama3`：S2 的编解码器、参考音频处理与操作（继承 `LoadedFishSpeech`），加上主干和码本塔 |
 
 一帧是十个编码：主干根据已有的帧预测该帧的主 token（轮次结束，或一个语义 token，它在区间中的位置就是编码 0），提示中每一行的嵌入是其 token 的嵌入，音频行再加上它的编码 1（乘以 1/√2）。然后码本塔接过主干的隐藏状态，逐个抽取编码 1–9，每个编码一个残差层；第一个共享层还会看到上一帧的编码 2–9。文本按约 300 个 UTF-8 字节、每段最多三个说话人切分（先按句末，再按分句标点，再按空格；不会切开标签或方括号），每段生成时都把第一段和最近一段作为历史放进提示；`single_chunk` 一次生成全文。
@@ -100,6 +101,16 @@ Fish Audio S2 Pro 与 Drama 3（[fishaudio/fish-speech](https://github.com/fisha
 - **上游的限制**：提示最多 8192 行，总共最多 10 240 行（上游 CUDA 图的容量；每段的帧数被截到剩余的行数），默认值与 Fish Audio SDK 相同（temperature 0.7、top-p 0.7、top-k 30、每段 1024 帧；`max_new_tokens = 0` 时为 600，`single_chunk` 时为 2048）。
 - **编解码器**：S2 的编解码器，权重归一化在转换到模型精度之前先在 float32 中折叠一次（上游为 Drama 3 加载编解码器的 `load_codec_model`），在该精度的 autocast 下解码；参考音频也用它编码。
 
+### CUDA 图
+
+开启 `compute.cuda_graphs`（NVIDIA GPU 且能完整容纳主干和码本塔：bfloat16 下约 44 GB）时，解码步骤以重放即时执行核函数的 CUDA 图运行（`drama3/steps.py`、`generate.Decoder`）。一步先是码本塔的图（输出头、该帧的抽样，13 层中每两次注意力调用之间一个图），再是主干对这一帧的图（10 个 softmax 注意力层中每两层之间一个图，其间的 Gated DeltaNet 层、路由和专家都在图内）。注意力调用在图与图之间即时执行，读取每步增长一行的缓存，所以缓存和注意力核函数都与即时执行的代码相同。每步只等待设备一次，读取该帧的主 token 以及 logits 是否有限。
+
+- **固定张量**随已加载的模型保留：步骤的输入与输出（最后的隐藏状态、位置、上一帧、最近 16 个主 token（不足时以 −1 填充）、该帧及其标志），以及 Gated DeltaNet 层的状态：图会原地更新它们，每个请求从零开始。注意力层的缓存仍然属于各个请求。
+- **采样设置按即时执行的代码传入的方式捕获**，即 Python 数值：CUDA 除以一个数时按乘以其倒数计算，除以设备张量时按真正的除法计算，改用张量会改变结果位。请求的 temperature、top-p、top-k、采样器或截断不同时，码本塔的图（14 次捕获）会重新捕获；主干的图保留。
+- **上游自己的图没有移植**：它们为几个缓存长度（1024、2048、4096、10 240）捕获整步，在填充并加掩码的缓存上计算注意力，采样设置为设备张量，与上游自己的即时解码相比结果位不同。
+- **流式加载专家时即时解码**：GPU 放不下整个模型时专家按行流式加载，而一步要复制哪些行要从设备读出，图无法等待它。
+- 在 CPU 上按 `Graphs` 的约定检查（每段先预热、再捕获，并恢复其状态，然后重放）：两种采样器、多段文本、后续请求以及改变设置时都得到即时执行的音频（`test_the_step_as_graph_stretches_decodes_exactly_as_eagerly`）。在 NVIDIA GPU 上，`test_cuda_graphs_decode_exactly_as_eagerly_on_a_gpu`（bfloat16 和 float16）与 `test_a_failed_capture_falls_back_to_the_same_audio_on_a_gpu` 在小模型上比较图与即时解码；没有 GPU 时跳过。
+
 ### 有意的差异
 
 - **设备与精度。** 上游只在 NVIDIA GPU 上以 bfloat16 运行 Drama 3（SM80 之前用 float16，残差流为 float32）；它的入口拒绝 CPU 和 float32。移植版在所有设备上运行，在 CPU 上用 float32（与 S2 Pro 相同）：对照的基准是上游的模块原样在 CPU 上以 float32 运行的结果。
@@ -108,7 +119,7 @@ Fish Audio S2 Pro 与 Drama 3（[fishaudio/fish-speech](https://github.com/fisha
 - **非有限的 logits** 与上游一样会被拒绝，但每帧只检查一次（在该帧唯一一次等待设备时），而不是每次抽取前检查。
 - **音频是各段音频直接拼接**，不裁剪，与上游相同；S2 Pro 的引擎会裁剪每一批。该变体声明了 `long_text`，所以 Mizuoto 把整段文本交给引擎，上游的切分与历史都会生效（如果由 Mizuoto 切成单独的请求，历史就无法跨越它们）。
 - **Mizuoto 对所有引擎都会做的预处理**在这里同样适用：文本和每段参考文本会去掉首尾空白；参考音频在音色库中存为单声道 16 位 WAV（浮点、24 位或立体声的音频会被转换，因此其编码可能与上游直接读取原文件时不同）；超过 30 秒的参考音频按 `tts.reference_policy` 截短；种子不能为负（上游取绝对值）。
-- **没有移植的**：上游为 Drama 3 写的 CUDA 图（Mizuoto 的会重放相同的核函数；尚未为这个变体编写），它的微调（上游在加入 Drama 3 时删除了训练代码，所以 LoRA 方法只适用于 S2 Pro），以及跨轮次的“导演式修改”（不在开源代码中）。
+- **没有移植的**：上游为 Drama 3 写的 CUDA 图（它们会改变结果位；Mizuoto 的图重放即时执行的核函数，见 [CUDA 图](#cuda-图)），它的微调（上游在加入 Drama 3 时删除了训练代码，所以 LoRA 方法只适用于 S2 Pro），以及跨轮次的“导演式修改”（不在开源代码中）。
 
 ### 显存与速度
 

@@ -48,9 +48,15 @@ class DecoderLayer(nn.Module):
 
     def forward(self, x: torch.Tensor, context: LayerContext, state: Any) -> torch.Tensor:
         """``x`` is the residual stream, possibly wider than the compute dtype."""
-        compute_dtype = self.input_layernorm.weight.dtype
-        x = x + self.mixer(self.input_layernorm(x).to(compute_dtype), context, state)
-        return x + self.mlp(self.post_attention_layernorm(x).to(compute_dtype))
+        return self.finish(x, self.mixer(self.mixer_input(x), context, state))
+
+    def mixer_input(self, x: torch.Tensor) -> torch.Tensor:
+        return self.input_layernorm(x).to(self.input_layernorm.weight.dtype)
+
+    def finish(self, x: torch.Tensor, mixed: torch.Tensor) -> torch.Tensor:
+        """The residual stream after the mixer's output ``mixed``: through the experts."""
+        x = x + mixed
+        return x + self.mlp(self.post_attention_layernorm(x).to(self.input_layernorm.weight.dtype))
 
 
 class TextModel(nn.Module):
@@ -100,16 +106,22 @@ class Backbone(nn.Module):
         length = hidden.shape[1]
         start = int(input_pos[0])
         end = start + length
-        rotary_dim = self.config.rotary_dim
-        device = hidden.device
-        exponents = torch.arange(0, rotary_dim, 2, dtype=torch.float32, device=device)
-        frequencies = 1.0 / (self.config.rope_theta ** (exponents / rotary_dim))
-        positions = input_pos.to(device)
-        angles = positions.float()[:, None] * frequencies[None, :]
-        angles = torch.cat((angles, angles), dim=-1)
-        context = LayerContext(input_pos=positions, cos=angles.cos(), sin=angles.sin(), kv_len=end, continue_state=start > 0)
+        context = self.context(input_pos.to(hidden.device), end, start > 0)
         for layer, state in zip(self.model.layers, states, strict=True):
             hidden = layer(hidden, context, state)
+        return self.output(hidden)
+
+    def context(self, positions: torch.Tensor, kv_len: int, continue_state: bool) -> LayerContext:
+        """What every layer is given for rows at ``positions`` (on the rows' device): their rotary angles."""
+        rotary_dim = self.config.rotary_dim
+        exponents = torch.arange(0, rotary_dim, 2, dtype=torch.float32, device=positions.device)
+        frequencies = 1.0 / (self.config.rope_theta ** (exponents / rotary_dim))
+        angles = positions.float()[:, None] * frequencies[None, :]
+        angles = torch.cat((angles, angles), dim=-1)
+        return LayerContext(input_pos=positions, cos=angles.cos(), sin=angles.sin(), kv_len=kv_len, continue_state=continue_state)
+
+    def output(self, hidden: torch.Tensor) -> torch.Tensor:
+        """The final norm of the residual stream, in the model's dtype."""
         return self.model.norm(hidden).to(self.dtype)
 
     def compute_logits(self, hidden: torch.Tensor) -> torch.Tensor:

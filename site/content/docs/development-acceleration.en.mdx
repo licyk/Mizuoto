@@ -193,6 +193,7 @@ An autoregressive model on a GPU launches thousands of small kernels per step (Q
 | --- | --- | --- |
 | Qwen3-TTS (`qwen3tts/decode.py`) | ~35 a frame → 1 | sampling and the code predictor's 15 steps one graph each; the talker's step per stretch between attention calls (`DecoderSteps`) |
 | Fish Speech (`mizuoto_fishspeech/generate.py`) | ~22 a frame → 1 | the slow step around its attention (`LayerSteps`); the draws and the fast transformer one graph; kept per loaded model |
+| Fish Speech Drama 3 (`mizuoto_fishspeech/drama3/steps.py`) | 1 a frame (eager already) | the tower around its 13 layers' attention, then the backbone around its 10 softmax attention layers (`Stretches`); the tower's again per sampling settings; not when the experts stream |
 | CosyVoice 2/3 (`cosyvoice/llm.py`) | 50–80 a token → 1 | the one-token steps (`DecoderSteps`) and the draw, a graph per EOS mask; upstream's nucleus loop replayed on the device (`nucleus_device`) |
 | VoxCPM (`voxcpm/model.py`) | 3 a patch → 1 | a whole patch per attention span and setting (`PatchDecoder`); the static caches kept with the model |
 | GPT-SoVITS (`gptsovits/t2s.py`) | 2 a step → 1 | the T2S's one-token steps around each layer's attention, a set per number of rows; sampling eager |

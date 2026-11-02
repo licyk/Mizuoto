@@ -12,6 +12,7 @@ what is left after the prompt; that limit stays, so a request gives the same fra
 
 from __future__ import annotations
 
+import contextlib
 import logging
 from collections.abc import Callable, Iterator, Sequence
 from dataclasses import dataclass
@@ -23,8 +24,10 @@ from mizuoto_fishspeech.drama3.prompt import CHUNK_MAX_NEW_TOKENS, DEFAULT_MAX_N
 from mizuoto_fishspeech.drama3.tower import REFERENCE_EPSILON_CUTOFF, Fallback
 
 if TYPE_CHECKING:
+    from mizuoto.runtime.graphs import Graphs
     from mizuoto_fishspeech.drama3.backbone import Backbone
     from mizuoto_fishspeech.drama3.config import Drama3Config
+    from mizuoto_fishspeech.drama3.steps import Fixed, Stretches
     from mizuoto_fishspeech.drama3.tower import CodebookTower
 
 log = logging.getLogger(__name__)
@@ -90,53 +93,186 @@ def generate(
     progress: Callable[[int, int], None] | None = None,
 ) -> tuple[torch.Tensor, str]:
     """The frames after ``prompt`` (CPU [frames, 1 + codebooks], without the end) and why it stopped (``eos`` or
-    ``length``)."""
-    device = backbone.model.norm.weight.device
-    prompt_rows = len(prompt)
-    capacity = prompt_rows + max_new_tokens
-    if max_new_tokens < 1 or capacity > config.text.max_position_embeddings:
-        raise PromptError(f"max_new_tokens={max_new_tokens} does not fit after {prompt_rows} prompt rows")
-    states = backbone.new_states(capacity, device)
-    tower_state = tower.new_state(capacity, device)
-    frames = torch.zeros((capacity, prompt.shape[1]), dtype=torch.long, device=device)
-    frames[:prompt_rows] = prompt.to(device)
-    positions = torch.arange(capacity, device=device)
+    ``length``), decoded eagerly."""
+    return Decoder(backbone, tower, config).generate(prompt, max_new_tokens, sampling, generator, check, progress)
 
-    hidden = None
-    for start in range(0, prompt_rows, PREFILL_BLOCK):
-        check()
-        end = min(start + PREFILL_BLOCK, prompt_rows)
-        chunk = frames[start:end]
-        embeddings = tower.embed_backbone(chunk, backbone.embed(chunk[:, 0]))
-        hidden = backbone(embeddings[None], positions[start:end], states)[0]
-        paired_end = min(end, prompt_rows - 1)
-        if paired_end > start:
-            tower.prefill(hidden[: paired_end - start], positions[start:paired_end], frames[start:paired_end], frames[start + 1 : paired_end + 1], tower_state)
-    assert hidden is not None
-    hidden = hidden[-1:]
 
-    produced, finish = 0, "length"
-    for step in range(max_new_tokens):
-        check()
-        if progress is not None:
-            progress(step, max_new_tokens)
-        position = prompt_rows - 1 + step
-        logits = backbone.compute_logits(hidden)
-        sampled, finite = tower.decode_step(
-            logits, hidden, positions[position : position + 1], frames[position : position + 1], frames[: position + 1, 0], tower_state, sampling, generator
-        )
-        main, ok = (int(x) for x in torch.stack((sampled[0, 0], finite.long())).tolist())  # the step's one wait
-        if not ok:
-            raise NonFiniteLogits("non-finite logits; refusing to sample invalid audio")
-        if main == config.eos_token_id:
-            finish = "eos"
-            break
-        frames[position + 1] = sampled[0]
-        produced += 1
-        if step + 1 < max_new_tokens:
-            embeddings = tower.embed_backbone(sampled, backbone.embed(sampled[:, 0]))
-            hidden = backbone(embeddings[None], positions[position + 1 : position + 2], states)[0]
-    return frames[prompt_rows : prompt_rows + produced].cpu(), finish
+class Decoder:
+    """Decodes frames for one loaded model, request after request: eagerly, or on an NVIDIA GPU with CUDA graphs
+    (``compute.cuda_graphs``; ``drama3.steps``), which replay the eager kernels: the same frames.
+
+    The prompt runs eagerly. With graphs, each step is the tower's graphs (the frame after ``hidden``), then, if the
+    turn goes on, the backbone's (``hidden`` for the next step), with one wait for the device per step. They are
+    captured after the first prompt (the tower's again when a request's sampling settings differ) and dropped with
+    the graphs (the weights moved). A capture that fails makes this decoder eager from then on.
+    """
+
+    def __init__(self, backbone: Backbone, tower: CodebookTower, config: Drama3Config, graphs: Callable[[], Graphs | None] | None = None) -> None:
+        self.backbone, self.tower, self.config = backbone, tower, config
+        self._graphs_for = graphs or (lambda: None)
+        self._graphs: Graphs | None = None
+        self._fixed: Fixed | None = None
+        self._backbone_steps: Stretches | None = None
+        self._tower_steps: Stretches | None = None
+        self._tower_key: tuple | None = None
+        self.failed = False
+        """A capture failed: this decoder runs eagerly from then on."""
+        self.graphed = False
+        """A chunk was decoded with graphs (the engine clears it per request)."""
+
+    def generate(
+        self,
+        prompt: torch.Tensor,
+        max_new_tokens: int,
+        sampling: Sampling,
+        generator: torch.Generator,
+        check: Callable[[], None] = lambda: None,
+        progress: Callable[[int, int], None] | None = None,
+    ) -> tuple[torch.Tensor, str]:
+        """The frames after ``prompt`` (CPU [frames, 1 + codebooks], without the end) and why it stopped (``eos`` or
+        ``length``)."""
+        graphs = None if self.failed else self._graphs_for()
+        if graphs is not self._graphs:  # none, or new ones (the weights moved): capture again
+            self._graphs, self._fixed, self._backbone_steps, self._tower_steps, self._tower_key = graphs, None, None, None, None
+        if graphs is None:
+            return self._generate(prompt, max_new_tokens, sampling, generator, check, progress, None)
+        device = torch.cuda.device(graphs.device) if graphs.device.type == "cuda" else contextlib.nullcontext()
+        with device, graphs.drawing(generator):
+            return self._generate(prompt, max_new_tokens, sampling, generator, check, progress, graphs)
+
+    def _generate(
+        self,
+        prompt: torch.Tensor,
+        max_new_tokens: int,
+        sampling: Sampling,
+        generator: torch.Generator,
+        check: Callable[[], None],
+        progress: Callable[[int, int], None] | None,
+        graphs: Graphs | None,
+    ) -> tuple[torch.Tensor, str]:
+        backbone, tower, config = self.backbone, self.tower, self.config
+        device = backbone.model.norm.weight.device
+        prompt_rows = len(prompt)
+        capacity = prompt_rows + max_new_tokens
+        if max_new_tokens < 1 or capacity > config.text.max_position_embeddings:
+            raise PromptError(f"max_new_tokens={max_new_tokens} does not fit after {prompt_rows} prompt rows")
+        states = backbone.new_states(capacity, device)
+        fixed = None
+        if graphs is not None:
+            from mizuoto_fishspeech.drama3.steps import Fixed
+
+            if self._fixed is None:
+                self._fixed = Fixed.make(backbone, tower, device)
+            fixed = self._fixed
+            for i, state in fixed.delta.items():  # the graphs' own, as new ones
+                state.conv.zero_()
+                state.recurrent.zero_()
+                states[i] = state
+        tower_state = tower.new_state(capacity, device)
+        frames = torch.zeros((capacity, prompt.shape[1]), dtype=torch.long, device=device)
+        frames[:prompt_rows] = prompt.to(device)
+        positions = torch.arange(capacity, device=device)
+
+        hidden = None
+        for start in range(0, prompt_rows, PREFILL_BLOCK):
+            check()
+            end = min(start + PREFILL_BLOCK, prompt_rows)
+            chunk = frames[start:end]
+            embeddings = tower.embed_backbone(chunk, backbone.embed(chunk[:, 0]))
+            hidden = backbone(embeddings[None], positions[start:end], states)[0]
+            paired_end = min(end, prompt_rows - 1)
+            if paired_end > start:
+                tower.prefill(hidden[: paired_end - start], positions[start:paired_end], frames[start:paired_end], frames[start + 1 : paired_end + 1], tower_state)
+        assert hidden is not None
+        hidden = hidden[-1:]
+
+        if graphs is not None and fixed is not None:
+            fixed.start(hidden, frames, prompt_rows)
+            if self._capture(graphs, fixed, sampling):
+                self.graphed = True
+                return self._decode_graphed(fixed, frames, prompt_rows, max_new_tokens, states, tower_state, check, progress)
+            generator = graphs.generator  # a fresh one, in the request's state, after a failed capture
+
+        produced, finish = 0, "length"
+        for step in range(max_new_tokens):
+            check()
+            if progress is not None:
+                progress(step, max_new_tokens)
+            position = prompt_rows - 1 + step
+            logits = backbone.compute_logits(hidden)
+            sampled, finite = tower.decode_step(
+                logits, hidden, positions[position : position + 1], frames[position : position + 1], frames[: position + 1, 0], tower_state, sampling, generator
+            )
+            main, ok = (int(x) for x in torch.stack((sampled[0, 0], finite.long())).tolist())  # the step's one wait
+            if not ok:
+                raise NonFiniteLogits("non-finite logits; refusing to sample invalid audio")
+            if main == config.eos_token_id:
+                finish = "eos"
+                break
+            frames[position + 1] = sampled[0]
+            produced += 1
+            if step + 1 < max_new_tokens:
+                embeddings = tower.embed_backbone(sampled, backbone.embed(sampled[:, 0]))
+                hidden = backbone(embeddings[None], positions[position + 1 : position + 2], states)[0]
+        return frames[prompt_rows : prompt_rows + produced].cpu(), finish
+
+    def _decode_graphed(
+        self,
+        fixed: Fixed,
+        frames: torch.Tensor,
+        prompt_rows: int,
+        max_new_tokens: int,
+        states: list[Any],
+        tower_state: Any,
+        check: Callable[[], None],
+        progress: Callable[[int, int], None] | None,
+    ) -> tuple[torch.Tensor, str]:
+        """The eager loop's steps on the graphs: the backbone's step for the frame before (none for the first), then the
+        tower's for this one; the frame and its flags are in ``fixed``."""
+        assert self._backbone_steps is not None and self._tower_steps is not None
+        produced, finish = 0, "length"
+        for step in range(max_new_tokens):
+            check()
+            if progress is not None:
+                progress(step, max_new_tokens)
+            position = prompt_rows - 1 + step
+            if step:
+                self._backbone_steps(states, position + 1)
+            self._tower_steps(tower_state, position + 1)
+            main, ok = fixed.flags.tolist()  # the step's one wait
+            if not ok:
+                raise NonFiniteLogits("non-finite logits; refusing to sample invalid audio")
+            if main == self.config.eos_token_id:
+                finish = "eos"
+                break
+            frames[position + 1] = fixed.frame[0]
+            produced += 1
+        return frames[prompt_rows : prompt_rows + produced].cpu(), finish
+
+    def _capture(self, graphs: Graphs, fixed: Fixed, sampling: Sampling) -> bool:
+        """The backbone's and the tower's graphs, captured where missing; False (and eager from then on) when they
+        cannot be (an out-of-memory error is raised: the request runs again with less of the model on the device)."""
+        from mizuoto.runtime.device import is_oom
+        from mizuoto_fishspeech.drama3.steps import backbone_steps, graphable, sampling_key, tower_steps
+
+        if not graphable(self.backbone, self.tower):
+            self.failed = True
+            return False
+        key = sampling_key(sampling)
+        try:
+            if self._backbone_steps is None:
+                self._backbone_steps = backbone_steps(graphs, self.backbone, self.tower, fixed)
+            if self._tower_steps is None or self._tower_key != key:
+                self._tower_steps = None  # the old ones' memory first
+                self._tower_steps, self._tower_key = tower_steps(graphs, self.backbone, self.tower, fixed, sampling), key
+        except Exception as e:  # any failure to capture means decoding eagerly (the same computation)
+            if is_oom(e):
+                raise
+            log.warning("Drama 3: CUDA graphs failed (%s: %s); decoding eagerly", type(e).__name__, e)
+            self.failed = True
+            self._backbone_steps = self._tower_steps = None
+            return False
+        return True
 
 
 def chunks_of(text: str, single_chunk: bool) -> list[str]:
@@ -157,9 +293,11 @@ def generate_long(
     check: Callable[[], None] = lambda: None,
     progress: Callable[[int, int, int, int], None] | None = None,
     around: Callable[[Callable[[], Any]], Any] | None = None,
+    decoder: Decoder | None = None,
 ) -> Iterator[tuple[str, torch.Tensor]]:
     """Each chunk's text and codes [codebooks, frames], chunk after chunk (a chunk that ended before any frame yields
-    nothing). ``around(run)``: runs each chunk's generation (the engine places the models there)."""
+    nothing). ``around(run)``: runs each chunk's generation (the engine places the models there). ``decoder``: the
+    loaded model's (kept with its graphs), else a new eager one."""
     sampling = sampling.resolved()
     prompt_texts = list(prompt_texts)
     prompt_codes = [codes.cpu() for codes in prompt_codes]
@@ -173,6 +311,8 @@ def generate_long(
     if requested <= 0:
         requested = DEFAULT_MAX_NEW_TOKENS if single_chunk else CHUNK_MAX_NEW_TOKENS
     history = History()
+    if decoder is None:
+        decoder = Decoder(backbone, tower, config)
     for index, chunk in enumerate(chunks):
         prompt = chunk_prompt(chunk, tokenizer, config, prompt_texts, prompt_codes, history)
         limit = capacity - len(prompt)
@@ -182,7 +322,7 @@ def generate_long(
         report = (lambda done, total, index=index: progress(index, len(chunks), done, total)) if progress is not None else None
 
         def run(prompt: torch.Tensor = prompt, budget: int = budget, report: Any = report) -> tuple[torch.Tensor, str]:
-            return generate(backbone, tower, config, prompt, budget, sampling, generator, check, report)
+            return decoder.generate(prompt, budget, sampling, generator, check, report)
 
         frames, finish = around(run) if around is not None else run()
         if finish != "eos":

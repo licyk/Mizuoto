@@ -36,7 +36,7 @@ class LoadedDrama3(LoadedFishSpeech):
 
     PHASED = True
 
-    def __init__(self, spec: LoadSpec, ctx: RequestContext) -> None:
+    def __init__(self, spec: LoadSpec, ctx: RequestContext, cuda_graphs: bool = True) -> None:
         import torch
 
         from mizuoto.nn.dsp.resample import Resample
@@ -90,10 +90,10 @@ class LoadedDrama3(LoadedFishSpeech):
         self.h_tower = ModelHandle(tower, name=f"{spec.model_id}:tower", load_device=spec.device, kind="sequence")
         self.h_codec = ModelHandle(codec, name=f"{spec.model_id}:codec", load_device=spec.device)
         self.handles = [self.h_backbone, self.h_tower, self.h_codec]
-        self.cuda_graphs = False
-        self._decoder = None
-        self._graphs = None
-        self._graph_signature = None
+        self.cuda_graphs = cuda_graphs
+        self._decoder: Any = None
+        self._graphs: Any = None
+        self._graph_signature: tuple[int, ...] | None = None
 
     # -- memory -------------------------------------------------------------------------
 
@@ -124,7 +124,7 @@ class LoadedDrama3(LoadedFishSpeech):
         import numpy as np
         import torch
 
-        from mizuoto_fishspeech.drama3.generate import NonFiniteLogits, Sampling, capacity_for, generate_long
+        from mizuoto_fishspeech.drama3.generate import Decoder, NonFiniteLogits, Sampling, capacity_for, generate_long
         from mizuoto_fishspeech.drama3.prompt import PromptError
 
         prompt_codes, prompt_texts = self._reference_codes(task.voice, ctx) if task.voice.references else ([], [])
@@ -158,6 +158,10 @@ class LoadedDrama3(LoadedFishSpeech):
                 ctx.progress("generating", (chunk + done / max(total, 1)) / chunks)
 
         memory = self._generation_memory(capacity_for(self.config))
+        if self._decoder is None:
+            self._decoder = Decoder(self.backbone, self.tower, self.config, self._graphs_now)
+        decoder = self._decoder
+        decoder.graphed = False
         segments = []
         with torch.inference_mode():
             pieces = generate_long(
@@ -174,6 +178,7 @@ class LoadedDrama3(LoadedFishSpeech):
                 ctx.check_cancel,
                 progress,
                 around=lambda run: ctx.run("generating", [self.h_backbone, self.h_tower], run, memory),
+                decoder=decoder,
             )
             try:
                 for _chunk, frames in pieces:
@@ -186,6 +191,8 @@ class LoadedDrama3(LoadedFishSpeech):
                 raise EngineError(str(e), code=codes.INVALID_INPUT) from e
             except NonFiniteLogits as e:
                 raise EngineError(str(e), code=codes.ENGINE_ERROR) from e
+        if decoder.graphed and not decoder.failed:
+            ctx.applied["cuda_graphs"] = True
         ctx.check_cancel()
         if not segments:
             raise EngineError("Drama 3 produced no speech for the text", {"text": task.text[:200]}, code=codes.ENGINE_ERROR)
@@ -195,4 +202,14 @@ class LoadedDrama3(LoadedFishSpeech):
             yield AudioChunk(samples=np.concatenate(segments).astype(np.float32), sample_rate=SAMPLE_RATE, segment=task.segment, final=True)
 
     def _graphs_now(self) -> Any:
-        return None
+        """The backbone's and the tower's CUDA graphs (``compute.cuda_graphs``) while both are wholly on an NVIDIA GPU
+        (streamed experts are copied by the row, which rows learnt from the device: no graphs then): new ones when their
+        weights moved since the last capture, none otherwise."""
+        from mizuoto.runtime.graphs import Graphs, signature, usable
+
+        if not usable(self.device, self.cuda_graphs) or not (self.h_backbone.loaded and self.h_tower.loaded):
+            return None
+        where = signature([self.backbone, self.tower])
+        if where != self._graph_signature:
+            self._graphs, self._graph_signature = Graphs(self.device), where
+        return self._graphs

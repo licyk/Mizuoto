@@ -26,6 +26,7 @@ from safetensors.torch import save_file  # noqa: E402
 from mizuoto.runtime.context import Cancelled, RequestContext  # noqa: E402
 from mizuoto.runtime.device import DeviceService  # noqa: E402
 from mizuoto.runtime.engine import EngineError, LoadSpec, Reference, SynthesisTask, VoiceSpec, get_engine  # noqa: E402
+from mizuoto.runtime.graphs import Graphs  # noqa: E402
 from mizuoto.runtime.manager import ModelManager  # noqa: E402
 from mizuoto.runtime.runtime import Runtime  # noqa: E402
 from mizuoto_fishspeech import engine as engine_module  # noqa: E402
@@ -352,3 +353,133 @@ def test_runs_identically_with_its_weights_placed_by_phase_and_its_experts_strea
     assert all(rows.source(layer.mlp.experts) is None for layer in loaded.backbone.model.layers)  # whole again after
     text = " ".join(f"Sentence number {i} goes on for a while, with commas and clauses." for i in range(4))
     check_streamed(loaded, lambda m: run(m, text=text, stream=True), monkeypatch)
+
+
+# -- CUDA graphs ------------------------------------------------------------------------------------------------------
+
+
+class ReplayedGraphs(Graphs):
+    """``mizuoto.runtime.graphs.Graphs``' contract on the CPU: a capture runs the stretch once to warm up and once more as
+    the capture (which only records), putting back its state and the generator after each; a replay runs it again. The
+    decoder's stretches, calls and fixed tensors are then checked anywhere: a step cut into graphs computes what the
+    eager step computes, draw for draw."""
+
+    def __init__(self) -> None:  # no stream: nothing runs on a GPU
+        self.device = torch.device("cpu")
+        self.generator = torch.Generator()
+        self.captures = 0
+
+    def pool(self):
+        return None
+
+    def capture(self, fn, state=(), pool=None):
+        saved = self.generator.get_state()
+        for _ in range(2):
+            before = [t.clone() for t in state]
+            fn()
+            for t, b in zip(state, before, strict=True):
+                t.copy_(b)
+            self.generator.set_state(saved)
+        self.captures += 1
+        return type("Replayed", (), {"replay": staticmethod(fn)})()
+
+
+def test_the_step_as_graph_stretches_decodes_exactly_as_eagerly(loaded, reference):
+    """The graphed step (``drama3.steps``: the tower's and the backbone's stretches around their attention calls, the
+    fixed tensors, the window of recent main tokens, the Gated DeltaNet states updated in place) gives the eager frames
+    for both samplers, several chunks and requests after the first; the tower's graphs are captured again when the
+    sampling settings change."""
+    from mizuoto_fishspeech.drama3.generate import Decoder
+
+    graphs = ReplayedGraphs()
+    text = " ".join(f"Sentence number {i} goes on for a while, with commas and clauses." for i in range(3))
+    cases = [
+        ({}, {}, "Hello there."),
+        ({}, {}, text),
+        ({"sampler": "reference_ras", "epsilon_cutoff": 0.01}, {"top_k": 0}, "Hello there."),
+        ({"sampler": "reference_argmax"}, {"temperature": 0.9}, "Hello there."),
+        ({}, {}, "Hello there."),
+    ]
+    want = []
+    for options, params, words in cases:
+        (chunk,), _ = speak(loaded, voice_of(reference), seed=4, text=words, params={"max_new_tokens": 24, **params}, **options)
+        want.append(chunk.samples)
+    (unvoiced,), _ = speak(loaded, VoiceSpec(), seed=4, params={"max_new_tokens": 24})
+    try:
+        loaded._decoder = Decoder(loaded.backbone, loaded.tower, loaded.config, lambda: graphs)
+        captures = []
+        for (options, params, words), expected in zip(cases, want, strict=True):
+            (chunk,), ctx = speak(loaded, voice_of(reference), seed=4, text=words, params={"max_new_tokens": 24, **params}, **options)
+            assert ctx.applied["cuda_graphs"] and chunk.samples.shape == expected.shape and (chunk.samples == expected).all()
+            captures.append(graphs.captures)
+        # the backbone's two stretches and the tower's five, once; the tower's again for each change of settings
+        assert captures == [7, 7, 12, 17, 22]
+        (chunk,), _ = speak(loaded, VoiceSpec(), seed=4, params={"max_new_tokens": 24})  # no reference: a short prompt
+        assert chunk.samples.shape == unvoiced.samples.shape and (chunk.samples == unvoiced.samples).all()
+    finally:
+        loaded._decoder = None
+
+
+def _cuda_loaded(model_dir, graphs: bool, dtype: str = "auto"):
+    from mizuoto.runtime.runtime import RuntimeOptions
+
+    devices = DeviceService()
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(engine_module, "codec_config", lambda folder: TINY_CODEC)
+        loaded = get_engine("fishspeech").load(
+            LoadSpec("fishspeech/tiny-drama3", model_dir, "drama3", "cuda", dtype=dtype, options={}),
+            Runtime(devices, ModelManager(devices), RuntimeOptions(cuda_graphs=graphs)),
+            RequestContext("load"),
+        )
+    for h in loaded.handles:
+        h.load()
+    return loaded
+
+
+def _cuda_speak(loaded, reference, seed: int, text: str, **options):
+    ctx = RequestContext("r", seed=seed, device="cuda")
+    params = {"seed": seed, "max_new_tokens": 24, **options.pop("params", {})}
+    task = SynthesisTask(text=text, language="en", voice=voice_of(reference), params=params, options=options)
+    with torch.inference_mode():
+        return [c.samples for c in loaded.synthesize(task, ctx)], ctx.applied.get("cuda_graphs")
+
+
+NVIDIA = pytest.mark.skipif(not torch.cuda.is_available() or torch.version.hip is not None, reason="CUDA graphs need an NVIDIA GPU")
+
+
+@NVIDIA
+@pytest.mark.parametrize("dtype", ["auto", "fp16"])
+def test_cuda_graphs_decode_exactly_as_eagerly_on_a_gpu(model_dir, reference, dtype):
+    """compute.cuda_graphs: the tower's and the backbone's graphs around their attention calls replay the eager kernels:
+    the same audio for fresh loads (the request that captures), later requests, several chunks, both samplers (the
+    tower's graphs captured again) and other seeds."""
+    text = " ".join(f"Sentence number {i} goes on for a while, with commas and clauses." for i in range(3))
+    cases = [
+        (3, "Hello there.", {}),
+        (4, text, {}),
+        (3, "Hello there.", {"sampler": "reference_ras"}),
+        (5, "Hello there.", {"params": {"temperature": 0.9}}),
+        (3, "Hello there.", {}),
+    ]
+    for _ in range(2):
+        eager, graphed = _cuda_loaded(model_dir, False, dtype), _cuda_loaded(model_dir, True, dtype)
+        for seed, words, options in cases:
+            want, used = _cuda_speak(eager, reference, seed, words, **dict(options))
+            assert not used
+            got, used = _cuda_speak(graphed, reference, seed, words, **dict(options))
+            assert used
+            assert len(want) == len(got) and all(a.shape == b.shape and (a == b).all() for a, b in zip(want, got, strict=True))
+
+
+@NVIDIA
+def test_a_failed_capture_falls_back_to_the_same_audio_on_a_gpu(model_dir, reference, monkeypatch, caplog):
+    """A step that cannot be captured (here: one that reads a value back, which a capture forbids) is decoded eagerly,
+    drawing from a fresh generator in the same state: the same audio as without graphs."""
+    from mizuoto_fishspeech.drama3.tower import CodebookTower
+
+    want, _ = _cuda_speak(_cuda_loaded(model_dir, False), reference, 3, "Hello there.")
+    first_code = CodebookTower.first_code
+    monkeypatch.setattr(CodebookTower, "first_code", lambda self, main: (main.item(), first_code(self, main))[1])
+    got, used = _cuda_speak(_cuda_loaded(model_dir, True), reference, 3, "Hello there.")
+    assert not used and "CUDA graphs failed" in caplog.text
+    assert len(want) == len(got) and all(a.shape == b.shape and (a == b).all() for a, b in zip(want, got, strict=True))

@@ -193,6 +193,7 @@ GPU 上的自回归模型每一步要启动几千个小内核（Qwen3-TTS：每 
 | --- | --- | --- |
 | Qwen3-TTS（`qwen3tts/decode.py`） | 每帧约 35 → 1 | 采样和 code predictor 的 15 步各一个图；talker 的步骤按注意力调用之间的每一段（`DecoderSteps`） |
 | Fish Speech（`mizuoto_fishspeech/generate.py`） | 每帧约 22 → 1 | 慢速步骤围绕其注意力（`LayerSteps`）；抽样和快速 transformer 为一个图；随已加载模型保留 |
+| Fish Speech Drama 3（`mizuoto_fishspeech/drama3/steps.py`） | 每帧 1（即时执行时已是） | 码本塔围绕其 13 层的注意力，然后主干围绕其 10 个 softmax 注意力层（`Stretches`）；采样设置改变时重新捕获码本塔的图；专家流式加载时不用 |
 | CosyVoice 2/3（`cosyvoice/llm.py`） | 每个 token 50–80 → 1 | 单 token 步骤（`DecoderSteps`）和抽样，每种 EOS 掩码一个图；上游的 nucleus 循环在设备上重放（`nucleus_device`） |
 | VoxCPM（`voxcpm/model.py`） | 每个 patch 3 → 1 | 每个注意力跨度和设置下整个 patch 一个图（`PatchDecoder`）；静态缓存随模型保留 |
 | GPT-SoVITS（`gptsovits/t2s.py`） | 每步 2 → 1 | T2S 的单 token 步骤围绕每层的注意力，每种行数一组；采样即时执行 |

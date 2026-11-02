@@ -52,7 +52,7 @@ def sample_top_k_top_p(logits: torch.Tensor, temperature: float, top_k: int, top
     values, ids = torch.sort(logits.float() / temperature, descending=True, dim=-1)
     ranks = torch.arange(values.shape[-1], device=values.device)
     dropped = (values.softmax(-1).cumsum(-1) > top_p) | (ranks >= top_k)
-    dropped[..., 0] = False
+    dropped[..., 0].fill_(False)  # a fill on the device (a decoding step's CUDA graphs hold it)
     probabilities = values.masked_fill(dropped, -torch.inf).softmax(-1)
     noise = torch.empty_like(probabilities).exponential_(generator=generator)
     choice = (probabilities / noise).argmax(-1, keepdim=True)
@@ -73,7 +73,7 @@ def reference_sample(
     kept &= (probabilities.cumsum(-1) <= top_p) | (top_p >= 1.0)
     kept &= probabilities >= epsilon_cutoff
     if legal_column_count is None:
-        kept[..., 0] = True
+        kept[..., 0].fill_(True)
     else:
         legal = ids < legal_column_count
         kept &= legal
@@ -118,6 +118,14 @@ class TowerAttention(nn.Module):
         return torch.cat((rotated.flatten(-2).to(x.dtype), x[..., width:]), dim=-1)
 
     def forward(self, x: torch.Tensor, positions: torch.Tensor, k_cache: torch.Tensor, v_cache: torch.Tensor) -> torch.Tensor:
+        q, k, v, gate = self.attention_in(x, positions)
+        return self.attention_out(self.attend(q, k, v, positions, int(positions[-1]) + 1, k_cache, v_cache), gate)
+
+    # the forward in three parts: a decoding step's CUDA graphs run the first and the last, the attention between them
+    # eagerly (its keys grow by one each step)
+
+    def attention_in(self, x: torch.Tensor, positions: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+        """Query, key and value [1, heads, T, D] (normed, rotated) and the output gate [T, heads · D]."""
         c = self.config
         length = len(positions)
         q_width, kv_width = c.n_head * c.head_dim, c.n_local_heads * c.head_dim
@@ -127,15 +135,22 @@ class TowerAttention(nn.Module):
         q = self.rotate(q, positions).transpose(0, 1).unsqueeze(0)
         k = self.rotate(k, positions).transpose(0, 1).unsqueeze(0)
         v = v.reshape(length, c.n_local_heads, c.head_dim).transpose(0, 1).unsqueeze(0)
-        end = int(positions[-1]) + 1
+        return q, k, v, gate
+
+    def attend(self, q: torch.Tensor, k: torch.Tensor, v: torch.Tensor, positions: torch.Tensor, end: int, k_cache: torch.Tensor, v_cache: torch.Tensor) -> torch.Tensor:
+        """Cache the rows' keys and values at ``positions``, then attend over the first ``end`` (the last position + 1):
+        [T, heads · D]."""
+        c = self.config
         k_cache.index_copy_(2, positions, k)
         v_cache.index_copy_(2, positions, v)
         k, v = k_cache[:, :, :end], v_cache[:, :, :end]
-        key_positions = torch.arange(end, device=x.device)
+        key_positions = torch.arange(end, device=q.device)
         mask = key_positions[None, :] <= positions[:, None]
         out = grouped_attention(q, k, v, mask, TOWER)
-        out = out.squeeze(0).transpose(0, 1).reshape(length, q_width)
-        return self.wo(out * gate.sigmoid())
+        return out.squeeze(0).transpose(0, 1).reshape(len(positions), c.n_head * c.head_dim)
+
+    def attention_out(self, attended: torch.Tensor, gate: torch.Tensor) -> torch.Tensor:
+        return self.wo(attended * gate.sigmoid())
 
 
 class FP32OutputLinear(nn.Linear):
@@ -179,6 +194,17 @@ class TowerTransformerLayer(nn.Module):
         residual = residual + self.attention(self.attention_norm(residual).to(dtype), positions, k_cache, v_cache)
         return residual + self.feed_forward(self.ffn_norm(residual).to(dtype))
 
+    def attention_in(self, x: torch.Tensor, positions: torch.Tensor) -> tuple[torch.Tensor, tuple[torch.Tensor, ...]]:
+        """The residual stream and the attention's ``attention_in``."""
+        dtype = self.attention.wqkv.weight.dtype
+        residual = x.float() if dtype == torch.float16 else x
+        return residual, self.attention.attention_in(self.attention_norm(residual).to(dtype), positions)
+
+    def attention_out(self, residual: torch.Tensor, attended: torch.Tensor, gate: torch.Tensor) -> torch.Tensor:
+        dtype = self.attention.wqkv.weight.dtype
+        residual = residual + self.attention.attention_out(attended, gate)
+        return residual + self.feed_forward(self.ffn_norm(residual).to(dtype))
+
 
 class TowerLayer(nn.Module):
     """Mix a code's embedding into the hidden state, then one pre-norm block."""
@@ -204,14 +230,21 @@ class TowerLayer(nn.Module):
         v_cache: torch.Tensor,
         shared_input: torch.Tensor | None = None,
     ) -> torch.Tensor:
+        mixed = self.mix(hidden, codes, semantic, shared_input)
+        return self.finish(mixed, self.transformer_layer(mixed, positions, k_cache, v_cache))
+
+    def mix(self, hidden: torch.Tensor, codes: torch.Tensor, semantic: torch.Tensor, shared_input: torch.Tensor | None = None) -> torch.Tensor:
+        """The block's input: the codes' embeddings (zero where the frame is not audio) mixed into the hidden state."""
         embedding: Any = self.semantic_embedding if self.shared else self.codebook_embedding
         codes = codes.clamp(0, embedding.num_embeddings - 1)
         e = torch.where(semantic[:, None], embedding(codes), 0.0)
         if shared_input is not None:
             e = e + shared_input
-        mixed = self.eh_proj(torch.cat((self.enorm(e), self.hnorm(hidden)), dim=-1))
-        out = self.final_layernorm(self.transformer_layer(mixed, positions, k_cache, v_cache))
-        return out.to(mixed.dtype)
+        return self.eh_proj(torch.cat((self.enorm(e), self.hnorm(hidden)), dim=-1))
+
+    def finish(self, mixed: torch.Tensor, out: torch.Tensor) -> torch.Tensor:
+        """The layer's output from its block's ``out``."""
+        return self.final_layernorm(out).to(mixed.dtype)
 
 
 class CodebookTower(nn.Module):
@@ -256,10 +289,14 @@ class CodebookTower(nn.Module):
         semantic = self.is_semantic(frames[:, 0]).to(text_embeddings.device)
         return torch.where(semantic[:, None], mixed, text_embeddings)
 
+    def unseen(self, frames: torch.Tensor) -> torch.Tensor:
+        """The summed embeddings of each frame's codes the backbone did not see (zero where it is not audio)."""
+        unseen = self.embedding_sum(frames, 1 + self.config.vq_backbone_codebooks, self.config.num_codebooks)
+        return torch.where(self.is_semantic(frames[:, 0])[:, None], unseen, 0.0)
+
     def run_shared(self, hidden: torch.Tensor, c0: torch.Tensor, semantic: torch.Tensor, positions: torch.Tensor, frames: torch.Tensor, state: TowerState) -> torch.Tensor:
         # the first shared layer also sees the codes the backbone did not
-        unseen = self.embedding_sum(frames, 1 + self.config.vq_backbone_codebooks, self.config.num_codebooks)
-        unseen = torch.where(self.is_semantic(frames[:, 0])[:, None], unseen, 0.0)
+        unseen = self.unseen(frames)
         for index, layer in enumerate(self.shared_layers):
             hidden = layer(hidden, c0, semantic, positions, state.k[index], state.v[index], unseen if index == 0 else None)
         return hidden
@@ -291,10 +328,22 @@ class CodebookTower(nn.Module):
     ) -> tuple[torch.Tensor, torch.Tensor]:
         """The frame after the row (``[main, codes…]``), and whether every logits drawn from were finite (upstream raises
         at the first that is not; the caller checks this once per frame, where it waits for the device anyway)."""
-        candidates = self.main_candidates(logits.device)
+        main, finite = self.draw_main(logits, history[-RAS_WINDOW:], self.main_candidates(logits.device), sampling, generator)
+        c0, semantic = self.first_code(main)
+        hidden = self.run_shared(hidden, c0, semantic, positions, frames, state)
+        codes = [c0]
+        shared = len(self.shared_layers)
+        for index, (layer, head) in enumerate(zip(self.residual_layers, self.codebook_heads, strict=True)):
+            hidden = layer(hidden, codes[-1], semantic, positions, state.k[shared + index], state.v[shared + index])
+            code, finite = self.draw_code(head(hidden), finite, sampling, generator)
+            codes.append(code)
+        return torch.stack((main, *codes), dim=-1), finite
+
+    def draw_main(self, logits: torch.Tensor, window: torch.Tensor, candidates: torch.Tensor, sampling: Any, generator: torch.Generator) -> tuple[torch.Tensor, torch.Tensor]:
+        """The frame's main token from the backbone's logits, and whether the logits drawn from were finite. ``window``:
+        the main tokens of the last ``RAS_WINDOW`` rows (fewer early on, or padded with ids no token has, like -1)."""
         candidate_logits = logits[:, candidates]
         finite = torch.isfinite(candidate_logits).all()
-        window = history[-RAS_WINDOW:]
         fallback: Fallback | None = sampling.fallback
         if fallback is None:
             first = candidates[sample_top_k_top_p(candidate_logits, sampling.temperature, sampling.top_k, sampling.top_p, generator)]
@@ -310,22 +359,19 @@ class CodebookTower(nn.Module):
             else:
                 retry = candidates[reference_sample(candidate_logits, RAS_TEMPERATURE, RAS_TOP_K, RAS_TOP_P, 0.0, generator)]
             repeated = (window == first[:, None]).any(-1)  # any repeated first draw is replaced, eos included
-        main = torch.where(repeated, retry, first)
-        c0 = (main - self.semantic_begin).clamp(0, self.config.vocab_size - 1)
-        semantic = self.is_semantic(main)
-        hidden = self.run_shared(hidden, c0, semantic, positions, frames, state)
-        codes = [c0]
-        shared = len(self.shared_layers)
-        for index, (layer, head) in enumerate(zip(self.residual_layers, self.codebook_heads, strict=True)):
-            hidden = layer(hidden, codes[-1], semantic, positions, state.k[shared + index], state.v[shared + index])
-            head_logits = head(hidden)
-            finite = finite & torch.isfinite(head_logits).all()
-            if fallback is None:
-                code = sample_top_k_top_p(head_logits, sampling.temperature, sampling.top_k, sampling.top_p, generator)
-            else:  # no epsilon cutoff, and only codes the codec's residual codebooks hold
-                code = reference_sample(head_logits, sampling.temperature, sampling.top_k, sampling.top_p, 0.0, generator, legal_column_count=RESIDUAL_CODEBOOK_SIZE)
-            codes.append(code)
-        return torch.stack((main, *codes), dim=-1), finite
+        return torch.where(repeated, retry, first), finite
+
+    def first_code(self, main: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+        """Code 0 (the main token's place in the semantic band) and whether the frame is audio."""
+        return (main - self.semantic_begin).clamp(0, self.config.vocab_size - 1), self.is_semantic(main)
+
+    def draw_code(self, head_logits: torch.Tensor, finite: torch.Tensor, sampling: Any, generator: torch.Generator) -> tuple[torch.Tensor, torch.Tensor]:
+        """The next code from a residual layer's head, and ``finite`` and-ed with whether its logits were."""
+        finite = finite & torch.isfinite(head_logits).all()
+        if sampling.fallback is None:
+            return sample_top_k_top_p(head_logits, sampling.temperature, sampling.top_k, sampling.top_p, generator), finite
+        # no epsilon cutoff, and only codes the codec's residual codebooks hold
+        return reference_sample(head_logits, sampling.temperature, sampling.top_k, sampling.top_p, 0.0, generator, legal_column_count=RESIDUAL_CODEBOOK_SIZE), finite
 
 
 @torch.no_grad()

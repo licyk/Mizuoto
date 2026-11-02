@@ -134,6 +134,14 @@ class FullAttention(nn.Module):
         return AttentionState(capacity, self.num_kv_heads, self.head_dim, dtype, device)
 
     def forward(self, x: torch.Tensor, context: LayerContext, state: AttentionState) -> torch.Tensor:
+        query, key, value, gate = self.attention_in(x, context.cos, context.sin)
+        return self.attention_out(self.attend(query, key, value, context.input_pos, context.kv_len, state), gate)
+
+    # the forward in three parts: a decoding step's CUDA graphs run the first and the last, the attention between them
+    # eagerly (its keys grow by one each step)
+
+    def attention_in(self, x: torch.Tensor, cos: torch.Tensor, sin: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+        """Query, key and value [B, heads, T, D] (normed, rotated) and the output gate [B, T, heads · D]."""
         batch, length, _ = x.shape
         query, gate = self.q_proj(x).view(batch, length, self.num_heads, 2 * self.head_dim).chunk(2, dim=-1)
         gate = gate.reshape(batch, length, self.num_heads * self.head_dim)
@@ -141,17 +149,23 @@ class FullAttention(nn.Module):
         key = self.k_proj(x).view(batch, length, self.num_kv_heads, self.head_dim)
         key = self.k_norm(key)
         value = self.v_proj(x).view(batch, length, self.num_kv_heads, self.head_dim)
-        query = apply_neox_rope(query, context.cos, context.sin).transpose(1, 2)
-        key = apply_neox_rope(key, context.cos, context.sin).transpose(1, 2)
-        value = value.transpose(1, 2)
-        state.k[:batch].index_copy_(2, context.input_pos, key)
-        state.v[:batch].index_copy_(2, context.input_pos, value)
-        key = state.k[:batch, :, : context.kv_len]
-        value = state.v[:batch, :, : context.kv_len]
-        key_positions = torch.arange(context.kv_len, device=x.device)
-        mask = key_positions[None, :] <= context.input_pos[:, None]
+        query = apply_neox_rope(query, cos, sin).transpose(1, 2)
+        key = apply_neox_rope(key, cos, sin).transpose(1, 2)
+        return query, key, value.transpose(1, 2), gate
+
+    def attend(self, query: torch.Tensor, key: torch.Tensor, value: torch.Tensor, input_pos: torch.Tensor, kv_len: int, state: AttentionState) -> torch.Tensor:
+        """Cache the rows' keys and values at ``input_pos``, then attend over the first ``kv_len``: [B, T, heads · D]."""
+        batch, _, length, _ = query.shape
+        state.k[:batch].index_copy_(2, input_pos, key)
+        state.v[:batch].index_copy_(2, input_pos, value)
+        key = state.k[:batch, :, :kv_len]
+        value = state.v[:batch, :, :kv_len]
+        key_positions = torch.arange(kv_len, device=query.device)
+        mask = key_positions[None, :] <= input_pos[:, None]
         attended = grouped_attention(query, key, value, mask, BACKBONE, scale=self.head_dim**-0.5)
-        attended = attended.transpose(1, 2).reshape(batch, length, self.num_heads * self.head_dim)
+        return attended.transpose(1, 2).reshape(batch, length, self.num_heads * self.head_dim)
+
+    def attention_out(self, attended: torch.Tensor, gate: torch.Tensor) -> torch.Tensor:
         return self.o_proj(attended * torch.sigmoid(gate))
 
 
