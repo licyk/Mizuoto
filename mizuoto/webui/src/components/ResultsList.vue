@@ -27,8 +27,15 @@ const snackbar = useSnackbar();
 
 const trackOf = (o: Output): Track => ({ key: o.id, url: urls.output(o.id), label: o.name });
 const progressOf = (o: Output) => (player.state.track?.key === o.id && player.state.duration ? player.state.time / player.state.duration : 0);
+// The latest place asked for: a drag that starts on a result not yet loaded keeps seeking while it
+// loads, and the seek made once it plays goes where the pointer is then, not where the drag began.
+let wanted: { id: string; fraction: number } | null = null;
 function seek(o: Output, fraction: number) {
-  if (player.state.track?.key !== o.id) player.play(trackOf(o)).then(() => player.seek(fraction * (o.duration ?? 0)));
+  wanted = { id: o.id, fraction };
+  if (player.state.track?.key !== o.id)
+    player.play(trackOf(o)).then(() => {
+      if (wanted?.id === o.id && player.state.track?.key === o.id) player.seek(wanted.fraction * (player.state.duration || o.duration || 0));
+    });
   else player.seek(fraction * (player.state.duration || o.duration || 0));
 }
 const timings = (o: Output) => (o.meta?.timings ?? {}) as { total?: number; rtf?: number | null; load?: number };
