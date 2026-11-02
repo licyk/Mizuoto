@@ -35,7 +35,11 @@ class Stretches:
     """A step as graphs with eager calls between them: graph 0, call 0, graph 1, …, call n − 1, graph n. Each call
     writes into a fixed tensor the next graph reads. A stretch's warm-up (``Graphs.capture``) runs it once on whatever
     the stretches before it left in their outputs (they are captured, not run), so it puts back the fixed tensors it
-    changes (its ``state``)."""
+    changes (its ``state``).
+
+    A graph reads the tensors its stretch read while it was captured and writes the ones it made then: a stretch must
+    never rebind a name of ``namespace`` that an earlier stretch bound and it reads (its capture would read what its own
+    warm-up left there, not the earlier graph's output). Names are bound once per step: per layer, never updated."""
 
     def __init__(self, graphs: Graphs, stretches: Sequence[tuple[Callable[[], None], Sequence[torch.Tensor]]], calls: Sequence[Callable[..., None]], namespace: dict) -> None:
         if len(stretches) != len(calls) + 1:
@@ -189,12 +193,12 @@ def tower_steps(graphs: Graphs, backbone: Backbone, tower: CodebookTower, fixed:
         h = layer.finish(ns["mixed", i], layer.transformer_layer.attention_out(ns["residual", i], fixed.tower_attended[i], ns["gate", i]))
         if i >= shared:
             r = i - shared
-            ns["code", r + 1], ns["finite"] = tower.draw_code(tower.codebook_heads[r](h), ns["finite"], sampling, graphs.generator)
+            ns["code", r + 1], ns["finite", r + 1] = tower.draw_code(tower.codebook_heads[r](h), ns["finite", r], sampling, graphs.generator)
         return h
 
     def first() -> None:
         logits = backbone.compute_logits(fixed.hidden)
-        ns["main"], ns["finite"] = tower.draw_main(logits, fixed.window, fixed.candidates, sampling, graphs.generator)
+        ns["main"], ns["finite", 0] = tower.draw_main(logits, fixed.window, fixed.candidates, sampling, graphs.generator)
         ns["code", 0], ns["semantic"] = tower.first_code(ns["main"])
         ns["unseen"] = tower.unseen(fixed.row)
         enter(0, fixed.hidden)
@@ -206,7 +210,7 @@ def tower_steps(graphs: Graphs, backbone: Backbone, tower: CodebookTower, fixed:
         leave(len(layers) - 1)
         frame = torch.stack((ns["main"], *(ns["code", r] for r in range(len(tower.residual_layers) + 1))), dim=-1)
         fixed.frame.copy_(frame)
-        fixed.flags.copy_(torch.stack((frame[0, 0], ns["finite"].long())))
+        fixed.flags.copy_(torch.stack((frame[0, 0], ns["finite", len(tower.residual_layers)].long())))
         fixed.row.copy_(frame)
         fixed.pos.add_(1)
         fixed.window.copy_(torch.cat((fixed.window[1:], frame[0, :1])))

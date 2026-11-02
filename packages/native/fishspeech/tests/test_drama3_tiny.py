@@ -359,39 +359,94 @@ def test_runs_identically_with_its_weights_placed_by_phase_and_its_experts_strea
 
 
 class ReplayedGraphs(Graphs):
-    """``mizuoto.runtime.graphs.Graphs``' contract on the CPU: a capture runs the stretch once to warm up and once more as
-    the capture (which only records), putting back its state and the generator after each; a replay runs it again. The
-    decoder's stretches, calls and fixed tensors are then checked anywhere: a step cut into graphs computes what the
-    eager step computes, draw for draw."""
+    """``mizuoto.runtime.graphs.Graphs``' contract on the CPU, replayed as a graph replays. A capture runs the stretch once
+    to warm up and once more as the capture (which on a GPU only records), putting back its state and the generator
+    after each. A replay runs the stretch again on the names its capture read (``namespace``, the decoder's ``Stretches``'),
+    then copies what it made into the tensors its capture made, which the eager calls and later stretches hold: as a
+    graph, which reads and writes fixed addresses. A stretch that rebinds a name an earlier one bound reads its own
+    warm-up's tensor here, as on a GPU."""
 
     def __init__(self) -> None:  # no stream: nothing runs on a GPU
         self.device = torch.device("cpu")
         self.generator = torch.Generator()
         self.captures = 0
+        self.namespace: dict = {}
 
     def pool(self):
         return None
 
     def capture(self, fn, state=(), pool=None):
         saved = self.generator.get_state()
-        for _ in range(2):
+        ns = self.namespace
+
+        def run() -> None:
             before = [t.clone() for t in state]
             fn()
             for t, b in zip(state, before, strict=True):
                 t.copy_(b)
             self.generator.set_state(saved)
+
+        run()  # the warm-up
+        read = dict(ns)
+        run()  # the capture
+        made = {k: v for k, v in ns.items() if read.get(k) is not v}
+        _poison(made)  # a capture only records: what it made holds garbage until a replay
         self.captures += 1
-        return type("Replayed", (), {"replay": staticmethod(fn)})()
+
+        def replay() -> None:
+            now = dict(ns)
+            ns.clear()
+            ns.update(read)
+            fn()
+            for k, v in made.items():
+                _copy_into(v, ns[k])
+            ns.clear()
+            ns.update(now)
+
+        return type("Replayed", (), {"replay": staticmethod(replay)})()
 
 
-def test_the_step_as_graph_stretches_decodes_exactly_as_eagerly(loaded, reference):
+def _poison(value) -> None:
+    if isinstance(value, torch.Tensor):  # not integers: a capture's names also hold fixed ones (a context's positions)
+        if value.is_floating_point():
+            value.fill_(float("nan"))
+        elif value.dtype == torch.bool:
+            value.fill_(False)
+    elif isinstance(value, dict | list | tuple):
+        for v in value.values() if isinstance(value, dict) else value:
+            _poison(v)
+    elif hasattr(value, "__dict__"):  # a LayerContext
+        _poison(list(vars(value).values()))
+
+
+def _copy_into(target, value) -> None:
+    if isinstance(target, torch.Tensor):
+        target.copy_(value)
+    elif isinstance(target, (list, tuple)):
+        for t, v in zip(target, value, strict=True):
+            _copy_into(t, v)
+    else:  # a LayerContext
+        for name, t in vars(target).items():
+            if isinstance(t, torch.Tensor):
+                t.copy_(getattr(value, name))
+
+
+def test_the_step_as_graph_stretches_decodes_exactly_as_eagerly(loaded, reference, monkeypatch):
     """The graphed step (``drama3.steps``: the tower's and the backbone's stretches around their attention calls, the
     fixed tensors, the window of recent main tokens, the Gated DeltaNet states updated in place) gives the eager frames
     for both samplers, several chunks and requests after the first; the tower's graphs are captured again when the
     sampling settings change."""
+    from mizuoto_fishspeech.drama3 import steps
     from mizuoto_fishspeech.drama3.generate import Decoder
 
     graphs = ReplayedGraphs()
+    stretches = steps.Stretches.__init__
+
+    def stretches_with_names(self, graphs, parts, calls, namespace) -> None:
+        graphs.namespace = namespace
+        stretches(self, graphs, parts, calls, namespace)
+
+    monkeypatch.setattr(steps.Stretches, "__init__", stretches_with_names)
     text = " ".join(f"Sentence number {i} goes on for a while, with commas and clauses." for i in range(3))
     cases = [
         ({}, {}, "Hello there."),
