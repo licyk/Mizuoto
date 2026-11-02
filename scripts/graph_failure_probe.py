@@ -69,6 +69,7 @@ print(f"{way:38} capture error: {error}\n{'':38} still capturing after: {capturi
 
 if __name__ == "__main__":
     import torch
+    import torch.version
 
     print("torch", torch.__version__, "CUDA", torch.version.cuda, "on", torch.cuda.get_device_name() if torch.cuda.is_available() else "no GPU")
     print("allocator", torch.cuda.get_allocator_backend() if torch.cuda.is_available() else "-")
