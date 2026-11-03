@@ -30,6 +30,11 @@ import torch.version
 
 log = logging.getLogger(__name__)
 
+REGISTERS_GENERATORS = tuple(int(part) for part in torch.__version__.split("+")[0].split(".")[:2]) >= (2, 14)
+"""From torch 2.14 a capture registers every generator it draws from by itself, and
+``CUDAGraph.register_generator_state()`` is a deprecated no-op that warns at each call (a layer stack's step is dozens of
+captures); before, a generator other than the device's default must be registered or its draws replay unchanged."""
+
 
 def usable(device: torch.device | str, enabled: bool = True) -> bool:
     """Whether to capture graphs on ``device``: ``compute.cuda_graphs`` on, an NVIDIA GPU, torch's caching allocator.
@@ -129,7 +134,8 @@ class Graphs:
                 t.copy_(b)
             self.generator.set_state(saved)
             graph = torch.cuda.CUDAGraph()
-            graph.register_generator_state(self.generator)
+            if not REGISTERS_GENERATORS:
+                graph.register_generator_state(self.generator)
             # ``torch.cuda.graph`` without its ``gc.collect()`` and ``empty_cache()`` (they free memory, not needed for a
             # capture, and cost tens of milliseconds each: a layer stack's step is dozens of captures)
             with torch.cuda.stream(self.stream):
