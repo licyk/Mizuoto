@@ -57,6 +57,30 @@ def take_pending_error(device: torch.device | str, tries: int = 3) -> None:
     log.warning("CUDA work on %s still fails after a failed graph capture", device)
 
 
+def release_default_generator(device: torch.device | str) -> None:
+    """Put the device's default generator out of capture mode after a failed capture. Every capture registers it and
+    marks it capturing; ending the capture unmarks it, but not when ending fails, and from then on every draw from it
+    outside a capture raises ("Offset increment outside graph capture encountered unexpectedly"): ``torch.randn``
+    without a generator, dropout, inductor's benchmarks. A capture of one kernel that draws nothing begins and ends
+    the generator's capture again, so its seed and offset are unchanged."""
+    try:
+        with torch.cuda.device(device):
+            stream = torch.cuda.Stream(device=device)
+            scratch = torch.zeros(1, device=device)
+            stream.wait_stream(torch.cuda.current_stream(device))
+            graph = torch.cuda.CUDAGraph()
+            with torch.cuda.stream(stream):
+                graph.capture_begin(capture_error_mode="thread_local")
+                try:
+                    scratch.add_(1)
+                finally:
+                    graph.capture_end()
+            torch.cuda.current_stream(device).wait_stream(stream)
+            del graph
+    except Exception as e:
+        log.warning("the default generator on %s may be left in capture mode: %s", device, str(e).splitlines()[0] if str(e) else type(e).__name__)
+
+
 def signature(modules: Sequence[torch.nn.Module]) -> tuple[int, ...]:
     """Where the modules' weights are: graphs captured over them are valid while this stays the same."""
     return tuple(t.data_ptr() for m in modules for t in (*m.parameters(), *m.buffers()))
@@ -119,6 +143,7 @@ class Graphs:
             current.wait_stream(self.stream)
         except BaseException:
             take_pending_error(self.device)
+            release_default_generator(self.device)
             # An aborted capture leaves the generator expecting one (every later draw raises): callers falling back to
             # eager steps draw from a fresh generator in the same state (``generator`` after the call).
             fresh = torch.Generator(device=self.device)
