@@ -341,8 +341,12 @@ class Attention(nn.Module):
 
     def attend(self, q: torch.Tensor, k: torch.Tensor, v: torch.Tensor, mask: torch.Tensor, cache: Any, math_kernel: bool) -> torch.Tensor:
         """The cache's update and attention: (batch, length, heads × head_dim), before ``wo``."""
-        bsz, _, seqlen, _ = q.shape
         k, v = cache.update(k, v, mask.shape[-1])
+        return self.attend_cached(q, k, v, mask, math_kernel)
+
+    def attend_cached(self, q: torch.Tensor, k: torch.Tensor, v: torch.Tensor, mask: torch.Tensor, math_kernel: bool) -> torch.Tensor:
+        """``attend`` after the cache's update: the attention over the keys and values it returned."""
+        bsz, _, seqlen, _ = q.shape
         rep = self.n_head // self.n_local_heads
         k, v = k.repeat_interleave(rep, dim=1), v.repeat_interleave(rep, dim=1)
         y = attention(q, k, v, site=FAST if self.fast else STEP if math_kernel else SLOW, mask=mask)

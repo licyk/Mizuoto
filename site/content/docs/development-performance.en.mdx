@@ -187,6 +187,38 @@ The decoding loop with the real fast transformer, 2 or 4 of its 36 slow layers, 
 
 Removing the waits gives most of it (×2.2); graphs add about 10 % on the saturated GPU, where reading the fast transformer's weights (about 4 GB a frame) bounds the step. Each slow layer cost about 1.5 ms a frame before and 0.45 ms after.
 
+The whole S2 Pro through the stack (`perf.py`, `cases/fishspeech.jsonl`), on a free RTX 3060 12 GB (driver 595, torch 2.8.0+cu128, bf16, commit `c422e58`), nothing else on the machine; the faster of three warm runs, seconds:
+
+| Case (audio s) | graphs off | **default** | Speed-up |
+| --- | --- | --- | --- |
+| clone-en (4.37) | 7.46 | **6.23** | ×1.20 |
+| clone-zh (3.44) | 5.90 | **4.88** | ×1.21 |
+
+The audio is identical with and without graphs and from run to run, and the real model passes the contract suite on that card (8 passed; 2 skipped: S2 Pro does not stream tokens, and no other engine was installed). The first request after a load takes about 4 s more, with or without graphs (the voice's codes, the first kernels' loading), so capturing the graphs costs little.
+
+Where a graphed frame's 64 ms go (`--torch-profile`, clone-en, 95 frames; the device busy 97 % of the time):
+
+- **Products, about 50 ms**. Each frame reads about 16 GB of weights: the 36 slow layers and the tied output head (about 8 GB), and the 4 fast layers once per codebook (0.8 GB, ten times). The 3060 moves 360 GB/s at most, so the frame cannot take less than about 45 ms. The products run at about 90 % of that.
+- **About 5,900 small kernels a frame, about 14 ms**: norms, rotary embeddings, residual adds, the draws and the eager attention. Each costs the device a few µs whatever its size. Graphs remove the CPU's launches, not that. Only fusing kernels removes it, which changes the rounding (an opt-in, as `compute.compile` is elsewhere). Fish Speech has no compiled path.
+- **The slow layers' eager attention, about 6 ms a frame at 300 positions**, growing with the context. At 600 keys one call takes 330 µs of device time in 22 kernels: the grown cache's `cat`, `repeat_interleave` from 8 to 32 heads, the math kernel's scaled copy of the keys, two products and the mask made additive. Three exact rewrites were checked on the 3060, bit for bit against the current call at lengths 150 to 1,280:
+  - passing no mask (the step's is all true);
+  - writing the cache in place;
+  - keeping the cache expanded to 32 heads.
+
+  The first two save about 5 % of the attention (under 1 % of a frame). The third saves about 20 % (about 2 % of a frame at 300 positions, 7 % at 1,200), but it holds four times the keys and values on the device. None was made.
+
+`compute.compile` (opt-in, not exact; [Acceleration](/docs/development-acceleration#torchcompile-computecompile)) fuses those small kernels inside the same graphs. Same card and conditions:
+
+| Case | default | **compile** | Per frame |
+| --- | --- | --- | --- |
+| clone-en | 6.23 s for 4.37 s of audio | **5.04 s** for 4.04 s | ×1.15 |
+| clone-zh | 4.88 s for 3.44 s of audio | **4.27 s** for 3.44 s | ×1.14 |
+
+- **Kernels:** a frame went from about 5,900 kernels to 1,950, and from 63.9 to 55.4 ms of device time. Products are now 90 % of it, so little is left to fuse.
+- **The slow attention:** first compiled with every dimension dynamic, it was twice as slow as eager (390 against 178 µs a layer at 300 keys: the scale computed per element in float64). With only its length dynamic it takes 91 µs.
+- **Compiling:** the first request in a process takes about 5 s longer.
+- **Results:** runs repeat under a seed. With compile on, the real model passes the contract suite's speech (Whisper's word error under the bound, English and Chinese), seed, streaming and unloading tests. Its cancel test fails on the exact path too: a request after an unload reloads the model for about 2.5 s with no cancel check inside.
+
 ### CosyVoice 2/3
 
 The real CosyVoice 2 LM (2 GB, it fit), 150 tokens, ms per token:

@@ -134,9 +134,9 @@ class ComputeSettings(Record):
     ``fp16_accumulation`` made GPT-SoVITS v2 about 5 % slower (v4 6–9 % faster); ``tf32`` left its speed alone."""
     compile: bool = False
     """Compile the heavy modules of native engines with torch.compile (F5-TTS's DiT, CosyVoice's and GPT-SoVITS's
-    flow estimators, IndexTTS's DiT and BigVGAN) for faster synthesis. The first synthesis after a model loads is
-    slower while it compiles; without a working compiler the engine runs as before. Applies to models loaded after
-    the change. On a GPU VoxCPM runs without its CUDA graphs while compiled, and slower (0.41–0.64× on an RTX 3090)."""
+    flow estimators, IndexTTS's DiT and BigVGAN, Fish Speech S2 Pro's decoding steps) for faster synthesis. The first
+    synthesis after a model loads is slower while it compiles; without a working compiler the engine runs as before.
+    Applies to models loaded after the change. On a GPU VoxCPM runs without its CUDA graphs while compiled, and slower (0.41–0.64× on an RTX 3090)."""
 
 
 class DownloadSettings(Record):

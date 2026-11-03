@@ -8,6 +8,8 @@ codec both ways, voice caches, speaker-turn batches, streaming, seeds and cancel
 from __future__ import annotations
 
 import json
+import shutil
+import sys
 import threading
 import wave
 from pathlib import Path
@@ -315,3 +317,97 @@ def test_a_failed_capture_falls_back_to_the_same_audio(model_dir, reference, mon
     got, used = run(load(True))
     assert not used and "CUDA graphs failed" in caplog.text
     assert want.shape == got.shape and (want == got).all()
+
+
+def _load_with(model_dir, device: str, **options):
+    from mizuoto.runtime.runtime import RuntimeOptions
+
+    devices = DeviceService()
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(engine_module, "codec_config", lambda folder: TINY_CODEC)
+        loaded = get_engine("fishspeech").load(
+            LoadSpec("fishspeech/tiny", model_dir, "s2_pro", device, options={}), Runtime(devices, ModelManager(devices), RuntimeOptions(**options)), RequestContext("load")
+        )
+    for h in loaded.handles:
+        h.load()
+    return loaded
+
+
+COMPILER = pytest.mark.skipif(sys.platform == "win32" or not (shutil.which("g++") or shutil.which("clang++")), reason="the CPU inductor needs a C++ compiler")
+
+
+@COMPILER
+def test_the_compiled_pieces_compute_the_eager_step(loaded):
+    """compute.compile (mizuoto_fishspeech.fused): the slow step, the fast transformer and the draws' probabilities
+    from compiled pieces are the eager ones to within float32 rounding (fusing is not bit-identical)."""
+    from mizuoto_fishspeech.fused import Fused
+    from mizuoto_fishspeech.generate import IM_END, TOP_K, Decoder, Sampling, logits_to_probs
+
+    model = loaded.model
+    c = model.config
+    fused = Fused("tiny")
+    g = torch.Generator().manual_seed(0)
+    prompt = torch.randint(0, 16, (1, 1 + c.num_codebooks, 7), generator=g, dtype=torch.int)
+    with torch.inference_mode():
+        steps = {}
+        for name, pieces in (("eager", None), ("compiled", fused)):
+            decoder = Decoder(model, loaded.tokenizer.token_to_id(IM_END), None, lambda pieces=pieces: pieces)
+            decoder.start(Sampling(), torch.Generator().manual_seed(1), lambda: None)
+            decoder.fused = pieces
+            caches = model.new_caches()
+            model.forward_generate(prompt, torch.arange(7), 7, caches, False)
+            decoder.cur.copy_(prompt[:, :, -1:])
+            decoder.pos.fill_(7)
+            decoder._slow(caches, 8)
+            fast = [model.forward_generate_fast(decoder.hidden, 0, decoder.fast_caches)] if pieces is None else [fused.fast_forward(model, decoder.hidden, 0, decoder.fast_caches)]
+            h = model.fast_embeddings(torch.tensor([3]))
+            fast.append(model.forward_generate_fast(h, 1, decoder.fast_caches) if pieces is None else fused.fast_forward(model, h, 1, decoder.fast_caches))
+            steps[name] = (decoder.logits.clone(), decoder.hidden.clone(), *fast)
+        for want, got in zip(steps["eager"], steps["compiled"], strict=True):
+            torch.testing.assert_close(got, want, rtol=1e-4, atol=1e-5)
+        logits = steps["eager"][0]
+        t, p = torch.tensor(0.8), torch.tensor(0.9)
+        torch.testing.assert_close(fused.run("probs", logits, t, p), logits_to_probs(logits[0, -1], t, p, TOP_K), rtol=1e-4, atol=1e-6)
+    assert fused.failure is None and fused.calls > 0
+
+
+@COMPILER
+def test_compute_compile_decodes_with_the_compiled_pieces(model_dir, reference):
+    (chunk,), ctx = speak(_load_with(model_dir, "cpu", compile=True), voice_of(reference), seed=5)
+    assert ctx.applied["compile"] == "decoder"
+    assert chunk.samples.size and np.isfinite(chunk.samples).all()
+
+
+def test_a_compiler_error_decodes_eagerly(model_dir, reference, monkeypatch, caplog):
+    """Any compiler failure makes every piece run eagerly from then on, with one warning: the eager audio."""
+    from mizuoto_fishspeech import fused
+
+    def broken(*args, **kwargs):
+        raise RuntimeError("no compiler here")
+
+    monkeypatch.setattr(torch, "compile", lambda fn, dynamic=None: broken)
+    (want,), _ = speak(_load_with(model_dir, "cpu"), voice_of(reference), seed=5)
+    (got,), ctx = speak(_load_with(model_dir, "cpu", compile=True), voice_of(reference), seed=5)
+    warnings = [r.getMessage() for r in caplog.records if r.levelname == "WARNING" and r.name == "mizuoto_fishspeech.fused"]
+    assert len(warnings) == 1 and "torch.compile of fishspeech/tiny:decoder failed" in warnings[0] and "no compiler here" in warnings[0]
+    assert "compile" not in ctx.applied and fused.PIECES
+    assert want.samples.shape == got.samples.shape and (want.samples == got.samples).all()
+
+
+@pytest.mark.skipif(not torch.cuda.is_available() or torch.version.hip is not None, reason="CUDA graphs need an NVIDIA GPU")
+def test_compiled_steps_replay_exactly_as_graphs_on_a_gpu(model_dir, reference):
+    """compute.compile with compute.cuda_graphs: the graphs capture the compiled pieces' kernels and replay them, so
+    the audio is the compiled pieces' run without graphs, request after request."""
+
+    def run(loaded, seed: int):
+        ctx = RequestContext("r", seed=seed, device="cuda")
+        task = SynthesisTask(text="Hello there.", language="en", voice=voice_of(reference), params={"seed": seed, "max_new_tokens": 24})
+        with torch.inference_mode():
+            return [c.samples for c in loaded.synthesize(task, ctx)][0], ctx.applied
+
+    plain, graphed = _load_with(model_dir, "cuda", compile=True, cuda_graphs=False), _load_with(model_dir, "cuda", compile=True)
+    for seed in (3, 4, 3):
+        want, applied = run(plain, seed)
+        got, used = run(graphed, seed)
+        assert applied.get("compile") == used.get("compile") == "decoder" and used.get("cuda_graphs") and not applied.get("cuda_graphs")
+        assert want.shape == got.shape and (want == got).all()

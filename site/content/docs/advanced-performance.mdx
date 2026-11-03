@@ -91,11 +91,13 @@ Mizuoto 像 ComfyUI 一样管理显存。一个请求的每一步只放上它需
 | GPT-SoVITS v4、v5 Turbo | CFM 估计器 |
 | IndexTTS-2 / 2.5 | s2mel DiT 和 BigVGAN（加载选项 `use_torch_compile` 也会开启） |
 | VoxCPM | 局部 DiT |
+| Fish Speech S2 Pro | 每个解码步骤里的小运算 |
 
 - 对修改之后加载的模型生效；已加载的模型保持原样。
 - 最初的请求要付出编译时间：在 CPU 上多 30 秒到 160 秒。
 - 在 CPU 上（fp32，8 线程），被编译模块的耗时：F5-TTS 减少 23%（整个请求从 60 秒降到 45 秒），IndexTTS 的 DiT 减少 7%、BigVGAN 减少 20%，GPT-SoVITS v4 减少 7%，CosyVoice 和（bf16 的）VoxCPM 没有变化。音频与不编译时略有差别；VoxCPM 的语音结束位置可能因此改变。
 - 在 GPU（RTX 3090）上，预热请求 F5-TTS 快 1.34 倍，GPT-SoVITS v4 快 1.14 倍，IndexTTS 和 CosyVoice 快 1.03–1.06 倍，代价是 55–134 秒的编译；VoxCPM 编译后不使用 CUDA 图，反而更慢（0.41–0.64 倍）：用 VoxCPM 时请关闭。
+- Fish Speech S2 Pro 在 RTX 3060 上：每帧快 1.15 倍（3.4 秒的音频用 4.3 秒而不是 4.9 秒）；进程里的第一个请求要编译约 5 秒。它生成的语音与默认设置不同（同一文本和音色的另一次生成），在相同种子下仍可重复。
 - 需要可用的 C++ 编译器。没有编译器，或某个模型的代码无法编译时，Mizuoto 记录一条警告，该模型照常不编译运行。Docker 镜像中没有编译器，所以在那里它不起作用。
 
 更多测量数据，以及提速工作怎样确保结果不变：见[性能记录](/docs/development-performance)。

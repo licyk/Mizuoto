@@ -165,6 +165,7 @@ Process-wide GPU switches after ComfyUI's `--fast`, set once by the host when it
 | GPT-SoVITS v4, v5 Turbo | the CFM estimator (each SoVITS model loaded, a voice's own too) |
 | IndexTTS 2, 2.5 | the s2mel DiT and BigVGAN (also turned on by its load option `use_torch_compile`) |
 | VoxCPM | the local DiT |
+| Fish Speech S2 Pro | its decoding steps' small operations, inside its CUDA graphs (below) |
 
 - `Compiled` is a plain attribute, not a submodule: state dicts and handles are unchanged.
 - Any error from compiling or running the compiled code (no C++ compiler, an unsupported op) logs one warning and runs eagerly from then on; running out of memory still raises. It runs eagerly on MPS (`EAGER_DEVICES`) and above a streamed unit.
@@ -173,6 +174,19 @@ Process-wide GPU switches after ComfyUI's `--fast`, set once by the host when it
 - Inductor caches its code in `/tmp/torchinductor_<user>`. The Docker image has no C compiler, so it runs eagerly there.
 
 **Not exact.** Against eager on the CPU in fp32, the audio differs by at most 9e-5 for F5-TTS, 6e-5 for IndexTTS and 3e-5 for GPT-SoVITS. CosyVoice's mel stays within 5.7e-6, but HiFT's F0-driven source amplifies that to about 1e-2 in the audio (eager with another thread count does the same). For VoxCPM, float differences can move where the speech ends. The first request after a load pays the compilation (30 to 160 s on the CPU); the gains are in [Performance record](/docs/development-performance#torchcompile-on-the-cpu).
+
+**Fish Speech S2 Pro** compiles pieces of its decoding step instead of one module (`mizuoto_fishspeech/fused.py`):
+- **The pieces:**
+  - each layer's halves around its attention, the slow transformer's 36 sharing one compiled graph per half and the fast transformer's 4 another;
+  - the attention over the cache;
+  - the step's embeddings and heads;
+  - the draws' probabilities.
+- **With graphs:** the CUDA graphs capture the compiled kernels, so a frame is about 1,950 kernels instead of 5,900.
+- **Randomness:** the draws are unchanged (the same uniforms from the same generator, in the same order); only the probabilities they are compared with differ, so the frames soon go elsewhere.
+- **The slow attention:** the key length grows each step, so only that dimension is marked dynamic. With `dynamic=True` the head size was symbolic too, and inductor computed the attention's scale per element in float64: the attention ran twice as slow as eager on an RTX 3060, twice as fast with only the length dynamic.
+- **When it runs:** only while the model is wholly on its device.
+- **Output:** `applied["compile"] = "decoder"`.
+- **Measured:** ×1.15 per frame on an RTX 3060 ([Performance record](/docs/development-performance#fish-speech)).
 
 ## CUDA graphs (`compute.cuda_graphs`)
 
@@ -185,6 +199,7 @@ An autoregressive model on a GPU launches thousands of small kernels per step (Q
   - After a capture the current stream waits for the capture stream: beginning a capture resets the generator's seed and offset tensors on the capture stream, and a first replay that overtook those kernels would draw from offset 0.
   - A failed capture swaps in a fresh generator in the same state (an aborted capture leaves the old one unusable), and the caller runs eagerly; it is logged once.
   - A failed capture can also leave its error pending in the CUDA runtime after the capture has ended (torch 2.15, CUDA 13.2), and the check after the thread's next kernel launch reports it once (allocating, copying, reading back and synchronizing do not, nor did a `zero_()`): `take_pending_error` runs a little eager work (an allocation, a copy from the host, a kernel, a read back) until it runs, dropping that report, so the eager fallback starts clean (`scripts/graph_failure_probe.py` shows which cleanup a torch release needs).
+  - Every capture also registers the device's default generator and marks it capturing; ending a failed capture does not unmark it, and from then on every draw from it outside a capture raised ("Offset increment outside graph capture encountered unexpectedly": `torch.randn` without a generator, dropout, inductor's benchmarks), in every engine, until the process ended. `release_default_generator` captures one kernel that draws nothing, which begins and ends its capture again: its seed and offset are unchanged (`tests/runtime/test_graphs.py`).
   - `drawing(generator)` loads the request's generator into the graphs' own and writes it back after, so seeded requests draw the same numbers as eagerly.
 - **`LayerSteps`**: a layer stack's one-token step as one graph per stretch between two attention calls, given each layer's `before`, `attend` and `after`. Attention runs eagerly between the graphs, over keys whose length grows each step, so the cache and the attention kernel are the eager code's; norms, projections, rotary embeddings and MLPs are replayed.
 - **`DecoderSteps`**: `LayerSteps` for a `QwenDecoder`.

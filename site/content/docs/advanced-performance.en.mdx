@@ -91,11 +91,13 @@ When a step of a request runs out of memory anyway (an estimate was short, anoth
 | GPT-SoVITS v4, v5 Turbo | the CFM estimator |
 | IndexTTS-2 / 2.5 | the s2mel DiT and BigVGAN (also turned on by the load option `use_torch_compile`) |
 | VoxCPM | the local DiT |
+| Fish Speech S2 Pro | the small operations of each decoding step |
 
 - It applies to models loaded after the change; loaded models keep what they had.
 - The first requests pay the compilation: on a CPU, 30 s to 160 s more.
 - On a CPU (fp32, 8 threads) the compiled module's time dropped by 23 % for F5-TTS (a whole request from 60 s to 45 s), 7 % for IndexTTS's DiT and 20 % for its BigVGAN, 7 % for GPT-SoVITS v4, and nothing for CosyVoice or (bf16) VoxCPM. The audio differs slightly from the uncompiled run; for VoxCPM that can move where the speech ends.
 - On a GPU (RTX 3090) the warm requests were 1.34× faster for F5-TTS, 1.14× for GPT-SoVITS v4 and 1.03–1.06× for IndexTTS and CosyVoice, after 55–134 s of compiling; VoxCPM runs without its CUDA graphs while compiled and was slower (0.41–0.64×): leave it off for VoxCPM.
+- Fish Speech S2 Pro on an RTX 3060: each frame 1.15× faster (a 3.4 s clip in 4.3 s instead of 4.9 s); the first request in a process compiles for about 5 s. Its speech differs from the default's (another take of the same text and voice) and still repeats under a seed.
 - It needs a working C++ compiler. Without one, or when a model's code cannot be compiled, Mizuoto logs one warning and runs that model as before. The Docker image has none, so there it changes nothing.
 
 More measurements, and how speed work is checked to keep results identical: [Performance record](/docs/development-performance).

@@ -532,7 +532,7 @@ export default {
     defaultDevice: '默认设备',
     gpuJobs: '同时运行的 GPU 任务数',
     compile: '编译模型（torch.compile）',
-    compileHint: '加快原生引擎（F5-TTS、CosyVoice、GPT-SoVITS v4/v5、IndexTTS）的合成；模型加载后的第一次合成会因编译而较慢。在 GPU 上开启后 VoxCPM 会变慢。对之后加载的模型生效',
+    compileHint: '加快原生引擎（F5-TTS、CosyVoice、GPT-SoVITS v4/v5、IndexTTS、Fish Speech S2 Pro）的合成；模型加载后的第一次合成会因编译而较慢。在 GPU 上开启后 VoxCPM 会变慢。对之后加载的模型生效',
     cudaGraphs: 'CUDA Graph 解码',
     cudaGraphsHint: '在 NVIDIA 显卡上把语言模型的每一步解码（Qwen3-TTS、Fish Speech、CosyVoice 2/3、VoxCPM、GPT-SoVITS、IndexTTS）一次性启动，而不是逐个启动数千个小算子，生成快数倍，结果完全一致。权重部分从内存流式加载的模型不使用。对之后加载的模型生效',
     unloadAfter: '空闲多少分钟后卸载模型（0：从不）',

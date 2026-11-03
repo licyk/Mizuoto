@@ -28,7 +28,7 @@ Set an access token before letting other machines connect; see [Remote access an
 | **Models kept in memory** | 3 | Models kept loaded at once, across all engines; beyond it the least recently used idle one is unloaded first |
 | **GPU jobs at once** | 1 | GPU jobs that may run at once on one device |
 | **Synthesis jobs at once** | 1 | Synthesis jobs (speak, voice conversion, speech editing) that run at once, across every engine and device; more wait in the queue in order, showing **Waiting for other synthesis jobs**. Requests run together as one batch (**Run waiting requests together**) count as one job |
-| **Compile models (torch.compile)** | off | Faster synthesis on F5-TTS, CosyVoice, GPT-SoVITS v4/v5 and IndexTTS; the first synthesis of each new length is slower while it compiles. Needs a C++ compiler, else the engines run as before (with one warning). Applies to models loaded afterwards |
+| **Compile models (torch.compile)** | off | Faster synthesis on F5-TTS, CosyVoice, GPT-SoVITS v4/v5, IndexTTS and Fish Speech S2 Pro; the first synthesis of each new length is slower while it compiles. Needs a C++ compiler, else the engines run as before (with one warning). Applies to models loaded afterwards |
 
 Below them are this machine's devices, with each GPU's used and total memory, and the torch in use with its build. When torch is missing or its build does not suit this machine, the problem is shown with the command that installs the right build. Each engine's own device and precision are set under **Models › Engines**; the models loaded now are in the top bar's **Models in memory**.
 

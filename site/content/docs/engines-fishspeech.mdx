@@ -21,6 +21,7 @@ Fish Audio S2 Pro 与 Drama 3（[fishaudio/fish-speech](https://github.com/fisha
 | `engine.py` | 读取参考音频、重采样到 44.1 kHz 并编码；按说话人轮次分批生成；编解码器解码；`codec_encode` 和 `codec_decode` 操作 |
 | `model.py` | 双自回归 transformer |
 | `generate.py` | 对话提示、按上游顺序采样、轮次分组、带 CUDA 图的解码器（`Decoder`） |
+| `fused.py` | `compute.compile`：用 `torch.compile` 编译的解码步骤各部分（`Fused`） |
 | `codec.py` | 44.1 kHz 编解码器 |
 | `train.py`、`finetune.py` | `FishSpeechTrainer`（方法 `lora`）及其计算 |
 
@@ -48,6 +49,8 @@ Fish Audio S2 Pro 与 Drama 3（[fishaudio/fish-speech](https://github.com/fisha
 一帧是一次慢 transformer 步骤加十个码本。原本的循环每帧约等待设备 22 次：轮次结束检查；把非语义 token 的码本嵌入置零的掩码赋值（`vq_sum[~mask] = 0` 会把掩码读回）；用列表下标取快 transformer 的掩码和旋转编码行（每个码本两次拷贝到设备）；采样器中把 Python 布尔值存入设备张量，每次抽样两次。它们都换成了完全等价的写法（`torch.where`、切片、`fill_`），解码步骤的掩码直接按它本来的样子生成为一行全真。每帧只剩一次等待。
 
 开启 `compute.cuda_graphs`（NVIDIA，模型完整位于设备上）时，`generate.Decoder` 为每个已加载的模型保留固定张量：慢步骤在两次注意力调用之间的每一段作为一个 CUDA 图运行（`LayerSteps`），该帧的抽样、重复感知采样和快 transformer 作为一个 CUDA 图。采样设置是按请求填充的设备张量，所以一套 CUDA 图服务所有请求。编码完全相同，解码循环每帧快 2.2–2.5 倍。
+
+在空闲的 RTX 3060 上，使用 CUDA 图时完整模型的一帧约需 64 毫秒。其中约 50 毫秒用于以接近显卡带宽的速度读取 16 GB 权重；其余大部分是数千个小内核。`compute.compile`（可选，不精确；`fused.py`）把它们融合：它在同样的 CUDA 图里编译每层注意力前后的两半、缓存上的注意力、这一步的嵌入和输出头以及采样的概率；关闭时即时执行的代码不变。这样每帧快 1.15 倍。采样不变，但概率的最后几位不同，所以语音是同一文本和音色的另一次生成，在相同种子下仍可重复，并通过契约测试。它只在模型完整位于其设备上时运行，输出会注明（`applied["compile"]`）。详见[加速](/docs/development-acceleration#torchcompilecomputecompile)。
 
 ## 训练
 

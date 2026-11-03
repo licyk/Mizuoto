@@ -21,6 +21,7 @@ The prompt is a ChatML conversation: a system turn holding each reference's text
 | `engine.py` | References read, resampled to 44.1 kHz and encoded; generation by batches of speaker turns; codec decoding; the `codec_encode` and `codec_decode` operations |
 | `model.py` | The dual-AR transformer |
 | `generate.py` | The conversation prompt, sampling in upstream's order, turn grouping, the decoder (`Decoder`) with its CUDA graphs |
+| `fused.py` | `compute.compile`: the decoding step's pieces under `torch.compile` (`Fused`) |
 | `codec.py` | The 44.1 kHz codec |
 | `train.py`, `finetune.py` | `FishSpeechTrainer` (method `lora`) and its maths |
 
@@ -48,6 +49,8 @@ Phases: the codec encodes references and decodes each batch of frames; the langu
 A frame is one slow-transformer step and ten codebooks. The plain loop waited for the device about 22 times a frame: the end-of-turn check; a masked assignment zeroing the codebook embeddings of non-semantic tokens (`vq_sum[~mask] = 0` reads the mask back); the fast transformer's mask and rotary rows taken with list indices (two copies to the device per codebook); a Python boolean stored into a device tensor in the sampler, twice per draw. Each became an exact equivalent (`torch.where`, slices, `fill_`), and the decoding step's mask is made as the one all-true row it is. One wait per frame remains.
 
 With `compute.cuda_graphs` (NVIDIA, the model wholly on its device) `generate.Decoder` keeps fixed tensors per loaded model: the slow step runs as one graph per stretch between attention calls (`LayerSteps`), and the frame's draws, repetition-aware sampling and the fast transformer as one graph. The sampling settings are device tensors filled per request, so one set of graphs serves every request. The codes are identical, 2.2–2.5 times faster per frame on the decode loop.
+
+On a free RTX 3060 the whole model's frame takes about 64 ms with graphs. About 50 ms of that is reading 16 GB of weights at close to the card's bandwidth; most of the rest is thousands of small kernels. `compute.compile` (opt-in, not exact; `fused.py`) fuses them: it compiles each layer's halves around its attention, the attention over the cache, the step's embeddings and heads, and the draws' probabilities, inside the same graphs, with the eager code untouched when it is off. Each frame is then 1.15 times faster. The draws are unchanged, but the probabilities differ in their last bits, so the speech is another take of the same text and voice, which still repeats under a seed and passes the contract suite. It runs only while the model is wholly on its device, and the output lists it (`applied["compile"]`). Details: [Acceleration](/docs/development-acceleration#torchcompile-computecompile).
 
 ## Training
 

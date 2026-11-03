@@ -532,7 +532,7 @@ export default {
     defaultDevice: 'Default device',
     gpuJobs: 'GPU jobs at once',
     compile: 'Compile models (torch.compile)',
-    compileHint: 'Faster synthesis on native engines (F5-TTS, CosyVoice, GPT-SoVITS v4/v5, IndexTTS); the first synthesis after a model loads is slower while it compiles. VoxCPM is slower with it on a GPU. Applies to models loaded afterwards',
+    compileHint: 'Faster synthesis on native engines (F5-TTS, CosyVoice, GPT-SoVITS v4/v5, IndexTTS, Fish Speech S2 Pro); the first synthesis after a model loads is slower while it compiles. VoxCPM is slower with it on a GPU. Applies to models loaded afterwards',
     cudaGraphs: 'CUDA graphs for decoding',
     cudaGraphsHint: 'On NVIDIA GPUs, launch each decoding step of language models (Qwen3-TTS, Fish Speech, CosyVoice 2/3, VoxCPM, GPT-SoVITS, IndexTTS) at once instead of thousands of small kernels one by one: several times faster, identical results. Models whose weights partly stream from RAM decode without them. Applies to models loaded afterwards',
     unloadAfter: 'Unload models after idle minutes (0: never)',

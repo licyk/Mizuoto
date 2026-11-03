@@ -72,7 +72,7 @@ class FishSpeechEngine(Engine):
             from mizuoto_fishspeech.drama3.engine import LoadedDrama3
 
             return LoadedDrama3(spec, ctx, runtime.options.cuda_graphs)
-        return LoadedFishSpeech(spec, ctx, runtime.options.cuda_graphs)
+        return LoadedFishSpeech(spec, ctx, runtime.options.cuda_graphs, runtime.options.compile)
 
 
 def _dtype(name: str, device: str) -> torch.dtype:
@@ -117,7 +117,7 @@ def _weights(folder: Path) -> dict[str, Any]:
 class LoadedFishSpeech(LoadedEngine):
     PHASED = True
 
-    def __init__(self, spec: LoadSpec, ctx: RequestContext, cuda_graphs: bool = True) -> None:
+    def __init__(self, spec: LoadSpec, ctx: RequestContext, cuda_graphs: bool = True, compile: bool = False) -> None:
         super().__init__(spec)
         import torch
 
@@ -160,9 +160,11 @@ class LoadedFishSpeech(LoadedEngine):
         self.h_codec = ModelHandle(codec, name=f"{spec.model_id}:codec", load_device=spec.device)
         self.handles = [self.h_model, self.h_codec]
         self.cuda_graphs = cuda_graphs
+        self.compile = compile
         self._decoder: Any = None
         self._graphs: Any = None
         self._graph_signature: tuple[int, ...] | None = None
+        self._fused: Any = None
 
     def _graphs_now(self) -> Any:
         """The language model's CUDA graphs (``compute.cuda_graphs``) while it is wholly on an NVIDIA GPU: new ones
@@ -176,8 +178,21 @@ class LoadedFishSpeech(LoadedEngine):
             self._graphs, self._graph_signature = Graphs(self.device), where
         return self._graphs
 
+    def _fused_now(self) -> Any:
+        """The decoding steps' compiled pieces (``compute.compile``) while the language model is wholly on its device
+        (its streamed weights come and go between calls), none otherwise."""
+        from mizuoto.runtime.compile import EAGER_DEVICES
+
+        if not self.compile or self.device.type in EAGER_DEVICES or not self.h_model.loaded:
+            return None
+        if self._fused is None:
+            from mizuoto_fishspeech.fused import Fused
+
+            self._fused = Fused(f"{self.spec.model_id}:decoder")
+        return self._fused
+
     def close(self) -> None:
-        self._decoder = self._graphs = None
+        self._decoder = self._graphs = self._fused = None
         super().close()
 
     def describe(self) -> Description:
@@ -309,7 +324,7 @@ class LoadedFishSpeech(LoadedEngine):
         if self._decoder is None:
             from mizuoto_fishspeech.generate import IM_END, Decoder
 
-            self._decoder = Decoder(self.model, self.tokenizer.token_to_id(IM_END), self._graphs_now)
+            self._decoder = Decoder(self.model, self.tokenizer.token_to_id(IM_END), self._graphs_now, self._fused_now)
         decoder = self._decoder
         segments = []
         with torch.inference_mode():
@@ -344,6 +359,8 @@ class LoadedFishSpeech(LoadedEngine):
                 segments.append(audio)
         if decoder.graphed and not decoder.failed:
             ctx.applied["cuda_graphs"] = True
+        if decoder.compiled and decoder.fused is not None and decoder.fused.calls:
+            ctx.applied["compile"] = "decoder" if decoder.fused.failure is None else f"decoder, then eager: {decoder.fused.failure}"
         ctx.check_cancel()
         if not segments:
             raise EngineError("Fish Speech produced no speech for the text", {"text": task.text[:200]}, code=codes.ENGINE_ERROR)

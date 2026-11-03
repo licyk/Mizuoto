@@ -27,6 +27,7 @@ import torch
 
 if TYPE_CHECKING:
     from mizuoto.runtime.graphs import Graphs
+    from mizuoto_fishspeech.fused import Fused
     from mizuoto_fishspeech.model import DualARTransformer
 
 log = logging.getLogger(__name__)
@@ -168,9 +169,13 @@ class Decoder:
     calls, ``LayerSteps``), then the frame's draws and the fast transformer's ten codebooks (one graph), with one wait
     per frame for whether it ended with ``<|im_end|>``. Graphs replay the eager kernels, so the codes are the same;
     draws come from the graphs' own generator, loaded from the request's and written back.
+
+    With ``compute.compile`` (``fused``, while the model is wholly on its device) the steps run from compiled pieces
+    (``mizuoto_fishspeech.fused``), eagerly or inside the same graphs: not bit-identical. Without it the code below is
+    the eager code as it always ran.
     """
 
-    def __init__(self, model: DualARTransformer, im_end_id: int, graphs: Callable[[], Graphs | None] | None = None) -> None:
+    def __init__(self, model: DualARTransformer, im_end_id: int, graphs: Callable[[], Graphs | None] | None = None, fused: Callable[[], Fused | None] | None = None) -> None:
         self.model = model
         self.im_end_id = im_end_id
         self.generator: torch.Generator | None = None
@@ -178,6 +183,9 @@ class Decoder:
         self.max_new_tokens = 0
         self._graphs_for = graphs or (lambda: None)
         self._graphs: Graphs | None = None
+        self._fused_for = fused or (lambda: None)
+        self.fused: Fused | None = None
+        """The compiled pieces the current request decodes with, or None (eager code)."""
         self._tail_graph: Any = None
         self._steps: Any = None
         self._allocated = False
@@ -185,6 +193,8 @@ class Decoder:
         """A capture failed: this decoder runs eagerly from then on."""
         self.graphed = False
         """The last request decoded with graphs."""
+        self.compiled = False
+        """The last request ran compiled pieces."""
 
     def _allocate(self) -> None:
         """The fixed tensors, on the model's device (where its first parameter is during a request)."""
@@ -223,7 +233,7 @@ class Decoder:
         self.max_new_tokens = s.max_new_tokens
         self.generator = generator
         self.check = check
-        self.graphed = False
+        self.graphed = self.compiled = False
         for cache in self.fast_caches:
             cache.k.zero_()
             cache.v.zero_()
@@ -232,6 +242,8 @@ class Decoder:
         """The frame (1 + codebooks, 1) from the slow step's logits and the fast transformer's input."""
         model, c, g = self.model, self.model.config, self.generator
         assert g is not None
+        if self.fused is not None:
+            return self._frame_fused(self.fused, logits, hidden, previous)
         biased = logits + self.bias
         main = sample(biased, self.temperature, self.top_p, g)
         high = sample(biased, self.high_temp, self.high_top_p, g)
@@ -252,6 +264,30 @@ class Decoder:
             codebooks.append(a)
         return torch.stack(codebooks, dim=1).T
 
+    def _frame_fused(self, fused: Fused, logits: torch.Tensor, hidden: torch.Tensor, previous: torch.Tensor | None) -> torch.Tensor:
+        """``_frame`` with the compiled pieces: the same draws in the same order."""
+        model, c, g = self.model, self.model.config, self.generator
+        assert g is not None
+        biased = logits + self.bias
+        main = fused.sample(biased, self.temperature, self.top_p, g)
+        high = fused.sample(biased, self.high_temp, self.high_top_p, g)
+        if previous is not None:
+            in_window = (previous[0] == main).any()
+            semantic = (main >= c.semantic_begin_id) & (main <= c.semantic_end_id)
+            main = torch.where(in_window & semantic, high, main)
+        codebooks = [main]
+        fast_caches = self.fast_caches
+        fused.fast_forward(model, hidden, 0, fast_caches)
+        a = torch.clamp(main - c.semantic_begin_id, min=0, max=c.codebook_size - 1)
+        h = model.fast_embeddings(a)
+        codebooks.append(a)
+        for i in range(1, c.num_codebooks):
+            out = fused.fast_forward(model, h, i, fast_caches)
+            a = fused.sample(out, self.temperature, self.top_p, g)
+            h = model.fast_embeddings(a)
+            codebooks.append(a)
+        return torch.stack(codebooks, dim=1).T
+
     def _step(self, x: torch.Tensor, input_pos: torch.Tensor, kv_len: int, caches: list[Any], previous: torch.Tensor | None, math_kernel: bool) -> torch.Tensor:
         """``decode_one_token_ar``: the frame (1 + codebooks, 1) after ``x``."""
         result = self.model.forward_generate(x, input_pos, kv_len, caches, math_kernel)
@@ -267,9 +303,25 @@ class Decoder:
         if self._steps is not None:
             self._steps(mask, caches)
             return
+        if self.fused is not None:
+            self._slow_fused(self.fused, mask, caches)
+            return
         result = self.model.forward_generate(self.cur, self.pos, kv_len, caches, True, last=True)
         self.logits.copy_(result.logits)
         self.hidden.copy_(result.hidden_states)
+
+    def _slow_fused(self, fused: Fused, mask: torch.Tensor, caches: list[Any]) -> None:
+        """The slow step from the compiled pieces, eagerly (the order ``_layer_steps`` captures)."""
+        model = self.model
+        rope = model.get_buffer("freqs_cis")[self.pos]
+        x = fused.run("embed", model, self.cur)
+        layers: list[Any] = list(model.layers)
+        for layer, cache in zip(layers, caches, strict=True):
+            q, k, v = fused.run("slow_in", layer, x, rope)
+            x = fused.run("slow_out", layer, x, fused.slow_attention(layer.attention, cache, q, k, v, mask))
+        logits, hidden = fused.run("output", model, x)
+        self.logits.copy_(logits)
+        self.hidden.copy_(hidden)
 
     def _layer_steps(self) -> Any:
         from mizuoto.runtime.graphs import LayerSteps
@@ -277,25 +329,43 @@ class Decoder:
         model = self.model
         layers: list[Any] = list(model.layers)
         rope: list[Any] = [None]
+        fused = self.fused
 
         def prologue() -> torch.Tensor:
             rope[0] = model.get_buffer("freqs_cis")[self.pos]
-            return model.input_embeddings(self.cur)
+            return model.input_embeddings(self.cur) if fused is None else fused.run("embed", model, self.cur)
 
         def epilogue(x: torch.Tensor) -> None:
-            result = model.output_step(x)
-            self.logits.copy_(result.logits)
-            self.hidden.copy_(result.hidden_states)
+            if fused is None:
+                result = model.output_step(x)
+                logits, hidden = result.logits, result.hidden_states
+            else:
+                logits, hidden = fused.run("output", model, x)
+            self.logits.copy_(logits)
+            self.hidden.copy_(hidden)
 
         assert self._graphs is not None
         heads = model.config.n_head * model.config.head_dim
+
+        def before(i: int, h: torch.Tensor) -> Any:
+            return layers[i].attention_in(h, rope[0]) if fused is None else fused.run("slow_in", layers[i], h, rope[0])
+
+        def attend(i: int, qkv: tuple[torch.Tensor, torch.Tensor, torch.Tensor], mask: torch.Tensor, caches: list[Any]) -> torch.Tensor:
+            if fused is None:
+                return layers[i].attention.attend(*qkv, mask, caches[i], True)
+            q, k, v = qkv
+            return fused.slow_attention(layers[i].attention, caches[i], q, k, v, mask)
+
+        def after(i: int, h: torch.Tensor, attended: torch.Tensor) -> torch.Tensor:
+            return layers[i].attention_out(h, attended) if fused is None else fused.run("slow_out", layers[i], h, attended)
+
         return LayerSteps(
             self._graphs,
             len(layers),
             prologue,
-            lambda i, h: layers[i].attention_in(h, rope[0]),
-            lambda i, qkv, mask, caches: layers[i].attention.attend(*qkv, mask, caches[i], True),
-            lambda i, h, attended: layers[i].attention_out(h, attended),
+            before,
+            attend,
+            after,
             epilogue,
             lambda i: torch.zeros((1, 1, heads), dtype=self.dtype, device=self.device),
             [self.logits, self.hidden],
@@ -343,8 +413,10 @@ class Decoder:
     def generate(self, prompt: torch.Tensor, progress: Callable[[int, int], None] | None = None) -> torch.Tensor:
         """``generate``: the prompt (1 + codebooks, T) followed by the new frames (the last one ``<|im_end|>``)."""
         graphs = None if self.failed else self._graphs_for()
-        if graphs is not self._graphs:  # none, or new ones (the weights moved): capture again
-            self._graphs, self._tail_graph, self._steps = graphs, None, None
+        fused = self._fused_for()
+        if graphs is not self._graphs or fused is not self.fused:  # none, or new ones (the weights moved): capture again
+            self._graphs, self.fused, self._tail_graph, self._steps = graphs, fused, None, None
+        self.compiled = fused is not None
         if graphs is None:
             return self._generate(prompt, progress)
         self.graphed = True
