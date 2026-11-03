@@ -298,7 +298,9 @@ class ModelManager:
             ratio = self.calibration.get(key, 1.0)
         measured: list[tuple[str, int]] = []
         try:
+            before = [h.loaded_bytes for h in handles]
             self._load_waiting(handles, int(estimate * ratio) if estimate else estimate)
+            _await_copies([h for h, b in zip(handles, before, strict=True) if h.loaded_bytes > b])
             if estimate and len({h.load_device for h in handles}) == 1:
                 device = handles[0].load_device
                 base = self.devices.allocated(device)
@@ -522,6 +524,29 @@ class ModelManager:
         """Bytes copied to ``device`` by its streamer so far (a request reports the difference)."""
         streamer = self._streamers.get(device)
         return streamer.copied_bytes if streamer is not None else 0
+
+
+COPY_POLL_SECONDS = 0.005
+
+
+def _await_copies(handles: list[ModelHandle]) -> None:
+    """Wait for the weights just copied to ``handles``' CUDA devices, checking for a cancel meanwhile. Copies from
+    page-locked memory are asynchronous: placing a model's weights queues them and returns (S2 Pro's 9 GB in 0.9 s),
+    and the request's first wait for the device then waited for all of them (2 s more on an RTX 3060)
+    without any check, so a cancel made then waited too. Only inside a request (a bound context), and only for
+    handles whose resident weights grew: other phases keep running without a wait. The handles are placed whole by
+    then, so a cancel leaves them loaded, the copies finishing on their stream."""
+    from mizuoto.runtime.context import check_cancel, current
+
+    devices = {h.load_device for h in handles if not h.simulated and device_kind(h.load_device) == "cuda"}
+    if not devices or current() is None:
+        return
+    import torch
+
+    events = [torch.cuda.current_stream(torch.device(d)).record_event() for d in sorted(devices)]
+    while not all(e.query() for e in events):
+        check_cancel()
+        time.sleep(COPY_POLL_SECONDS)
 
 
 def _out_of_memory(device: str, group: list[ModelHandle], budget: int, minimum: int, memory: int, reserve: int) -> Exception:

@@ -217,7 +217,7 @@ Where a graphed frame's 64 ms go (`--torch-profile`, clone-en, 95 frames; the de
 - **Kernels:** a frame went from about 5,900 kernels to 1,950, and from 63.9 to 55.4 ms of device time. Products are now 90 % of it, so little is left to fuse.
 - **The slow attention:** first compiled with every dimension dynamic, it was twice as slow as eager (390 against 178 µs a layer at 300 keys: the scale computed per element in float64). With only its length dynamic it takes 91 µs.
 - **Compiling:** the first request in a process takes about 5 s longer.
-- **Results:** runs repeat under a seed. With compile on, the real model passes the contract suite's speech (Whisper's word error under the bound, English and Chinese), seed, streaming and unloading tests. Its cancel test fails on the exact path too: a request after an unload reloads the model for about 2.5 s with no cancel check inside.
+- **Results:** runs repeat under a seed. With compile on, the real model passes the contract suite's speech (Whisper's word error under the bound, English and Chinese), seed, streaming and unloading tests. Its cancel test failed on the exact path too: a request after an unload waited about 2 s for its weights' copies with no cancel check inside. A phase now waits for them itself, checking for a cancel ([Memory](/docs/development-memory)).
 
 ### CosyVoice 2/3
 

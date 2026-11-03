@@ -887,3 +887,52 @@ def test_low_mode_keeps_weights_under_half_the_device():
     m.register("S", [small])
     m.load([small])
     assert small.loaded  # 2 MB fits in half
+
+
+class _Copies:
+    """A CUDA stream whose recorded event completes after ``pending`` queries (no device needed)."""
+
+    def __init__(self, pending: int) -> None:
+        self.pending = pending
+        self.queries = 0
+
+    def record_event(self) -> Any:
+        copies = self
+
+        class Event:
+            def query(self) -> bool:
+                copies.queries += 1
+                return copies.queries > copies.pending
+
+        return Event()
+
+
+def _copying(monkeypatch, pending: int) -> _Copies:
+    copies = _Copies(pending)
+    monkeypatch.setattr(torch.cuda, "current_stream", lambda device=None: copies)
+    return copies
+
+
+def test_a_cancel_reaches_a_request_waiting_for_its_weights_to_copy(monkeypatch):
+    """Placing weights from page-locked memory queues their copies and returns; the phase then waits for them,
+    checking for a cancel (S2 Pro's 9 GB took 2 s more on an RTX 3060, where a cancel had waited for them)."""
+    from types import SimpleNamespace
+
+    from mizuoto.runtime import manager
+    from mizuoto.runtime.context import Cancelled, RequestContext
+
+    gpu: Any = SimpleNamespace(load_device="cuda:0", simulated=False)
+    copies = _copying(monkeypatch, pending=3)
+    ctx = RequestContext("r")
+    with ctx.bind():
+        manager._await_copies([gpu])  # waits until they are done
+    assert copies.queries == 4
+    copies = _copying(monkeypatch, pending=10**9)
+    ctx.cancel()
+    with ctx.bind(), pytest.raises(Cancelled):
+        manager._await_copies([gpu])
+    copies = _copying(monkeypatch, pending=10**9)
+    manager._await_copies([gpu])  # outside a request: no wait
+    others: list[Any] = [SimpleNamespace(load_device="cpu", simulated=False), SimpleNamespace(load_device="cuda:0", simulated=True)]
+    manager._await_copies(others)
+    assert copies.queries == 0
