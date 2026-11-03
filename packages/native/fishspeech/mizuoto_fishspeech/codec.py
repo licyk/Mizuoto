@@ -67,13 +67,21 @@ class WN(nn.Module):
 
 
 def snake(x: torch.Tensor, alpha: torch.Tensor) -> torch.Tensor:
-    """``x + 1 / (alpha + 1e-9) · sin(alpha · x)²``. Without gradients and without autocast the same operations run in
-    place on one buffer (a product or sum with its operands swapped is the same number). Under autocast (the codec in
-    bf16 on a GPU) ``pow`` and ``reciprocal`` compute in float32 and the rest follows, which in-place operations, keeping
-    their buffer's dtype, would not."""
+    """``x + 1 / (alpha + 1e-9) · sin(alpha · x)²`` (descript-audio-codec's ``snake``, a TorchScript function).
+
+    Under autocast (the codec decoding in bf16 or fp16 on a GPU) it is computed in float32 throughout, as TorchScript
+    computes it: eager autocast would keep ``alpha · x`` and the sine in the low precision, and its decoded audio
+    differed from upstream's by up to 0.08 a Snake on an RTX 3060 (upstream's own fused kernel, once TorchScript has
+    profiled a shape, differs from that by rounding only). Without gradients and without autocast the same operations
+    run in place on one buffer (a product or sum with its operands swapped is the same number), as TorchScript's
+    unfused graph computes them."""
     shape = x.shape
     x = x.reshape(shape[0], shape[1], -1)
-    if (torch.is_grad_enabled() and (x.requires_grad or alpha.requires_grad)) or torch.is_autocast_enabled(x.device.type):
+    if torch.is_autocast_enabled(x.device.type):
+        x, alpha = x.float(), alpha.float()
+        x = x + (alpha + 1e-9).reciprocal() * torch.sin(alpha * x).pow(2)
+        return x.reshape(shape)
+    if torch.is_grad_enabled() and (x.requires_grad or alpha.requires_grad):
         x = x + (alpha + 1e-9).reciprocal() * torch.sin(alpha * x).pow(2)
         return x.reshape(shape)
     t = alpha * x

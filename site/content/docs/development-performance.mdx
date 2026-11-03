@@ -347,7 +347,7 @@ v4 收益最小：它的 flow 和声码器占主导，而且在拥挤的 GPU 上
 已修复，使 GPU 上的音频重新与之前的代码相同：
 
 - **VoxCPM 的注意力跨度。** 在 CUDA 上一步走 SDPA 的 math 路径，其矩阵向量乘和 softmax 按键的长度划分求和：在下一个 256（或 512 … 4096）的倍数处截断，在 bf16、fp16 和 fp32 下大多数位置都与整个 8192 位置的缓存不同。跨度现在只在 CPU 上使用（`minicpm.attend_span`）；在 GPU 上一步对整个缓存计算，与上游一样。重新与第一轮之前的代码相同，代价是：预热请求 1.24 → 2.13 秒（VoxCPM 2）、0.68 → 0.96 秒（1.5）。
-- **Fish Speech 的原地 Snake。** 在 GPU 上编解码器在 bf16 autocast 下运行，autocast 以 float32 计算 `pow` 和 `reciprocal`；因此上游的 Snake 以 float32 结束，而保持缓冲区数据类型的原地写法停留在 bf16（最多相差 0.1）。原地写法现在只在没有 autocast 时使用；重新与第一轮相同，速度不变。单元测试覆盖了 autocast。
+- **Fish Speech 的原地 Snake。** 在 GPU 上编解码器在 bf16 autocast 下运行，autocast 以 float32 计算 `pow` 和 `reciprocal`；因此上游的 Snake 以 float32 结束，而保持缓冲区数据类型的原地写法停留在 bf16（最多相差 0.1）。原地写法现在只在没有 autocast 时使用；重新与第一轮相同，速度不变。单元测试覆盖了 autocast。（后来与上游本身对比时发现，上游的 TorchScript Snake 在 autocast 下全程以 float32 计算。从 mizuoto-fishspeech 0.3.3 起移植也是如此，GPU 上解码的音频随之改变：[Fish Speech](/docs/engines-fishspeech#有意的差异)。）
 - **CosyVoice 在 `cuda:1` 上**因非法内存访问而出错：其解码步骤的 CUDA Graph 在当前设备为 `cuda:0` 时捕获和重放，而重放在当前设备的流上运行。现在像其他引擎一样在 `torch.cuda.device(graphs.device)` 下捕获和重放（[加速](/docs/development-acceleration#cuda-graphcomputecuda_graphs)）。
 
 旋转位置表、IndexTTS 的原地 GELU 和 Fish Speech 的 Snake 在 CUDA 上以 fp32、fp16 和 bf16 给出与参考相同的结果位（有 GPU 时精确性测试现在也在 CUDA 上运行）；CosyVoice 的 U-Net 掩码是只构造一次的同一个张量。Fish Speech 在 GPU 上训练时仍在 CPU 生成器上重放上游的初始化，因为上游在 CPU 上构建模型。

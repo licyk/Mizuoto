@@ -41,6 +41,11 @@ Shared: `text/tokenize/bpe.py`, `runtime/lm/cache.py`, `runtime/graphs.py`, `nn/
 - **A codec module upstream never runs is not built.** Upstream's codec builds a transformer for the decoder's first block but never attaches it (no weights, never run). `codec.pth` also holds RoPE tables and masks an older upstream saved, which upstream no longer loads; they are ignored.
 - **Accepted, with no effect**: `normalize` and `repetition_penalty` reach nothing in upstream's inference path, so they do nothing here either.
 - **References encode on a GPU.** Upstream loads the codec in bf16 on a GPU and `encode_reference` passes it float32 audio, so cloning there fails (`Input type (float) and bias type (c10::BFloat16) should be the same`; reproduced with 0.1 on an RTX 3090). The port casts the reference audio to the codec's precision; on the CPU, in fp32, nothing changes.
+- **Snake on a GPU** is upstream's TorchScript function, computed as TorchScript computes it rather than as the same code run eagerly:
+  - **Under autocast** (decoding in bf16 or fp16) it runs in float32 throughout. Eager autocast keeps `alpha · x` and the sine in the low precision; the port did so until mizuoto-fishspeech 0.3.3, and its decoded audio differed from upstream's by up to 0.036 on an RTX 3060.
+  - **Without autocast** (encoding references) the operations run in place, with the same result.
+  - **Against upstream:** with TorchScript's fuser off, the port's codec gives upstream's reference codes and decoded audio bit for bit on an RTX 3060 in bf16 (Drama 3's `codec.pth`, which S2 Pro shares; three clips).
+  - **Upstream's fused kernel:** from a shape's second call, upstream's TorchScript fuses Snake, which changes rounding and depends on what the process has already run. Against that, the decoded audio is within 0.01 and about a fifth of the reference codes differ. Computing Snake in float32 and rounding once, as the fused kernel does, still left 8–14 % of the codes different, so no fixed computation can follow it.
 
 ## Memory and speed
 
@@ -128,7 +133,12 @@ With `compute.cuda_graphs` (an NVIDIA GPU holding the backbone and the tower who
 
 Handles: the backbone (`kind="sequence"`; each layer two units, its attention `hot` and its MoE, and the output head `hot`), the tower (`sequence`) and the codec. The experts stream **by the row** ([Development: memory](/docs/development-memory#units-what-streams)): a layer whose MoE unit is not resident keeps its 256 experts in pinned host memory and each call copies the experts its tokens are routed to (a decoding step: 8 a layer, about 25 MB; a prompt block: expert by expert), so a GPU far smaller than the model runs it. Whole, the model needs about 44 GB; its dense part (attention, shared experts, embeddings and head, the tower) is about 7.5 GB in bfloat16. Working memory per request: the softmax layers' and the tower's caches for the request's rows (at most 10 240), the DeltaNet states, a prompt block's activations and the experts a step dequantizes.
 
-On the CPU, in float32 with 16 threads, a frame takes about 2.1 s, upstream's modules as long (a second of speech is 21.5 frames: some 45 s of compute); a prompt of 230 rows about 35 s. A GPU run is pending (no GPU was visible when this was measured).
+On the CPU, in float32 with 16 threads, a frame takes about 2.1 s, upstream's modules as long (a second of speech is 21.5 frames: some 45 s of compute); a prompt of 230 rows about 35 s. The real model has not run on a GPU here: it needs about 44 GB on the device, or 48 GB of RAM to stream from.
+
+A random model with the real one's shapes but 8 experts did run, on an RTX 3060 (2026-11-03, torch 2.8, bf16, 8.5 GB on the device). Every token still uses 8 experts, so a decoding step does the real model's work.
+- **Speed:** 150 frames took 19.2 s eagerly and 16.3 s with CUDA graphs, ×1.18 (128 → 109 ms a frame), identical audio.
+- **Graphed frames:** about 7,250 kernels each, the device busy 97 % of the time.
+- **The tiny test model:** ×2.1 (1.56 → 0.74 s a request), identical too.
 
 ### Parity
 

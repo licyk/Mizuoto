@@ -178,7 +178,9 @@ Details: `development-runtime`, `development-memory`, `development-acceleration`
 - TorchScript functions are fused on CUDA after their first call per shape: their bits depend on the shapes the process
   has seen, and the fuser compiles on the current device (a training stage makes its device current for it). Only
   GPT-SoVITS's training gate stays scripted, as upstream's (its symbolic gradients differ from eager ones); VoxCPM's
-  Snake runs eagerly. Do not add more.
+  Snake runs eagerly. Do not add more. A scripted function also applies autocast its own way: under autocast
+  upstream's TorchScript Snake computes in float32 throughout, where the same code run eagerly keeps the low precision,
+  so Fish Speech's eager Snake does what the script does (compare a port with the script, fuser off).
 - Compare CPU runs with the same thread count: CPU kernels split their sums by it.
 
 ## 6. Feature areas: where to look
