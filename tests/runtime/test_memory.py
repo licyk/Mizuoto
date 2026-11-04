@@ -680,6 +680,44 @@ def test_training_estimates():
     assert lora.optimizer == 10_000_000 * 12 and lora.gradients == 10_000_000 * 2
 
 
+def test_a_gpu_keeps_the_os_reserve_beside_the_setting():
+    """Windows' share of a GPU (200 MB, ComfyUI's extra reserve there) adds to ``compute.vram_reserve_mb`` on a GPU only."""
+    policy = VramPolicy(reserve_bytes=1024 * MB, os_reserve_bytes=200 * MB)
+    assert policy.device_reserve("cuda") == 1224 * MB and policy.device_reserve("xpu") == 1224 * MB
+    assert policy.device_reserve("cpu") == 1024 * MB
+    import os
+
+    assert VramPolicy().os_reserve_bytes == (200 * MB if os.name == "nt" else 0)
+
+
+class _CacheDevices:
+    """A GPU's free memory and torch's unused cache, for the manager's cache rule."""
+
+    def __init__(self, free: int, cached: int) -> None:
+        self.free, self.held, self.calls = free, cached, []
+
+    def simulated(self, name: str) -> None:
+        return None
+
+    def cached(self, name: str) -> int:
+        return self.held
+
+    def memory(self, name: str) -> tuple[int, int]:
+        return self.free, 24 * 1024 * MB
+
+    def empty_cache(self, name: str | None = None, collect: bool = True) -> None:
+        self.calls.append((name, collect))
+
+
+@pytest.mark.parametrize(("cached_mb", "released"), [(0, False), (1000, False), (1100, True)])
+def test_the_cache_goes_back_when_it_is_over_a_quarter_of_the_free_memory(cached_mb, released):
+    """ComfyUI's rule (``free_memory``): before a load, torch's unused cache is released when it exceeds 25 % of the
+    free memory (which counts it), without a garbage collection."""
+    devices = _CacheDevices(4000 * MB, cached_mb * MB)
+    ModelManager(devices)._release_cache("cuda:0")  # ty: ignore[invalid-argument-type]
+    assert devices.calls == ([("cuda:0", False)] if released else [])
+
+
 def test_frozen_weights_in_the_autocast_dtype_give_the_same_products():
     """Under bf16 autocast a linear layer's float32 weight is cast to bf16 at every product: storing it so is the same."""
     from mizuoto.training.memory import frozen_in
@@ -714,6 +752,35 @@ def test_a_streamed_frozen_linear_gives_the_resident_gradients():
     y1.backward(g)
     y2.backward(g)
     assert torch.equal(x1.grad, x2.grad)
+
+
+def test_streamed_frozen_weights_stay_in_ram_when_the_model_moves():
+    """``stream_frozen`` before ``place``: the frozen weights (a layer's own, or its ``base_layer``'s) never reach the
+    device; everything else does, and the products are the resident ones'."""
+    from mizuoto.training.memory import place, stream_frozen, streamed_linear
+
+    class Own(torch.nn.Linear):
+        streamed = None
+
+    class Wrapped(torch.nn.Module):
+        def __init__(self) -> None:
+            super().__init__()
+            self.base_layer = torch.nn.Linear(4, 4)
+            self.lora_A = torch.nn.Linear(4, 2, bias=False)
+            self.streamed = None
+
+    model = torch.nn.Sequential(Own(4, 4), Wrapped(), torch.nn.LayerNorm(4))
+    model.requires_grad_(False)
+    model[1].lora_A.requires_grad_(True)
+    moved = stream_frozen([model[0], model[1]], "meta")  # a device that is not the CPU
+    assert moved == 2 * (16 + 4) * 4 and model[0].streamed == torch.device("meta")
+    place(model, "meta")
+    assert model[0].weight.device.type == "cpu" and model[1].base_layer.bias.device.type == "cpu"
+    assert model[1].lora_A.weight.device.type == "meta" and model[2].weight.device.type == "meta"
+    assert model[0].weight.shape == (4, 4) and model[1].base_layer.weight.shape == (4, 4)
+    x = torch.randn(3, 4)
+    w, b = model[1].base_layer.weight, model[1].base_layer.bias
+    assert torch.equal(streamed_linear(x, w, b, torch.device("cpu")), torch.nn.functional.linear(x, w, b))
 
 
 def test_the_host_optimizer_steps_as_the_plain_one_on_the_cpu():

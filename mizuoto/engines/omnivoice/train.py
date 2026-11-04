@@ -191,7 +191,7 @@ class OmniVoiceTrainer(Trainer):
         import torch
 
         from mizuoto.text.tokenize.bpe import load_bpe
-        from mizuoto.training.memory import checkpoint_every, checkpoint_units, host_optimizer, preset, wants
+        from mizuoto.training.memory import checkpoint_every, checkpoint_units, frozen_in, host_optimizer, place, preset, stream_frozen, wants
 
         recipe = Recipe.of(ctx)
         manifest = ctx.workdir / "tokens" / "train" / "data.lst"
@@ -218,7 +218,13 @@ class OmniVoiceTrainer(Trainer):
         main_device = main_cpu if device.type == "cpu" else torch.Generator(device).manual_seed(recipe.seed)
         if recipe.lora:
             add_lora(model, recipe, main_device)
-        model.to(device)
+            if mixed is not None and preset(ctx, "frozen_dtype") == "autocast":  # the low presets
+                saved = frozen_in(model, mixed)
+                ctx.log(f"Frozen weights kept in {str(mixed).removeprefix('torch.')}: {saved / 2**20:.0f} MB saved")
+            if wants(ctx, "frozen_device", "cpu"):  # the lowest preset
+                moved = stream_frozen([m for m in model.modules() if hasattr(m, "base_layer")], device)
+                ctx.log(f"Frozen LoRA base weights stream from RAM: {moved / 2**20:.0f} MB off the device")
+        place(model, device)
         params = _upstream_order(model)
         trainable = [p for p in params if p.requires_grad]
         if wants(ctx, "optimizer_device", "cpu") and mixed != torch.float16:  # the lowest preset: AdamW's state in RAM
@@ -691,6 +697,9 @@ def _lora_class() -> type:
             self.scaling = alpha / r
             self.p = dropout
             self.generator = generator
+            self.streamed: torch.device | None = None
+            """The lowest memory preset may set it: the base layer's frozen weight rests in RAM and is copied to this
+            device for each product (``mizuoto.training.memory.streamed_linear``)."""
 
         def _dropout(self, x: torch.Tensor) -> torch.Tensor:
             if not self.training or self.p <= 0:
@@ -700,7 +709,12 @@ def _lora_class() -> type:
             return x * noise
 
         def forward(self, x: torch.Tensor) -> torch.Tensor:
-            result = self.base_layer(x)
+            if self.streamed is not None:
+                from mizuoto.training.memory import streamed_linear
+
+                result = streamed_linear(x, self.base_layer.weight, self.base_layer.bias, self.streamed)
+            else:
+                result = self.base_layer(x)
             dtype = result.dtype
             x = x.to(self.lora_A.weight.dtype)
             result = result + self.lora_B(self.lora_A(self._dropout(x))) * self.scaling

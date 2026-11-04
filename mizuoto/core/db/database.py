@@ -130,6 +130,10 @@ MIGRATIONS: list[str] = [
     """
     ALTER TABLE transcripts ADD COLUMN beams INTEGER NOT NULL DEFAULT 5;
     """,
+    # 5: migration 1's voices table goes: nothing ever read or wrote it (a voice is its folder, scanned)
+    """
+    DROP TABLE IF EXISTS voices;
+    """,
 ]
 
 

@@ -79,7 +79,8 @@ def visible_gpus(rows: list[tuple[str, str]], value: str | None) -> list[int]:
     """Which of ``rows`` (``nvidia-smi``'s index and UUID per GPU) torch will see, in its order, under
     ``CUDA_VISIBLE_DEVICES=value``: every one when it is unset; else its entries in turn, each an index or a ``GPU-``
     UUID prefix, up to the first that names no GPU (as CUDA reads it; empty: none). Indices are ``nvidia-smi``'s, in
-    PCI bus order, which is CUDA's on machines whose GPUs are alike (``CUDA_DEVICE_ORDER=PCI_BUS_ID`` makes it so)."""
+    PCI bus order, which is CUDA's here: the host sets ``CUDA_DEVICE_ORDER=PCI_BUS_ID`` unless the environment sets an
+    order (``core.inference.service.set_device_order``; CUDA's default puts the fastest first)."""
     if value is None:
         return list(range(len(rows)))
     out: list[int] = []

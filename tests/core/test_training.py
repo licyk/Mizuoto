@@ -195,9 +195,10 @@ def test_memory_estimates_cover_the_measured_peaks_and_follow_the_batch():
     assert estimate_mb("voxcpm", "lora", 1535, lora=True, hyperparams={"batch_size": 0}) == estimate_mb("voxcpm", "lora", 1535, lora=True)
 
 
-def test_the_warning_before_a_run_names_a_batch_that_fits(services, monkeypatch):
-    """No preset helps Fish Speech's LoRA at its recipe's batch (4) on a 24 GB card: the warning names the largest
-    batch the estimate fits (3: 2 measured 15.6 GB, 4 ran out of memory)."""
+def test_the_warning_before_a_run_names_a_preset_or_a_batch_that_fits(services, monkeypatch):
+    """Fish Speech's LoRA at its recipe's batch (4) does not fit a 24 GB card under ``standard`` (2 measured 15.6 GB, 4
+    ran out of memory); ``lowest`` streams its frozen base from RAM (2 measured 7.9 GB), so the warning names it. On a
+    12 GB card no preset fits batch 4: under ``lowest`` the warning names the largest batch the estimate fits (3)."""
     from types import SimpleNamespace
 
     tr = services.training
@@ -207,12 +208,43 @@ def test_the_warning_before_a_run_names_a_batch_that_fits(services, monkeypatch)
     monkeypatch.setattr(tr._runtime.compute, "info", lambda refresh=False: SimpleNamespace(devices=[device]))
     monkeypatch.setattr(tr, "method", lambda exp, engine: (None, method))
     lines: list[str] = []
-    exp = SimpleNamespace(engine="fishspeech", method="lora", base_model="fishspeech/s2-pro", hyperparams={})
+    exp = SimpleNamespace(key="fishspeech/x", engine="fishspeech", method="lora", base_model="fishspeech/s2-pro", hyperparams={})
     tr._preflight(exp, "cuda:0", SimpleNamespace(log=lines.append))
-    assert len(lines) == 1 and "lower the batch_size hyperparameter to 3" in lines[0]
+    assert len(lines) == 1 and "Memory to lowest" in lines[0]
     lines.clear()
     tr._preflight(SimpleNamespace(**{**vars(exp), "hyperparams": {"batch_size": 2}}), "cuda:0", SimpleNamespace(log=lines.append))
     assert lines == []
+    device.memory_total_mb, device.memory_used_mb = 12288, 300
+    services.settings.update({"training": {"memory": "lowest"}})
+    tr._preflight(exp, "cuda:0", SimpleNamespace(log=lines.append))
+    assert len(lines) == 1 and "lower the batch_size hyperparameter to 3" in lines[0]
+
+
+def test_the_plan_shows_each_preset_against_the_free_memory(services, monkeypatch):
+    """``plan`` (``mizuoto train plan``): the device the run takes, each preset's estimate against its free memory, the
+    batch the peak follows and the advice the pre-run warning gives."""
+    from types import SimpleNamespace
+
+    from mizuoto.core.training.estimate import estimate_mb
+
+    tr = services.training
+    method = SimpleNamespace(hyperparams={"batch_size": SimpleNamespace(default=4)})
+    monkeypatch.setattr(tr._models, "get", lambda _id: SimpleNamespace(size_mb=10498))
+    device = SimpleNamespace(id="cuda:0", memory_total_mb=24576, memory_used_mb=1100)
+    monkeypatch.setattr(tr._runtime.compute, "info", lambda refresh=False: SimpleNamespace(devices=[device]))
+    monkeypatch.setattr(tr, "method", lambda exp, engine: (None, method))
+    monkeypatch.setattr(tr, "_device", lambda engine: "cuda:0")
+    exp = SimpleNamespace(key="fishspeech/x", engine="fishspeech", method="lora", base_model="fishspeech/s2-pro", hyperparams={})
+    monkeypatch.setattr(tr, "get", lambda key: exp)
+    plan = tr.plan("fishspeech/x")
+    expected = estimate_mb("fishspeech", "lora", 10498, True, {"batch_size": 4})
+    assert (plan.device, plan.free_mb, plan.total_mb, plan.preset) == ("cuda:0", 23476, 24576, "standard")
+    assert [(p.preset, p.memory_mb, p.fits) for p in plan.presets] == [(k, expected[k], expected[k] <= 23476) for k in ("standard", "low", "lowest")]
+    assert plan.batch == {"name": "batch_size", "value": 4} and plan.fits is False and "Memory to lowest" in (plan.advice or "")
+    exp.hyperparams = {"batch_size": 2}
+    plan = tr.plan("fishspeech/x")
+    assert plan.fits is True and plan.advice is None and plan.batch == {"name": "batch_size", "value": 2}
+    assert services.training.plan.__doc__
 
 
 def test_qwen3tts_speaker_training_refuses_the_0_6b_base_before_a_run(tmp_path):

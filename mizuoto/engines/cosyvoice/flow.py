@@ -34,11 +34,14 @@ def fixed_noise() -> torch.Tensor:
 class CFM(nn.Module):
     """``ConditionalCFM`` / ``CausalConditionalCFM``: the estimator and the Euler solver."""
 
+    rand_noise: torch.Tensor | None
+
     def __init__(self, estimator: nn.Module, inference_cfg_rate: float = 0.7, causal: bool = False) -> None:
         super().__init__()
         self.estimator = estimator
         self.inference_cfg_rate = inference_cfg_rate
-        self.rand_noise = fixed_noise() if causal else None
+        # a buffer, so the manager places it with the flow (4.8 MB, not copied to the device at every call)
+        self.register_buffer("rand_noise", fixed_noise() if causal else None, persistent=False)
         self.compiled_estimator: Compiled | None = None
         """``compute.compile``: the estimator compiled (``mizuoto.runtime.compile``), called instead of it."""
 

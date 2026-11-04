@@ -55,7 +55,8 @@ const ticks = computed(() => {
   const n = 4;
   const fmt = (v: number) => (Math.abs(v) >= 100 ? v.toFixed(0) : Math.abs(v) >= 1 ? v.toFixed(1) : v.toFixed(3));
   return {
-    x: Array.from({ length: n + 1 }, (_, i) => b.x0 + ((b.x1 - b.x0) * i) / n).map((v) => ({ pos: sx(v), text: v.toFixed(0) })),
+    // whole numbers (steps) unless the range is short (seconds of audio), where they would repeat
+    x: Array.from({ length: n + 1 }, (_, i) => b.x0 + ((b.x1 - b.x0) * i) / n).map((v) => ({ pos: sx(v), text: v.toFixed(b.x1 - b.x0 < 2 * n ? 1 : 0) })),
     y: Array.from({ length: n + 1 }, (_, i) => b.y0 + ((b.y1 - b.y0) * i) / n).map((v) => ({ pos: sy(v), text: fmt(v) })),
   };
 });

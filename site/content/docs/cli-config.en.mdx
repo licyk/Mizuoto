@@ -160,7 +160,7 @@ Access tokens, the origin check and the Host check are described in [HTTP API](/
 | `compute.default_device` | `auto` | Engines' default device: `auto`, `cpu`, `cuda:N` (NVIDIA, or AMD on ROCm), `xpu:N` (Intel) or `mps` | **Compute** › **Default device** |
 | `compute.unload_after_minutes` | `20` | Unload a model nobody used for this long; `0` keeps models loaded | **Compute** › **Unload models after idle minutes (0: never)** |
 | `compute.max_resident_models` | `3` | Models kept loaded at once across every engine (1–32); the least recently used idle one is unloaded first | **Compute** › **Models kept in memory** |
-| `compute.vram_reserve_mb` | `1024` | GPU memory (MB) left free beyond what a request needs: idle models give up memory (part by part) until it fits | **Compute** › **GPU memory left free (MB)** |
+| `compute.vram_reserve_mb` | `1024` | GPU memory (MB) left free beyond what a request needs: idle models give up memory (part by part) until it fits. Windows adds 200 MB for the desktop | **Compute** › **GPU memory left free (MB)** |
 | `compute.vram_mode` | `auto` | How models use GPU memory: `auto`/`normal` (whole when they fit, else partly, the rest streaming from RAM), `high` (whole or not at all), `low` (at most half the free memory), `none` (almost all streams) | **Compute** › **How models use GPU memory** |
 | `compute.vram_limit_mb` | `0` | Use at most this much of each GPU (MB; 0: all) | **Compute** › **Use at most this much of each GPU** |
 | `compute.ram_reserve_mb` | `null` | RAM left free (MB); below it copies of weights in RAM are dropped and idle models unloaded. `null`: the larger of 2 GB and a tenth of the RAM | **Compute** › **RAM left free** |

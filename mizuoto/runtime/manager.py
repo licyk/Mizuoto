@@ -18,7 +18,9 @@ a model's components begins with ``load(handles, memory_required)``:
 - ``unregister`` frees them, with no copy back, when a model is unloaded.
 - On the CPU nothing is moved and nothing is counted, unless the device is simulated (``DeviceService.simulate``:
   tests and the parity harness), where the manager counts what it placed against the simulated size.
-- ``empty_cache`` runs after components give up memory, never per request (ComfyUI's policy).
+- ``empty_cache`` runs after components give up memory, and before a load when the memory torch holds unused is more
+  than a quarter of the free memory (ComfyUI's ``free_memory``): it goes back to the driver, for other programs and
+  against fragmentation. Never per step.
 """
 
 from __future__ import annotations
@@ -171,7 +173,8 @@ class ModelManager:
         kind = device_kind(device)
         mode = policy.mode_for(kind, self._mode(group))
         streamer = self._streamer(device, policy)
-        reserve = policy.reserve_bytes
+        reserve = policy.device_reserve(kind)
+        self._release_cache(device)
         need = sum(h.size_bytes - h.loaded_bytes for h in group) + memory + reserve
         free = self._free(device)
         if free is not None and free < need:
@@ -459,6 +462,19 @@ class ModelManager:
 
     def _free(self, device: str) -> int | None:
         return self._memory(device)[0]
+
+    def _release_cache(self, device: str) -> None:
+        """Hand torch's unused cached memory back to the driver when it is more than a quarter of the free memory
+        (ComfyUI's rule in ``free_memory``). The free memory counts it already; given back, other programs can use it and
+        a large allocation is not refused for want of one contiguous cached block."""
+        if self.devices.simulated(device) is not None:
+            return
+        cached = self.devices.cached(device)
+        if not cached:
+            return
+        free = self._free(device)
+        if free and cached > free * 0.25:
+            self.devices.empty_cache(device, collect=False)
 
     def _mode(self, group: list[ModelHandle]) -> str | None:
         for e in self._entries:

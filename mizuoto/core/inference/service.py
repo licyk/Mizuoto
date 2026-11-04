@@ -140,6 +140,33 @@ def set_allocator(choice: str) -> bool:
     return True
 
 
+def device_order_env(environ: dict[str, str] | None = None) -> dict[str, str]:
+    """``CUDA_DEVICE_ORDER=PCI_BUS_ID`` for a new process, unless ``environ`` (default this process's) orders CUDA's
+    devices itself (``set_device_order``)."""
+    import os
+
+    env = os.environ if environ is None else environ
+    return {} if "CUDA_DEVICE_ORDER" in env else {"CUDA_DEVICE_ORDER": "PCI_BUS_ID"}
+
+
+def set_device_order() -> bool:
+    """Number CUDA's devices in PCI bus order in this process (and the processes it starts), before CUDA is first used:
+    ``nvidia-smi``, which the host's probe reads and the UI names devices by, numbers them so, where CUDA by default
+    puts the fastest first. Alike GPUs come in the same order either way; unlike ones made ``cuda:0`` another card than
+    the one shown as ``cuda:0``. Leaves an order the environment sets alone. Returns whether it set one."""
+    import os
+    import sys
+
+    if "CUDA_DEVICE_ORDER" in os.environ:
+        return False
+    torch = sys.modules.get("torch")
+    if torch is not None and torch.cuda.is_initialized():
+        logger.warning("CUDA's devices are numbered already; CUDA_DEVICE_ORDER=PCI_BUS_ID applies at the next start")
+        return False
+    os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
+    return True
+
+
 def policy_from(c: Any) -> Any:
     """The runtime's ``VramPolicy`` from the ``compute`` settings."""
     from mizuoto.runtime.policy import VramPolicy
@@ -173,6 +200,7 @@ class InferenceService:
                 c = self._settings.settings.compute
                 cpu.apply(c.cpu_allocator, c.cpu_threads)  # before torch is imported: OpenMP and torch read them then
                 set_allocator(c.cuda_allocator)
+                set_device_order()
 
                 from mizuoto.runtime.accel import features
                 from mizuoto.runtime.device import DeviceService

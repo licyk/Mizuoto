@@ -29,7 +29,7 @@ EXPECTED_TREE = {
     "remote": {"add": None, "list": None, "remove": None, "use": None},
     "runtime": None,
     "speak": None,
-    "train": {k: None for k in ("delete", "edit", "export", "list", "methods", "metrics", "new", "run", "status")},
+    "train": {k: None for k in ("delete", "edit", "export", "list", "methods", "metrics", "new", "plan", "run", "status")},
     "version": None,
     "webui": None,
     "voice": {
@@ -223,6 +223,8 @@ def test_dataset_and_train(runner, tmp_path):
     assert "speaker" in runner.invoke(app, ["train", "methods", "dummy/default"]).stdout
     r = runner.invoke(app, ["train", "new", "t1", "--base", "dummy/default", "--dataset", "tones", "--hp", "epochs=1"])
     assert r.exit_code == 0, r.output
+    r = runner.invoke(app, ["train", "plan", "t1"])
+    assert r.exit_code == 0 and "on cpu" in r.stdout and "Trains on the CPU" in r.stdout, r.output
     r = runner.invoke(app, ["train", "run", "t1"])
     assert r.exit_code == 0 and "Exported voice" in r.stdout, r.output
     assert "loss" in runner.invoke(app, ["train", "metrics", "t1"]).stdout

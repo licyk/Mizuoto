@@ -246,6 +246,27 @@ def test_training_stages_get_the_cuda_allocator_whether_or_not_the_host_loaded_a
     assert allocator_env("async", {"PYTORCH_CUDA_ALLOC_CONF": "expandable_segments:True"}) == {}  # the environment's wins
 
 
+def test_cuda_numbers_its_devices_as_the_probe_does(monkeypatch):
+    """PCI bus order (``nvidia-smi``'s, which the probe and the UI name devices by) for the host and its training
+    stages, unless the environment orders them itself; not once CUDA is in use."""
+    import os
+    import sys
+
+    from mizuoto.core.inference.service import device_order_env, set_device_order
+
+    monkeypatch.delenv("CUDA_DEVICE_ORDER", raising=False)
+    torch = sys.modules.get("torch")
+    if torch is not None:
+        monkeypatch.setattr(torch.cuda, "is_initialized", lambda: True)
+        assert set_device_order() is False and "CUDA_DEVICE_ORDER" not in os.environ
+        monkeypatch.setattr(torch.cuda, "is_initialized", lambda: False)
+    assert set_device_order() is True and os.environ["CUDA_DEVICE_ORDER"] == "PCI_BUS_ID"
+    monkeypatch.setenv("CUDA_DEVICE_ORDER", "FASTEST_FIRST")
+    assert set_device_order() is False and os.environ["CUDA_DEVICE_ORDER"] == "FASTEST_FIRST"
+    assert device_order_env({}) == {"CUDA_DEVICE_ORDER": "PCI_BUS_ID"}
+    assert device_order_env({"CUDA_DEVICE_ORDER": "FASTEST_FIRST"}) == {}
+
+
 def test_attention_follows_the_settings_per_engine(services):
     rt = services.runtime
     assert rt.attention("dummy") == ("auto", False)

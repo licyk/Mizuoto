@@ -160,7 +160,7 @@ mizuoto webui
 | `compute.default_device` | `auto` | 引擎的默认设备：`auto`、`cpu`、`cuda:N`（NVIDIA，或 ROCm 上的 AMD）、`xpu:N`（Intel）或 `mps` | **计算** › **默认设备** |
 | `compute.unload_after_minutes` | `20` | 模型空闲这么久后卸载；`0` 表示一直保留 | **计算** › **空闲多少分钟后卸载模型（0：从不）** |
 | `compute.max_resident_models` | `3` | 所有引擎合计同时保持加载的模型数（1–32），超出时先卸载最久没用的空闲模型 | **计算** › **保留在内存中的模型数** |
-| `compute.vram_reserve_mb` | `1024` | 在请求所需之外保留的空闲显存（MB）：不够时空闲模型（逐部分）让出显存，直到放得下 | **计算** › **保留的空闲显存（MB）** |
+| `compute.vram_reserve_mb` | `1024` | 在请求所需之外保留的空闲显存（MB）：不够时空闲模型（逐部分）让出显存，直到放得下。Windows 上另加 200 MB 留给桌面 | **计算** › **保留的空闲显存（MB）** |
 | `compute.vram_mode` | `auto` | 模型如何使用显存：`auto`/`normal`（放得下时整体加载，否则部分加载，其余从内存流式加载）、`high`（只整体加载）、`low`（最多一半空闲显存）、`none`（几乎全部流式加载） | **计算** › **模型如何使用显存** |
 | `compute.vram_limit_mb` | `0` | 每块 GPU 最多使用（MB；0：全部） | **计算** › **每块 GPU 最多使用** |
 | `compute.ram_reserve_mb` | `null` | 保留的空闲内存（MB）；低于它时丢弃内存中的权重副本、卸载空闲模型。`null`：2 GB 与内存十分之一中较大者 | **计算** › **保留的空闲内存** |

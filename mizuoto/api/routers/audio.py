@@ -11,7 +11,7 @@ from mizuoto.api.errors import ERROR_RESPONSES
 from mizuoto.api.files import audio_response
 from mizuoto.api.uploads import RAW_BODY, read_chunks, spool
 from mizuoto.core.asr.service import Transcript
-from mizuoto.core.audio.service import AudioFile, BrowseListing, Peaks
+from mizuoto.core.audio.service import AudioAnalysis, AudioFile, BrowseListing, Peaks
 from mizuoto.core.record import Record
 
 router = APIRouter(prefix="/v1/audio", tags=["audio"], responses=ERROR_RESPONSES)
@@ -68,6 +68,12 @@ def get_content(services: ServicesDep, audio_id: str) -> FileResponse:
 @router.get("/files/{audio_id}/peaks", operation_id="get_audio_peaks")
 def get_peaks(services: ServicesDep, audio_id: str, points: int = 1024) -> Peaks:
     return services.audio.peaks(services.audio.path_of(audio_id), points)
+
+
+@router.get("/files/{audio_id}/analysis", operation_id="get_audio_analysis")
+def get_analysis(services: ServicesDep, audio_id: str, columns: int = 800) -> AudioAnalysis:
+    """The file's spectrogram and pitch curve, for judging it."""
+    return services.audio.analyse(services.audio.path_of(audio_id), columns)
 
 
 @router.post("/transcribe", operation_id="transcribe_audio")

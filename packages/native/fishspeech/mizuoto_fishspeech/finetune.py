@@ -164,9 +164,17 @@ class LoraLinear(ops.Linear):
         self.scaling = config.alpha / config.r
         self.lora_dropout: nn.Module = nn.Dropout(p=config.dropout) if config.dropout > 0 else nn.Identity()
         self.weight.requires_grad = False
+        self.streamed: torch.device | None = None
+        """The lowest memory preset may set it: the frozen weight rests in RAM and is copied to this device for each
+        product (``mizuoto.training.memory.streamed_linear``)."""
 
     def forward(self, input: torch.Tensor) -> torch.Tensor:
-        result = F.linear(input, self.weight, bias=self.bias)
+        if self.streamed is not None:
+            from mizuoto.training.memory import streamed_linear
+
+            result = streamed_linear(input, self.weight, self.bias, self.streamed)
+        else:
+            result = F.linear(input, self.weight, bias=self.bias)
         result += (self.lora_dropout(input) @ self.lora_A.transpose(0, 1) @ self.lora_B.transpose(0, 1)) * self.scaling
         return result
 

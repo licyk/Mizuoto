@@ -230,11 +230,29 @@ class DeviceService:
             return None
         return int(backend.max_memory_allocated(torch.device(name)))
 
-    def empty_cache(self, name: str | None = None) -> None:
-        """Collect garbage and hand cached device memory back to the driver."""
+    def cached(self, name: str) -> int | None:
+        """Bytes torch holds on the device but does not use (its caching allocator's free blocks); None where it cannot
+        tell (the CPU, MPS)."""
+        kind = device_kind(name)
+        if kind not in ("cuda", "xpu"):
+            return None
         import torch
 
-        gc.collect()
+        if kind == "cuda" and torch.cuda.is_available():
+            stats = torch.cuda.memory_stats(torch.device(name).index or 0)
+            return max(0, int(stats.get("reserved_bytes.all.current", 0)) - int(stats.get("active_bytes.all.current", 0)))
+        if kind == "xpu" and hasattr(torch, "xpu") and torch.xpu.is_available():
+            index = torch.device(name).index or 0
+            return max(0, int(torch.xpu.memory_reserved(index)) - int(torch.xpu.memory_allocated(index)))
+        return None
+
+    def empty_cache(self, name: str | None = None, collect: bool = True) -> None:
+        """Hand cached device memory back to the driver, after collecting garbage (``collect``: tensors only cycles still
+        hold)."""
+        import torch
+
+        if collect:
+            gc.collect()
         kind = device_kind(name) if name else None
         if kind in (None, "cuda") and torch.cuda.is_available():
             torch.cuda.empty_cache()

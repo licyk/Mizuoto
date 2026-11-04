@@ -54,8 +54,8 @@ On the CPU the manager moves and counts nothing (the load and offload device are
 
 `ModelManager.load(handles, memory)` decides per device:
 
-1. **Need** = the handles' bytes not yet on the device + the working memory (the estimate times its calibration, below) + `compute.vram_reserve_mb`.
-2. **Free** = the driver's free memory plus what torch's caching allocator holds but does not use, capped by `compute.vram_limit_mb` (less what this process already holds) when that is set.
+1. **Need** = the handles' bytes not yet on the device + the working memory (the estimate times its calibration, below) + the reserve: `compute.vram_reserve_mb`, and on Windows 200 MB more for the desktop's share of the GPU (`VramPolicy.device_reserve`; ComfyUI reserves 600 MB there and 400 elsewhere).
+2. **Free** = the driver's free memory plus what torch's caching allocator holds but does not use, capped by `compute.vram_limit_mb` (less what this process already holds) when that is set. When that unused cache is more than a quarter of the free memory, it is handed back to the driver first (`empty_cache` without a garbage collection; ComfyUI's rule in `free_memory`): other programs can then use it, and a large allocation is not refused for want of one contiguous cached block.
 3. If free memory falls short, other idle components give up memory (eviction, below), then free memory is measured again.
 4. If the handles fit, they load whole. Otherwise they load partly within the budget: free memory less working memory and reserve.
 
@@ -132,7 +132,7 @@ When free memory falls short, idle components on the same device give up the sho
 2. then those of models not in `engines.<id>.pinned_models` before pinned ones;
 3. then the least recently used.
 
-Components in use by any request are never victims; the running model's components that the current phase does not need are. Each victim gives up units, in reverse fill order, until the shortfall is met (`partially_unload`); in `high` and `shared` it leaves whole. `empty_cache` runs after an eviction, never per request.
+Components in use by any request are never victims; the running model's components that the current phase does not need are. Each victim gives up units, in reverse fill order, until the shortfall is met (`partially_unload`); in `high` and `shared` it leaves whole. `empty_cache` runs after an eviction, and before a load whose device holds more unused cache than a quarter of its free memory (step 2 above); never per step.
 
 Partly loading a phase's components: the smaller ones load whole first, each leaving the others at least their minimum, and the largest gets what is left, its remaining units streaming.
 
@@ -210,8 +210,8 @@ Training stages run in their own process and own their device: before a GPU stag
 | Preset | Adds | Results |
 | --- | --- | --- |
 | `standard` (default) | nothing: each recipe exactly | identical to upstream |
-| `low` | gradient checkpointing over each block (`gradient_checkpointing`: `blocks`, `every:k`; VoxCPM, Qwen3-TTS, OmniVoice, F5-TTS, CosyVoice), the recomputation with the global generators *and the trainer's own* put back; F5-TTS's EMA copy in RAM; VoxCPM's LoRA frozen weights in the autocast dtype | identical (tested per trainer on the CPU) |
-| `lowest` | also AdamW's state in RAM, stepped on the CPU (`host_optimizer`; Qwen3-TTS, OmniVoice, F5-TTS without a gradient scaler); VoxCPM's LoRA base weights streamed from RAM for each product (`streamed_linear`) | the optimizer's sums may differ in the last bits on a GPU |
+| `low` | gradient checkpointing over each block (`gradient_checkpointing`: `blocks`, `every:k`; VoxCPM, Qwen3-TTS, OmniVoice, F5-TTS, CosyVoice), the recomputation with the global generators *and the trainer's own* put back; F5-TTS's EMA copy in RAM; LoRA's frozen linear weights in the autocast dtype (`frozen_in`: VoxCPM, OmniVoice; Fish Speech's are bfloat16 already under `bf16-true`) | identical (tested per trainer on the CPU) |
+| `lowest` | also AdamW's state in RAM, stepped on the CPU (`host_optimizer`; Qwen3-TTS, OmniVoice, F5-TTS without a gradient scaler); LoRA's frozen base weights streamed from RAM for each product (`stream_frozen`, `streamed_linear`: VoxCPM, OmniVoice, Fish Speech), the model moved to its device without them (`place`) | the optimizer's sums may differ in the last bits on a GPU |
 
 The host optimizer keeps the float32 copies and the gradients in one buffer each and moves a step's gradients and parameters through one page-locked buffer per device dtype, with one wait; most of its step is AdamW's own arithmetic on the CPU (Qwen3-TTS 1.7B: about 4.5 s of its 5.5 s step), which only a fused optimizer, with other results, would shorten. A `lowest` stage runs without torch's huge pages (`compute.cpu_allocator`): with them its per-step allocations stalled in the kernel's compaction and the run took 2.2× as long.
 

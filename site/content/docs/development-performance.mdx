@@ -586,14 +586,16 @@ Qwen3-TTS 1.7B CustomVoice 和 VoiceDesign 取 4,300（CustomVoice 的短用例�
 | --- | --- | --- | --- |
 | CosyVoice 2 / 3 `llm`（以及 2 的 `llm_flow`） | 10,319 / 10,398 | 9,691 / 9,693 | 9,691 / 9,693 |
 | F5-TTS `full` | 8,821 | 7,395 | 5,374 |
-| Fish Speech S2 Pro LoRA，批量 1 / 2 / 4 | 12,267 / 15,641 / 显存不足 | 相同 | 相同 |
+| Fish Speech S2 Pro LoRA，批量 1 / 2 / 4 | 12,267 / 15,641 / 显存不足 | 相同 | — / 7,861 / —（2026-11-04 起） |
 | GPT-SoVITS `speaker`（批量 4；批量 2：3,881） | 4,676 | 4,676 | 4,670 |
-| OmniVoice `full` / LoRA | 11,724 / 7,301 | 11,714 / 2,971 | 4,713 / 2,766 |
+| OmniVoice `full` / LoRA | 11,724 / 7,301 | 11,714 / 2,099（2026-11-04 前为 2,971） | 4,713 / 1,053（2,766） |
 | Qwen3-TTS 1.7B `speaker` | 18,276 | 18,267 | 7,356 |
 | VoxCPM 0.5B `full` | 16,733 | 12,719 | 12,719 |
 | VoxCPM 0.5B / 1.5 / 2 LoRA（批量 16；0.5B 批量 2：4,343） | 8,661 / 10,222 / 14,498 | 3,116 / 3,301 / 9,094 | 2,970 / 3,301 / 9,094 |
 
 原来的经验公式几乎都低于这些峰值（GPT-SoVITS 低 5 倍，VoxCPM 的 `lowest` LoRA 低至 3.4 倍），对 Fish Speech 的 LoRA 估算为 14.1 GB，而它在默认批量下会超出 24 GB 显卡。现在的估算是这些峰值按基础模型大小缩放，再加一成和 512 MB，峰值随批量变化的地方也随批量调整；没有预设放得下时，警告会给出放得下的批量。
+
+**所有 LoRA 训练器的冻结权重（2026-11-04）。** OmniVoice 和 Fish Speech 的 LoRA 训练器用上了 VoxCPM 的两种工具：`low` 下冻结的线性层权重以自动混合精度的类型存放（OmniVoice；Fish Speech 在 `bf16-true` 下本来就是 bfloat16），`lowest` 下 LoRA 层的冻结权重留在锁页内存中，每次矩阵乘法时复制到 GPU（两者都有）。现在模型移到设备时不带这些权重（`place`），所以设备上从不存放它们，加载时也不例外。在 RTX 3060（12 GB，PCIe x4）上测量，OmniVoice 的 LoRA 在 `standard` 下的峰值与 3090 相同（7,300 对 7,301 MB）：OmniVoice 的 LoRA 在 `low` 下峰值 2,099 MB，`lowest` 下 1,053 MB（每步 `standard` 0.35 秒、`low` 0.54 秒、`lowest` 0.76 秒）；Fish Speech S2 Pro 的 LoRA 在批量 2、`lowest` 下峰值 7,861 MB，这张卡上每步 15.6 秒，而 `standard`（15,641 MB）根本放不下，其默认批量 4 估算为 12.6 GB，24 GB 的卡放得下。结果相同：在 CPU 上，训练器的测试比较每个损失值和每个适配器权重；在 GPU 上开启确定性内核时，OmniVoice 的一步分别用 float32 和 bfloat16 的冻结权重，损失值和全部 394 个可训练梯度逐位相同（不开确定性内核时，它的反向传播每次运行本来就不同，float32 对 float32 也一样）。
 
 ## GPU 上的注意力后端
 

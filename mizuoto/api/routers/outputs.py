@@ -6,7 +6,7 @@ from fastapi.responses import FileResponse, StreamingResponse
 from mizuoto.api.deps import LocalDep, ServicesDep
 from mizuoto.api.errors import ERROR_RESPONSES
 from mizuoto.api.files import audio_response, content_disposition
-from mizuoto.core.audio.service import Peaks
+from mizuoto.core.audio.service import AudioAnalysis, Peaks
 from mizuoto.core.errors import NotFoundError
 from mizuoto.core.files import reveal
 from mizuoto.core.outputs.models import Output, OutputPage, OutputQuery
@@ -98,6 +98,12 @@ def content(services: ServicesDep, output_id: str, download: bool = False) -> Fi
 @router.get("/{output_id}/peaks", operation_id="get_output_peaks")
 def peaks(services: ServicesDep, output_id: str, points: int = 1024) -> Peaks:
     return services.audio.peaks(services.outputs.path_of(output_id), points)
+
+
+@router.get("/{output_id}/analysis", operation_id="get_output_analysis")
+def analysis(services: ServicesDep, output_id: str, columns: int = 800) -> AudioAnalysis:
+    """The output's spectrogram and pitch curve, for judging it."""
+    return services.audio.analyse(services.outputs.path_of(output_id), columns)
 
 
 @router.get("/{output_id}/rerun", operation_id="get_output_rerun")

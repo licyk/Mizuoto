@@ -87,3 +87,28 @@ def test_trim_cuts_at_a_quiet_point():
     out = trim_to(clip, sr, 10.0)
     assert 8500 <= len(out) <= 8600
     assert len(trim_to(clip, sr, 20.0)) == len(clip)
+
+
+def test_the_analysis_finds_a_tones_pitch_and_draws_its_band():
+    """YIN finds a voiced tone's pitch (and none in silence); the spectrogram's loudest band holds the tone, 0–255 over
+    80 dB, its filters Slaney's as librosa's (checked against librosa 0.10: within 4e-9, and identical bytes)."""
+    import numpy as np
+
+    from mizuoto.core.audio.analysis import median_pitch, mel_filters, pitch_curve, spectrogram
+
+    sr = 16000
+    t = np.arange(sr) / sr
+    for hz in (80.0, 220.0, 440.0):
+        tone = (0.5 * np.sin(2 * np.pi * hz * t) + 0.2 * np.sin(4 * np.pi * hz * t)).astype(np.float32)
+        f0 = pitch_curve(np.concatenate([np.zeros(sr // 2, dtype=np.float32), tone]))
+        assert len(f0) == 151 and not f0[:45].any() and (f0[60:145] > 0).all()
+        median = median_pitch(f0)
+        assert median is not None and abs(median - hz) < hz * 0.005
+    assert median_pitch(np.zeros(10)) is None and pitch_curve(np.zeros(10, dtype=np.float32)).size == 0
+    spec, fmax = spectrogram((0.5 * np.sin(2 * np.pi * 1000 * t)).astype(np.float32), sr, columns=50)
+    assert spec.dtype == np.uint8 and spec.shape[0] == 128 and 50 <= spec.shape[1] <= 52 and fmax == 8000
+    band = int(spec[:, 10:40].mean(axis=1).argmax())
+    filters = mel_filters(sr, 1024, 128)
+    centre = float((filters[band] * np.linspace(0, sr / 2, 513)).sum() / filters[band].sum())
+    assert abs(centre - 1000) < 60 and spec.max() == 255
+    assert filters.shape == (128, 513) and (filters >= 0).all()

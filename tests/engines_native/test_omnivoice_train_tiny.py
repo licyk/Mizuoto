@@ -337,3 +337,12 @@ def test_the_optimizer_in_ram_trains_identically_on_the_cpu(setup, tmp_path):
     from tests.engines_native.training_memory import check_same_training
 
     assert check_same_training(_request(setup, "full", "tokens"), ["tokens", "train"], tmp_path, {"optimizer_device": "cpu"}, "kept in RAM") > 0
+
+
+def test_a_streamed_frozen_base_trains_identically(setup, tmp_path):
+    """The lowest preset's streamed LoRA base (here asked for on the CPU): the same losses and adapter."""
+    from tests.engines_native.training_memory import check_same_training
+
+    request = _request(setup, "lora", "tokens")
+    request["hyperparams"]["lora_dropout"] = 0.1
+    assert check_same_training(request, ["tokens", "train"], tmp_path, {"frozen_device": "cpu"}, "stream from RAM") > 0

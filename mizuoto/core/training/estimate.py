@@ -43,10 +43,10 @@ class Profile:
 PROFILES: dict[str, Profile] = {
     "voxcpm": Profile(weights=2.0, trained=0.93, host_optimizer=False, streamed_lora=True, frozen_dtype=True),
     "qwen3tts": Profile(weights=1.0, trained=0.85, host_optimizer=True),
-    "omnivoice": Profile(weights=1.0, trained=0.75, host_optimizer=True),
+    "omnivoice": Profile(weights=1.0, trained=0.75, host_optimizer=True, streamed_lora=True, frozen_dtype=True),
     "f5tts": Profile(weights=1.0, trained=0.96, ema=True, host_optimizer=True),
     "cosyvoice": Profile(weights=1.0, trained=0.5),
-    "fishspeech": Profile(weights=1.0, trained=0.83, checkpointing=False),
+    "fishspeech": Profile(weights=1.0, trained=0.83, checkpointing=False, streamed_lora=True),
     "gptsovits": Profile(weights=1.0, trained=0.3, checkpointing=False),
 }
 
@@ -67,10 +67,10 @@ MEASURED: dict[tuple[str, str], tuple[Measured, ...]] = {
     ),
     ("cosyvoice", "llm_flow"): (Measured(2943, {"standard": 10319, "low": 9691, "lowest": 9691}),),
     ("f5tts", "full"): (Measured(1338, {"standard": 8821, "low": 7395, "lowest": 5374}),),
-    ("fishspeech", "lora"): (Measured(10498, {"standard": 15641, "low": 15641, "lowest": 15641}, batch=2),),
+    ("fishspeech", "lora"): (Measured(10498, {"standard": 15641, "low": 15641, "lowest": 7861}, batch=2),),
     ("gptsovits", "speaker"): (Measured(303, {"standard": 4676, "low": 4676, "lowest": 4670}, batch=4),),
     ("omnivoice", "full"): (Measured(3116, {"standard": 11724, "low": 11714, "lowest": 4713}),),
-    ("omnivoice", "lora"): (Measured(3116, {"standard": 7301, "low": 2971, "lowest": 2766}),),
+    ("omnivoice", "lora"): (Measured(3116, {"standard": 7301, "low": 2099, "lowest": 1053}),),
     ("qwen3tts", "speaker"): (Measured(4334, {"standard": 18276, "low": 18267, "lowest": 7356}),),
     ("voxcpm", "full"): (Measured(1535, {"standard": 16733, "low": 12719, "lowest": 12719}, batch=16),),
     ("voxcpm", "lora"): (
@@ -79,7 +79,10 @@ MEASURED: dict[tuple[str, str], tuple[Measured, ...]] = {
         Measured(4731, {"standard": 14498, "low": 9094, "lowest": 9094}, batch=16),  # 2
     ),
 }
-"""``(engine, method)`` → its measurements (the stages' ``memory/peak_mb``, RTX 3090, 2026-10-18)."""
+"""``(engine, method)`` → its measurements (the stages' ``memory/peak_mb``, RTX 3090, 2026-10-18). OmniVoice's LoRA
+under ``low`` and ``lowest`` and Fish Speech's under ``lowest`` were measured again on an RTX 3060 (2026-11-04) once
+their frozen weights were kept in bfloat16 and streamed from RAM; ``standard`` measured there as on the 3090 (7,300
+against 7,301 MB)."""
 
 BATCH: dict[str, tuple[str, float, float]] = {
     "fishspeech": ("batch_size", 4, 3375),  # 12,267 MB at 1, 15,641 at 2; 4 does not fit 24 GB

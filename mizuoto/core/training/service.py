@@ -30,13 +30,13 @@ from mizuoto.core.engines.params import check_options
 from mizuoto.core.engines.registry import EngineRegistry
 from mizuoto.core.errors import AssetMissingError, CapabilityError, ConflictError, NotFoundError, ValidationError
 from mizuoto.core.files import trash
-from mizuoto.core.inference.service import allocator_env
+from mizuoto.core.inference.service import allocator_env, device_order_env
 from mizuoto.core.jobs.models import Job, JobStep
 from mizuoto.core.jobs.service import JobContext, JobService, JobSpec
 from mizuoto.core.process import host_target
 from mizuoto.core.settings import SettingsService
 from mizuoto.core.training.estimate import BATCH, PRESETS, estimate_mb
-from mizuoto.core.training.models import Artifact, Experiment, ExperimentInput, ExperimentPatch, MethodInfo, MetricPoint, RunRequest, StageState
+from mizuoto.core.training.models import Artifact, Experiment, ExperimentInput, ExperimentPatch, MethodInfo, MetricPoint, PresetPlan, RunRequest, StageState, TrainingPlan
 
 if TYPE_CHECKING:
     from mizuoto.core.datasets.service import DatasetService
@@ -160,34 +160,57 @@ class TrainingService:
             )
         return out
 
+    def plan(self, key: str) -> TrainingPlan:
+        """A run's memory plan before it starts: the device it would take, what it would hold there under each
+        ``training.memory`` preset (``estimate_mb``) against the free memory now, and what would make it fit."""
+        exp = self.get(key)
+        return self._plan(exp, self._device(exp.engine), refresh=True)
+
+    def _plan(self, exp: Experiment, device: str, refresh: bool = False) -> TrainingPlan:
+        info = self._models.get(exp.base_model)
+        hp = self._effective(exp, self.method(exp, exp.engine)[1])
+        preset = self._settings.settings.training.memory
+        plan = TrainingPlan(experiment=exp.key, engine=exp.engine, method=exp.method, base_model=exp.base_model, model_mb=info.size_mb or None, device=device, preset=preset)
+        if exp.engine in BATCH:
+            name, default, _ = BATCH[exp.engine]
+            plan.batch = {"name": name, "value": hp.get(name) or default}
+        if not info.size_mb:
+            return plan
+        lora = "lora" in exp.method
+        estimate = estimate_mb(exp.engine, exp.method, info.size_mb, lora, hp)
+        if device != "cpu":
+            found = next((d for d in self._runtime.compute.info(refresh=refresh).devices if d.id == device and d.memory_total_mb), None)
+            total = None if found is None else found.memory_total_mb
+            if found is not None and total:
+                plan.total_mb = total
+                plan.free_mb = total - (found.memory_used_mb or 0)
+        free = plan.free_mb
+        plan.presets = [PresetPlan(preset=p, memory_mb=estimate[p], fits=None if free is None else estimate[p] <= free) for p in PRESETS]
+        if free is None:
+            return plan
+        plan.fits = estimate[preset] <= free
+        if plan.fits:
+            return plan
+        better = next((p for p in PRESETS if PRESETS.index(p) > PRESETS.index(preset) and estimate[p] <= free), None)
+        plan.advice = f"set Settings › Training › Memory to {better} (mizuoto config set training.memory {better})" if better else "use a bigger GPU or the CPU"
+        if better is None and plan.batch is not None:  # a smaller batch may fit where no preset does
+            name, current = plan.batch["name"], plan.batch["value"]  # 0: the recipe's own (VoxCPM's 16)
+            if isinstance(current, (int, float)) and current > 1:
+                fits = next((b for b in range(int(current) - 1, 0, -1) if estimate_mb(exp.engine, exp.method, info.size_mb, lora, {**hp, name: b})[preset] <= free), None)
+                if fits is not None:
+                    plan.advice = f"lower the {name} hyperparameter to {fits}"
+        return plan
+
     def _preflight(self, exp: Experiment, device: str, ctx: JobContext) -> None:
         """Say so when the run is likely to need more of the GPU than is free: a rough estimate, so a warning
         in the job's log, with the preset that would fit, rather than a refusal."""
         try:
-            info = self._models.get(exp.base_model)
-            devices = self._runtime.compute.info(refresh=True).devices
-            free = next((d.memory_total_mb - (d.memory_used_mb or 0) for d in devices if d.id == device and d.memory_total_mb), None)
-            hp = self._effective(exp, self.method(exp, exp.engine)[1])
+            plan = self._plan(exp, device, refresh=True)
         except Exception:  # a check, never a reason to fail the run
             return
-        if free is None or not info.size_mb:
-            return
-        estimate = estimate_mb(exp.engine, exp.method, info.size_mb, "lora" in exp.method, hp)
-        preset = self._settings.settings.training.memory
-        if estimate[preset] <= free:
-            return
-        better = next((p for p in PRESETS if PRESETS.index(p) > PRESETS.index(preset) and estimate[p] <= free), None)
-        hint = f"set Settings › Training › Memory to {better} (mizuoto config set training.memory {better})" if better else "use a bigger GPU or the CPU"
-        if better is None and exp.engine in BATCH:  # a smaller batch may fit where no preset does
-            name, default, _ = BATCH[exp.engine]
-            current = hp.get(name) or default  # 0: the recipe's own (VoxCPM's 16)
-            if isinstance(current, (int, float)) and current > 1:
-                fits = next(
-                    (b for b in range(int(current) - 1, 0, -1) if estimate_mb(exp.engine, exp.method, info.size_mb, "lora" in exp.method, {**hp, name: b})[preset] <= free), None
-                )
-                if fits is not None:
-                    hint = f"lower the {name} hyperparameter to {fits}"
-        ctx.log(f"Warning: this run may need about {estimate[preset] / 1024:.1f} GB of {device}, which has {free / 1024:.1f} GB free: {hint}")
+        if plan.fits is False and plan.free_mb is not None:
+            need = next(p.memory_mb for p in plan.presets if p.preset == plan.preset)
+            ctx.log(f"Warning: this run may need about {need / 1024:.1f} GB of {device}, which has {plan.free_mb / 1024:.1f} GB free: {plan.advice}")
 
     def trainer(self, engine: str) -> str | None:
         """``module:Class`` of the engine's native trainer (``Engine.TRAINER``), or None."""
@@ -430,7 +453,7 @@ class TrainingService:
         compute = self._settings.settings.compute
         # the lowest preset's gigabytes of optimizer state in RAM stall on huge pages (cpu.py); other stages gain from them
         huge_pages = self._settings.settings.training.memory != "lowest"
-        env = {**cpu.child_env(compute.cpu_allocator, compute.cpu_threads, huge_pages=huge_pages), **allocator_env(compute.cuda_allocator)}
+        env = {**cpu.child_env(compute.cpu_allocator, compute.cpu_threads, huge_pages=huge_pages), **allocator_env(compute.cuda_allocator), **device_order_env()}
         deterministic = self._settings.settings.training.deterministic
         if deterministic:  # cuBLAS's deterministic workspaces, read when CUDA starts in the stage
             env["CUBLAS_WORKSPACE_CONFIG"] = ":4096:8"

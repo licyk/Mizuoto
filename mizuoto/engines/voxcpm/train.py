@@ -154,7 +154,7 @@ class VoxCpmTrainer(Trainer):
         from mizuoto.engines.voxcpm.sft import Clip, Loader, Packer, PlainScaler, StepResult, cosine_schedule, replay_construction, train_steps, trainable
         from mizuoto.engines.voxcpm.vae import AudioVAE
         from mizuoto.runtime.loading import fold_weight_norm, load_into, load_state_dict, unwrap
-        from mizuoto.training.memory import checkpoint_every, checkpoint_units, frozen_in, preset, stream_frozen, wants
+        from mizuoto.training.memory import checkpoint_every, checkpoint_units, frozen_in, place, preset, stream_frozen, wants
 
         recipe = Recipe.of(ctx)
         data = ctx.workdir / "data"
@@ -188,7 +188,17 @@ class VoxCpmTrainer(Trainer):
         load_into(model, unwrap(load_state_dict(weights), "state_dict"), ignore=["*.lora_A", "*.lora_B"] if lora else (), what="VoxCPM model")
         vae.requires_grad_(False)
         vae.encoder.to(device)  # training encodes every batch; its decoder stays in RAM
-        model.to(device)
+        cuda = device.type == "cuda"
+        mixed = {"auto": torch.bfloat16, "bf16": torch.bfloat16, "fp16": torch.float16}.get(ctx.precision) if cuda else None
+        if lora is not None and mixed is not None and preset(ctx, "frozen_dtype") == "autocast":
+            from mizuoto.engines.voxcpm.model import LoRALinear
+
+            saved = frozen_in(model, mixed, (LoRALinear,))  # cast here as on the device: round to nearest even
+            ctx.log(f"Frozen weights kept in {str(mixed).removeprefix('torch.')}: {saved / 2**20:.0f} MB saved")
+        if lora is not None and wants(ctx, "frozen_device", "cpu"):
+            moved = stream_frozen(layers, device)
+            ctx.log(f"Frozen LoRA base weights stream from RAM: {moved / 2**20:.0f} MB off the device")
+        place(model, device)
         model.train()
         params = trainable(model, lora)
         every = checkpoint_every(preset(ctx, "gradient_checkpointing"))
@@ -197,16 +207,6 @@ class VoxCpmTrainer(Trainer):
             n = checkpoint_units(units, list({id(g): g for g in (cpu_gen, device_gen)}.values()), every)
             ctx.log(f"Gradient checkpointing: {n} of {len(units)} blocks")
 
-        cuda = device.type == "cuda"
-        mixed = {"auto": torch.bfloat16, "bf16": torch.bfloat16, "fp16": torch.float16}.get(ctx.precision) if cuda else None
-        if lora is not None and mixed is not None and preset(ctx, "frozen_dtype") == "autocast":
-            from mizuoto.engines.voxcpm.model import LoRALinear
-
-            saved = frozen_in(model, mixed, (LoRALinear,))
-            ctx.log(f"Frozen weights kept in {str(mixed).removeprefix('torch.')}: {saved / 2**20:.0f} MB saved")
-        if lora is not None and wants(ctx, "frozen_device", "cpu"):
-            moved = stream_frozen(layers, device)
-            ctx.log(f"Frozen LoRA base weights stream from RAM: {moved / 2**20:.0f} MB off the device")
         dtype = mixed or torch.float32  # the inputs: the config's bf16 under autocast on CUDA, else float32
         scaler: Any = torch.amp.GradScaler("cuda") if mixed is not None else PlainScaler()
         optimizer = torch.optim.AdamW(params, lr=recipe.learning_rate, weight_decay=recipe.weight_decay)

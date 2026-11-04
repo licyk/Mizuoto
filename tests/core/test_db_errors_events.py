@@ -11,7 +11,8 @@ def test_migrations_and_client_state(tmp_path):
     db = Database(tmp_path / "k.db")
     assert db.schema_version == len(MIGRATIONS)
     tables = {r["name"] for r in db.fetchall("SELECT name FROM sqlite_master WHERE type='table'")}
-    assert {"jobs", "voices", "audio_files", "transcripts", "outputs", "presets", "client_state"} <= tables
+    assert {"jobs", "audio_files", "transcripts", "outputs", "presets", "client_state", "meta"} <= tables
+    assert "voices" not in tables  # made by migration 1, dropped by 5: voices are folders
     db.set_client_state("prefs", {"theme": "dark"})
     assert db.get_client_state("prefs") == {"theme": "dark"}
     db.close()

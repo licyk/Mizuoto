@@ -1,11 +1,12 @@
 <script setup lang="ts">
-import { computed } from 'vue';
+import { computed, ref } from 'vue';
 import { useMeta } from '@/api/queries/app';
 import { useEngines } from '@/api/queries/engines';
 import { revealOutput, useDeleteOutputs, useUpdateOutput } from '@/api/queries/outputs';
 import { downloadOutputsZip, downloadUrl, urls } from '@/api/client';
 import type { Output } from '@/api/types';
 import type { Track } from '@/audio/player';
+import AnalysisDialog from '@/components/AnalysisDialog.vue';
 import ResultWave from '@/components/ResultWave.vue';
 import { useI18n } from '@/i18n';
 import { formatDuration } from '@/format';
@@ -14,7 +15,8 @@ import { AppButton, AppMenu, Badge, EmptyState, IconButton, TRANSITIONS, icons, 
 
 /**
  * Synthesized results: a waveform, play, the text, the model and how long it took, and a menu:
- * download, reveal (on the server's machine), use as a reference, keep as a voice, run again, delete.
+ * download, reveal (on the server's machine), analyse (spectrogram and pitch), use as a reference, keep as a voice,
+ * run again, delete.
  */
 const props = withDefaults(defineProps<{ outputs: Output[]; emptyText?: string; title?: string }>(), { emptyText: '', title: '' });
 const emit = defineEmits<{ useAsReference: [Output]; saveVoice: [Output]; rerun: [Output] }>();
@@ -39,6 +41,7 @@ const menu = (o: Output): MenuItem[] => [
   { id: 'favourite', label: o.favourite ? t('history.unfavourite') : t('history.favourite'), icon: icons.Tag },
   { id: 'download', label: t('common.download'), icon: icons.Download },
   ...(meta.data.value?.local ? [{ id: 'reveal', label: t('common.reveal'), icon: icons.FolderOpen }] : []),
+  ...(o.missing ? [] : [{ id: 'analyse', label: t('analysis.open'), icon: icons.Activity }]),
   { id: 'reference', label: t('results.useAsReference'), icon: icons.ArrowRight },
   { id: 'voice', label: t('results.saveVoice'), icon: icons.UserPlus },
   { id: 'rerun', label: t('results.rerun'), icon: icons.Repeat },
@@ -48,6 +51,10 @@ function onMenu(o: Output, id: string) {
   if (id === 'favourite') update.mutate({ id: o.id, favourite: !o.favourite });
   else if (id === 'download') downloadUrl(urls.output(o.id, true));
   else if (id === 'reveal') revealOutput(o.id).catch((e) => snackbar.error(e.message));
+  else if (id === 'analyse') {
+    analysed.value = o;
+    analysing.value = true;
+  }
   else if (id === 'reference') emit('useAsReference', o);
   else if (id === 'voice') emit('saveVoice', o);
   else if (id === 'rerun') emit('rerun', o);
@@ -56,6 +63,8 @@ function onMenu(o: Output, id: string) {
     remove.mutate([o.id], { onSuccess: () => snackbar.show(t('results.deleted')) });
   }
 }
+const analysed = ref<Output | null>(null);
+const analysing = ref(false);
 function downloadAll() {
   downloadOutputsZip(props.outputs.map((o) => o.id)).catch((e) => snackbar.error(e.message));
 }
@@ -99,6 +108,7 @@ function downloadAll() {
         </AppMenu>
       </li>
     </TransitionGroup>
+    <AnalysisDialog v-model:open="analysing" :output="analysed" />
   </section>
 </template>
 

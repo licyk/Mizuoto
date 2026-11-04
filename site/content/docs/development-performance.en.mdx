@@ -586,14 +586,16 @@ Measured on the RTX 3090s (2026-10-18), the harness now recording each phase's w
 | --- | --- | --- | --- |
 | CosyVoice 2 / 3 `llm` (and 2's `llm_flow`) | 10,319 / 10,398 | 9,691 / 9,693 | 9,691 / 9,693 |
 | F5-TTS `full` | 8,821 | 7,395 | 5,374 |
-| Fish Speech S2 Pro LoRA, batch 1 / 2 / 4 | 12,267 / 15,641 / out of memory | the same | the same |
+| Fish Speech S2 Pro LoRA, batch 1 / 2 / 4 | 12,267 / 15,641 / out of memory | the same | — / 7,861 / — (since 2026-11-04) |
 | GPT-SoVITS `speaker` (batch 4; 2: 3,881) | 4,676 | 4,676 | 4,670 |
-| OmniVoice `full` / LoRA | 11,724 / 7,301 | 11,714 / 2,971 | 4,713 / 2,766 |
+| OmniVoice `full` / LoRA | 11,724 / 7,301 | 11,714 / 2,099 (2,971 before 2026-11-04) | 4,713 / 1,053 (2,766) |
 | Qwen3-TTS 1.7B `speaker` | 18,276 | 18,267 | 7,356 |
 | VoxCPM 0.5B `full` | 16,733 | 12,719 | 12,719 |
 | VoxCPM 0.5B / 1.5 / 2 LoRA (batch 16; 0.5B at 2: 4,343) | 8,661 / 10,222 / 14,498 | 3,116 / 3,301 / 9,094 | 2,970 / 3,301 / 9,094 |
 
 The old rule of thumb was under nearly all of them (GPT-SoVITS 5×, VoxCPM's `lowest` LoRA up to 3.4×), and said 14.1 GB for Fish Speech's LoRA, which runs out of a 24 GB card at its default batch. Estimates are now these peaks scaled by the base model's size, plus a tenth and 512 MB, and follow the batch where the peak does; the warning names a batch that fits when no preset does.
+
+**LoRA's frozen weights for every LoRA trainer (2026-11-04).** OmniVoice's and Fish Speech's LoRA trainers took VoxCPM's two tools: under `low` the frozen linear weights are stored in the autocast dtype (OmniVoice; Fish Speech's are bfloat16 already under `bf16-true`), and under `lowest` the LoRA layers' frozen weights stay in page-locked RAM and are copied to the GPU for each product (both). The model is now moved to its device without them (`place`), so the device never holds them, not even while loading. Measured on an RTX 3060 (12 GB, PCIe x4), whose `standard` peak for OmniVoice's LoRA equals the 3090's (7,300 against 7,301 MB): OmniVoice's LoRA peaks at 2,099 MB under `low` and 1,053 under `lowest` (a step 0.35 s under `standard`, 0.54 under `low`, 0.76 under `lowest`); Fish Speech S2 Pro's LoRA at batch 2 peaks at 7,861 MB under `lowest`, 15.6 s a step on that card, where `standard` (15,641 MB) does not fit it at all, and its default batch 4 is estimated at 12.6 GB, within a 24 GB card. Identical: on the CPU the trainers' tests compare every loss and every adapter weight; on the GPU, with deterministic kernels, one OmniVoice step with float32 and with bfloat16 frozen weights gave the same loss and all 394 trainable gradients bit for bit (without deterministic kernels its backward differs from run to run anyway, float32 against float32 included).
 
 ## Attention backends on a GPU
 

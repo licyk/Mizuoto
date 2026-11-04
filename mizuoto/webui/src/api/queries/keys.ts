@@ -21,6 +21,7 @@ export const keys = {
   outputs: ['outputs'] as const,
   outputList: (filter: Record<string, string | boolean | undefined>) => ['outputs', 'list', filter] as const,
   peaks: (kind: string, id: string, points: number) => ['peaks', kind, id, points] as const,
+  outputAnalysis: (id: string) => ['outputs', 'analysis', id] as const,
   audioFile: (id: string) => ['audio', 'file', id] as const,
   browse: (path: string, dirsOnly: boolean) => ['audio', 'browse', path, dirsOnly] as const,
   segments: (text: string, model: string) => ['tts', 'segments', model, text] as const,

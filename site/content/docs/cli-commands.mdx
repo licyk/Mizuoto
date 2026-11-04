@@ -457,6 +457,7 @@ mizuoto dataset prepare alice --max-seconds 10 -l zh
 | `train new {name}` | 新建实验 | `-m, --base`（必填）；`-d, --dataset`（必填）；`--method`（默认该模型的第一种）；`--hp key=value`（可重复）；`--voice` 把权重导出到这个音色（默认新建）；`-l, --lang`；`--json` |
 | `train list` | 列出实验 | `--json` |
 | `train status {experiment}` | 显示各阶段和导出 | `--json` |
+| `train plan {experiment}` | 运行前的显存计划：运行将占用的设备，每种 `training.memory` 设置下大约要占用多少显存（与当前空闲显存对比），以及放得下的设置或更小的批量 | `--json` |
 | `train run {experiment}` | 运行阶段：默认从第一个未完成的阶段开始 | `-s, --stage`（可重复；之前的阶段须已完成）；`--restart` 从第一阶段全部重跑；`--json` |
 | `train metrics {experiment}` | 打印各阶段上报的损失（首个、最后、最低） | `-s, --stage`；`--json` |
 | `train edit {experiment}` | 修改超参数（读取它们的阶段变为过期） | `--hp key=value`（`key=` 恢复默认）；`--voice`；`-l, --lang` |

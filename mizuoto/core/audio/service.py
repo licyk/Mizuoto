@@ -52,6 +52,34 @@ class Peaks(Record):
     """Interleaved min and max, each in -1..1."""
 
 
+class SpectrogramData(Record):
+    """A mel spectrogram for display: ``rows`` × ``cols`` bytes, base64, row by row from the lowest band; 0 is 80 dB under
+    the loudest bin, 255 the loudest."""
+
+    rows: int
+    cols: int
+    fmax: float
+    """The top band's frequency (half the sample rate)."""
+    data: str
+
+
+class AudioAnalysis(Record):
+    """What a piece of audio looks like, for judging a result: its spectrogram and its pitch curve
+    (``mizuoto.core.audio.analysis``)."""
+
+    duration: float
+    sample_rate: int
+    channels: int
+    codec: str | None = None
+    spectrogram: SpectrogramData
+    pitch_hop: float = 0.01
+    """Seconds between pitch values."""
+    pitch: list[float]
+    """Hz every ``pitch_hop`` seconds; 0 where there is no pitch."""
+    pitch_median: float | None = None
+    """The voiced frames' median (on a log scale), or None."""
+
+
 class BrowseEntry(Record):
     name: str
     path: str
@@ -72,6 +100,8 @@ class BrowseListing(Record):
 AUDIO_EXTENSIONS = {".wav", ".flac", ".mp3", ".ogg", ".opus", ".m4a", ".aac", ".webm", ".wma", ".aiff", ".aif"}
 MIN_POINTS = 16
 MAX_POINTS = 8192
+MAX_ANALYSIS_SECONDS = 30 * 60
+"""Longer audio is not analysed: the pitch alone would take most of a minute and its curve would not be readable."""
 UPLOAD_NAME = re.compile(r"[^\w.\- ()\[\]]+", re.UNICODE)
 
 
@@ -182,6 +212,43 @@ class AudioService:
         result = Peaks(points=points, duration=len(samples) / sr if sr else 0.0, sample_rate=sr, data=compute(samples, points))
         cache.parent.mkdir(parents=True, exist_ok=True)
         cache.write_text(result.model_dump_json(), encoding="utf-8")
+        return result
+
+    def analyse(self, path: Path, columns: int = 800) -> AudioAnalysis:
+        """The spectrogram (about ``columns`` frames) and the pitch curve of a file, cached as the peaks are."""
+        import base64
+
+        from mizuoto.core.audio.analysis import PITCH_HOP, PITCH_RATE, median_pitch, pitch_curve, spectrogram
+
+        columns = max(64, min(4000, int(columns)))
+        st = path.stat()
+        key = hashlib.sha1(f"analysis|{self._storage.store(path)}|{st.st_size}|{st.st_mtime_ns}|{columns}".encode()).hexdigest()
+        cache = self._settings.cache_dir / "analysis" / key[:2] / f"{key}.json"
+        if cache.is_file():
+            try:
+                return AudioAnalysis.model_validate_json(cache.read_text(encoding="utf-8"))
+            except ValueError:
+                pass
+        info = probe(path)
+        if info.duration and info.duration > MAX_ANALYSIS_SECONDS:
+            raise ValidationError(f"{path.name} is longer than {MAX_ANALYSIS_SECONDS // 60} minutes; analysis covers shorter audio", {"reason": "too_long"})
+        samples, sr = decode(path)
+        spec, fmax = spectrogram(samples, sr, columns)
+        f0 = pitch_curve(decode(path, PITCH_RATE)[0])
+        result = AudioAnalysis(
+            duration=len(samples) / sr if sr else 0.0,
+            sample_rate=sr,
+            channels=info.channels,
+            codec=info.codec,
+            spectrogram=SpectrogramData(rows=spec.shape[0], cols=spec.shape[1], fmax=fmax, data=base64.b64encode(spec.tobytes()).decode("ascii")),
+            pitch_hop=PITCH_HOP,
+            pitch=[round(float(v), 2) for v in f0],
+            pitch_median=median_pitch(f0),
+        )
+        cache.parent.mkdir(parents=True, exist_ok=True)
+        tmp = cache.with_suffix(".tmp")
+        tmp.write_text(result.model_dump_json(), encoding="utf-8")
+        tmp.replace(cache)
         return result
 
     def register_path(self, path: Path, origin: str = "path") -> AudioFile:

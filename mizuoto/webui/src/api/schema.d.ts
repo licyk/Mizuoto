@@ -919,6 +919,26 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/audio/files/{audio_id}/analysis": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Analysis
+         * @description The file's spectrogram and pitch curve, for judging it.
+         */
+        get: operations["get_audio_analysis"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/audio/transcribe": {
         parameters: {
             query?: never;
@@ -1198,6 +1218,26 @@ export interface paths {
         };
         /** Peaks */
         get: operations["get_output_peaks"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/outputs/{output_id}/analysis": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Analysis
+         * @description The output's spectrogram and pitch curve, for judging it.
+         */
+        get: operations["get_output_analysis"];
         put?: never;
         post?: never;
         delete?: never;
@@ -1587,6 +1627,27 @@ export interface paths {
         head?: never;
         /** Update */
         patch: operations["update_experiment"];
+        trace?: never;
+    };
+    "/api/v1/train/experiments/{engine}/{name}/plan": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Plan
+         * @description The run's memory plan before it starts: its device, the estimate per memory preset against the free memory, and
+         *     what would make it fit.
+         */
+        get: operations["get_experiment_plan"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
         trace?: never;
     };
     "/api/v1/train/experiments/{engine}/{name}/run": {
@@ -2136,6 +2197,31 @@ export interface components {
             size_mb: number | null;
             /** Used By */
             used_by: string[];
+        };
+        /**
+         * AudioAnalysis
+         * @description What a piece of audio looks like, for judging a result: its spectrogram and its pitch curve
+         *     (``mizuoto.core.audio.analysis``).
+         */
+        AudioAnalysis: {
+            /** Duration */
+            duration: number;
+            /** Sample Rate */
+            sample_rate: number;
+            /** Channels */
+            channels: number;
+            /** Codec */
+            codec: string | null;
+            spectrogram: components["schemas"]["SpectrogramData"];
+            /**
+             * Pitch Hop
+             * @default 0.01
+             */
+            pitch_hop: number;
+            /** Pitch */
+            pitch: number[];
+            /** Pitch Median */
+            pitch_median: number | null;
         };
         /** AudioFile */
         AudioFile: {
@@ -4313,6 +4399,18 @@ export interface components {
                 [key: string]: unknown;
             } | null;
         };
+        /**
+         * PresetPlan
+         * @description What a run would hold on its GPU under one ``training.memory`` preset.
+         */
+        PresetPlan: {
+            /** Preset */
+            preset: string;
+            /** Memory Mb */
+            memory_mb: number;
+            /** Fits */
+            fits: boolean | null;
+        };
         /** PresetsChangedEvent */
         PresetsChangedEvent: {
             /** Ids */
@@ -4943,6 +5041,21 @@ export interface components {
                 [key: string]: unknown;
             };
         };
+        /**
+         * SpectrogramData
+         * @description A mel spectrogram for display: ``rows`` × ``cols`` bytes, base64, row by row from the lowest band; 0 is 80 dB under
+         *     the loudest bin, 255 the loudest.
+         */
+        SpectrogramData: {
+            /** Rows */
+            rows: number;
+            /** Cols */
+            cols: number;
+            /** Fmax */
+            fmax: number;
+            /** Data */
+            data: string;
+        };
         /** StageState */
         StageState: {
             /** Id */
@@ -5124,6 +5237,41 @@ export interface components {
              * @default
              */
             note: string;
+        };
+        /**
+         * TrainingPlan
+         * @description A run's memory plan before it starts (``mizuoto train plan``): the device it would take, the estimate per memory
+         *     preset against that device's free memory, and what would make it fit.
+         */
+        TrainingPlan: {
+            /** Experiment */
+            experiment: string;
+            /** Engine */
+            engine: string;
+            /** Method */
+            method: string;
+            /** Base Model */
+            base_model: string;
+            /** Model Mb */
+            model_mb: number | null;
+            /** Device */
+            device: string;
+            /** Free Mb */
+            free_mb: number | null;
+            /** Total Mb */
+            total_mb: number | null;
+            /** Preset */
+            preset: string;
+            /** Presets */
+            presets: components["schemas"]["PresetPlan"][];
+            /** Batch */
+            batch: {
+                [key: string]: unknown;
+            } | null;
+            /** Fits */
+            fits: boolean | null;
+            /** Advice */
+            advice: string | null;
         };
         /** TrainingSettings */
         TrainingSettings: {
@@ -9392,6 +9540,75 @@ export interface operations {
             };
         };
     };
+    get_audio_analysis: {
+        parameters: {
+            query?: {
+                columns?: number;
+            };
+            header?: never;
+            path: {
+                audio_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AudioAnalysis"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     transcribe_audio: {
         parameters: {
             query?: never;
@@ -10456,6 +10673,75 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["Peaks"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_output_analysis: {
+        parameters: {
+            query?: {
+                columns?: number;
+            };
+            header?: never;
+            path: {
+                output_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AudioAnalysis"];
                 };
             };
             /** @description Bad Request */
@@ -12441,6 +12727,74 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["Experiment"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_experiment_plan: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                engine: string;
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TrainingPlan"];
                 };
             };
             /** @description Bad Request */

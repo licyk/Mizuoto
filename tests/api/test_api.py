@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import json
 import time
 
@@ -109,6 +110,12 @@ def test_upload_range_peaks_and_transcribe_errors(client, wav_file):
     assert r.status_code == 206 and r.content == data[:100]
     peaks = client.get(f"/api/v1/audio/files/{f['id']}/peaks?points=64").json()
     assert peaks["points"] == 64 and len(peaks["data"]) == 128
+    analysis = client.get(f"/api/v1/audio/files/{f['id']}/analysis?columns=100").json()
+    spec = analysis["spectrogram"]
+    assert (spec["rows"], spec["fmax"], analysis["sample_rate"], analysis["channels"]) == (128, 11025, 22050, 1)
+    assert 100 <= spec["cols"] <= 102 and len(base64.b64decode(spec["data"])) == spec["rows"] * spec["cols"]
+    assert len(analysis["pitch"]) == 201 and abs(analysis["pitch_median"] - 220) < 1  # the fixture's 220 Hz tone
+    assert client.get(f"/api/v1/audio/files/{f['id']}/analysis?columns=100").json() == analysis  # from the cache
     r = client.put("/api/v1/audio/files?name=notes.txt", content=b"not audio", headers=ORIGIN)
     assert r.status_code == 400
     r = client.post("/api/v1/audio/transcribe", json={"audio_id": f["id"]}, headers=ORIGIN)
@@ -138,6 +145,7 @@ def test_speak_plan_wait_outputs_and_rerun(client, services):
     audio = client.get(f"/api/v1/outputs/{out_id}/content")
     assert audio.status_code == 200 and audio.headers["content-type"] == "audio/wav"
     assert len(client.get(f"/api/v1/outputs/{out_id}/peaks?points=32").json()["data"]) == 64
+    assert client.get(f"/api/v1/outputs/{out_id}/analysis").json()["spectrogram"]["rows"] == 128
     rerun = client.get(f"/api/v1/outputs/{out_id}/rerun").json()
     assert rerun["voice_spec"]["preset"] == "alto" and rerun["params"]["seed"] == 4
     page = client.get("/api/v1/outputs?q=Hello").json()

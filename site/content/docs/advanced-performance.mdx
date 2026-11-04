@@ -17,7 +17,7 @@ icon: Gauge
 
 ### Mizuoto 能找到哪些 GPU
 
-Mizuoto 查找 GPU 时不加载 torch：NVIDIA 显卡用 `nvidia-smi`；AMD 显卡用 `rocm-smi`（或 `amd-smi`），torch 的 ROCm 构建与 NVIDIA 一样把它们命名为 `cuda:0`、`cuda:1`……；Apple 芯片按平台识别（`mps`）。`CUDA_VISIBLE_DEVICES` 对 `nvidia-smi` 找到的显卡与对 torch 一样生效：只保留它列出的显卡（序号或 `GPU-` UUID），按它的顺序从 `cuda:0` 编号（序号是 `nvidia-smi` 的，按 PCI 总线顺序：显卡型号不同时请设置 `CUDA_DEVICE_ORDER=PCI_BUS_ID`）。这些都找不到 GPU、而已安装的 torch 是能使用 GPU 的构建时（Intel 显卡的 XPU 构建、没有 `rocm-smi` 的 ROCm 构建、容器里没有 `nvidia-smi` 的 CUDA 构建），Mizuoto 会在单独的进程里询问一次 torch（一两秒）；CPU 构建的 torch 不会被询问。Mizuoto 为运行模型加载了 torch 之后，改用 torch 自己的数据。`mizuoto doctor` 会列出找到的 GPU 及查找方式，**设置** › **计算** 中也会显示。
+Mizuoto 查找 GPU 时不加载 torch：NVIDIA 显卡用 `nvidia-smi`；AMD 显卡用 `rocm-smi`（或 `amd-smi`），torch 的 ROCm 构建与 NVIDIA 一样把它们命名为 `cuda:0`、`cuda:1`……；Apple 芯片按平台识别（`mps`）。`CUDA_VISIBLE_DEVICES` 对 `nvidia-smi` 找到的显卡与对 torch 一样生效：只保留它列出的显卡（序号或 `GPU-` UUID），按它的顺序从 `cuda:0` 编号（序号是 `nvidia-smi` 的，按 PCI 总线顺序；Mizuoto 为自己和训练阶段设置 `CUDA_DEVICE_ORDER=PCI_BUS_ID`，所以即使显卡型号不同，torch 的编号也与之相同，而 CUDA 默认把最快的显卡排在最前；环境中已设置的顺序保持不变）。这些都找不到 GPU、而已安装的 torch 是能使用 GPU 的构建时（Intel 显卡的 XPU 构建、没有 `rocm-smi` 的 ROCm 构建、容器里没有 `nvidia-smi` 的 CUDA 构建），Mizuoto 会在单独的进程里询问一次 torch（一两秒）；CPU 构建的 torch 不会被询问。Mizuoto 为运行模型加载了 torch 之后，改用 torch 自己的数据。`mizuoto doctor` 会列出找到的 GPU 及查找方式，**设置** › **计算** 中也会显示。
 
 所有引擎都能在 NVIDIA（CUDA）、AMD（ROCm）、Intel（XPU）和 Apple（MPS）的 GPU 以及 CPU 上运行。在不支持双精度的 GPU 上（Apple 芯片、Intel Arc 显卡），唯一以双精度计算的模型部件——CosyVoice 3 的音高预测器——在 CPU 上运行，模型的其余部分仍在 GPU 上。在 Apple 芯片上 `compute.compile` 不生效，且 torch 的 MPS 后端可能缺少某个引擎需要的运算；以 `PYTORCH_ENABLE_MPS_FALLBACK=1` 启动 Mizuoto 可让这些运算在 CPU 上执行。ROCm、XPU 和 MPS 路径尚未在真实硬件上测试，遇到问题请反馈。
 

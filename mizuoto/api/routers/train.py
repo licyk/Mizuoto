@@ -5,7 +5,7 @@ from fastapi import APIRouter
 from mizuoto.api.deps import ServicesDep
 from mizuoto.api.errors import ERROR_RESPONSES
 from mizuoto.core.jobs.models import Job
-from mizuoto.core.training.models import Experiment, ExperimentInput, ExperimentPatch, MethodInfo, MetricPoint, RunRequest
+from mizuoto.core.training.models import Experiment, ExperimentInput, ExperimentPatch, MethodInfo, MetricPoint, RunRequest, TrainingPlan
 
 router = APIRouter(prefix="/v1/train", tags=["train"], responses=ERROR_RESPONSES)
 
@@ -39,6 +39,13 @@ def update(services: ServicesDep, engine: str, name: str, body: ExperimentPatch)
 @router.delete("/experiments/{engine}/{name}", operation_id="delete_experiment")
 def delete(services: ServicesDep, engine: str, name: str) -> None:
     services.training.delete(f"{engine}/{name}")
+
+
+@router.get("/experiments/{engine}/{name}/plan", operation_id="get_experiment_plan")
+def plan(services: ServicesDep, engine: str, name: str) -> TrainingPlan:
+    """The run's memory plan before it starts: its device, the estimate per memory preset against the free memory, and
+    what would make it fit."""
+    return services.training.plan(f"{engine}/{name}")
 
 
 @router.post("/experiments/{engine}/{name}/run", operation_id="run_experiment")

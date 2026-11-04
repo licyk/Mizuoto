@@ -1,4 +1,4 @@
-"""train new | list | status | run | export | metrics | edit | delete."""
+"""train new | list | status | plan | run | export | metrics | edit | delete."""
 
 from __future__ import annotations
 
@@ -74,6 +74,40 @@ def train_status(
             print_json(exp)
             return
         _status(exp)
+
+
+def train_plan(
+    experiment: Annotated[str, typer.Argument(help="<engine>/<name>, or a name")], json_output: Annotated[bool, typer.Option("--json", help="Print JSON")] = False
+) -> None:
+    """Show a run's memory plan before it starts: its device, roughly what it holds there under each memory setting
+    against the free memory now, and what would make it fit."""
+    with open_services() as services:
+        plan = services.training.plan(experiment)
+        if json_output:
+            print_json(plan)
+            return
+
+    def gb(mb: float | None) -> str:
+        return "-" if mb is None else f"{mb / 1024:.1f} GB"
+
+    console.print(f"[bold]{plan.experiment}[/bold] · {plan.method} of {plan.base_model} on {plan.device}", highlight=False)
+    if plan.device == "cpu":
+        console.print("Trains on the CPU: the memory settings do not apply.", highlight=False)
+        return
+    if not plan.presets:
+        console.print("No estimate: the base model's size is unknown.", highlight=False)
+        return
+    console.print(f"Free now: {gb(plan.free_mb)} of {gb(plan.total_mb)} (Mizuoto's own models on it move off before a run)", highlight=False)
+    if plan.batch is not None:
+        console.print(f"Batch: {plan.batch['name']}={plan.batch['value']}", highlight=False)
+    mark = {True: "[green]fits[/]", False: "[red]too big[/]", None: "-"}
+    print_table(
+        None,
+        ["Memory", "Needs about", "On this GPU", ""],
+        [(p.preset, gb(p.memory_mb), mark[p.fits], "← current setting" if p.preset == plan.preset else "") for p in plan.presets],
+    )
+    if plan.advice:
+        console.print(f"To fit: {plan.advice}", highlight=False)
 
 
 def _run(experiment: str, stages: list[str] | None, restart: bool, json_output: bool) -> None:

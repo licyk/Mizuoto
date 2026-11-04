@@ -23,7 +23,7 @@ from safetensors.torch import load_file  # noqa: E402
 from test_fishspeech_tiny import TINY_CODEC, build_model  # noqa: E402
 
 from mizuoto.core.audio.io import encode  # noqa: E402
-from mizuoto.core.jobs.events import MetricEvent, OutputEvent, ResultEvent  # noqa: E402
+from mizuoto.core.jobs.events import LogEvent, MetricEvent, OutputEvent, ResultEvent  # noqa: E402
 from mizuoto.core.jobs.jsonl import Emitter  # noqa: E402
 from mizuoto.runtime.context import RequestContext  # noqa: E402
 from mizuoto.runtime.device import DeviceService  # noqa: E402
@@ -190,6 +190,18 @@ def test_train_reports_every_step_and_repeats_under_its_seed(trained, tmp_path, 
     (tmp_path / "tokens").symlink_to(workdir / "tokens")
     again = run("train", tmp_path, model_dir, rows).of(MetricEvent)
     assert [m.values for m in again] == [m.values for m in metrics]
+
+
+def test_a_streamed_frozen_base_trains_identically(trained, tmp_path, model_dir, rows):
+    """The lowest memory preset's frozen weights in RAM, streamed for each product (here asked for on the CPU): the
+    same losses and LoRA weights."""
+    workdir, recs = trained
+    (tmp_path / "tokens").symlink_to(workdir / "tokens")
+    rec = run("train", tmp_path, model_dir, rows, frozen_device="cpu")
+    assert any("stream from RAM" in e.message for e in rec.of(LogEvent))
+    assert [m.values for m in rec.of(MetricEvent)] == [m.values for m in recs["train"].of(MetricEvent)]
+    plain, streamed = load_file(str(workdir / "lora" / "lora.safetensors")), load_file(str(tmp_path / "lora" / "lora.safetensors"))
+    assert plain.keys() == streamed.keys() and all(torch.equal(plain[k], streamed[k]) for k in plain)
 
 
 def test_only_the_lora_weights_train(trained, model_dir):

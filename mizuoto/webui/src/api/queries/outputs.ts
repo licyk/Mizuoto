@@ -20,6 +20,15 @@ export const useOutputs = (filter: MaybeRefOrGetter<OutputFilter>, enabled: Mayb
     enabled: computed(() => toValue(enabled)),
   });
 
+/** An output's spectrogram and pitch curve (computed by the server once, then cached); ``id`` null: nothing asked. */
+export const useOutputAnalysis = (id: MaybeRefOrGetter<string | null>) =>
+  useQuery({
+    queryKey: computed(() => keys.outputAnalysis(toValue(id) ?? '')),
+    queryFn: () => unwrap(api.GET('/api/v1/outputs/{output_id}/analysis', { params: { path: { output_id: toValue(id) as string } } })),
+    enabled: computed(() => !!toValue(id)),
+    staleTime: Infinity,
+  });
+
 export const fetchOutput = (id: string) => unwrap(api.GET('/api/v1/outputs/{output_id}', { params: { path: { output_id: id } } }));
 
 export function useDeleteOutputs() {

@@ -150,6 +150,10 @@ class RMSNorm(nn.Module):
         return (h * torch.rsqrt(torch.mean(h * h, dim=-1, keepdim=True) + self.eps)).type_as(x) * self.weight
 
 
+ROPE_POSITIONS = 4096
+"""Positions the codec transformers' rotary table holds (about 190 s of codes); longer sequences make a longer one."""
+
+
 def freqs(seq_len: int, n_elem: int, base: float = 10000) -> torch.Tensor:
     f = 1.0 / (base ** (torch.arange(0, n_elem, 2)[: (n_elem // 2)].float() / n_elem))
     f = torch.outer(torch.arange(seq_len, device=f.device), f)
@@ -238,13 +242,19 @@ class WindowLimitedTransformer(nn.Module):
         self.norm = RMSNorm(dim, eps)
         self.input_proj: nn.Module = ops.Linear(input_dim, dim) if input_dim != dim else nn.Identity()
         self.output_proj: nn.Module = ops.Linear(dim, input_dim) if input_dim != dim else nn.Identity()
-        self._freqs: torch.Tensor | None = None
+        # upstream precomputes 327680 positions; the first n are the same numbers. A buffer, so the table moves with the
+        # module (whatever dtype the module is cast to, the forward casts it to the input's, the same values)
+        self.register_buffer("rope", freqs(ROPE_POSITIONS, head_dim, rope_base), persistent=False)
+        self._longer: torch.Tensor | None = None
+        """The table for a sequence longer than the buffer's, made when one comes."""
 
     def _freqs_cis(self, n: int, device: torch.device) -> torch.Tensor:
-        # upstream precomputes 327680 positions; the first n are the same numbers
-        if self._freqs is None or self._freqs.shape[0] < n or self._freqs.device != device:
-            self._freqs = freqs(max(n, 4096), self.head_dim, self.rope_base).to(device)
-        return self._freqs[:n]
+        table = self.get_buffer("rope")
+        if n <= table.shape[0] and table.device == device:
+            return table[:n]
+        if self._longer is None or self._longer.shape[0] < n or self._longer.device != device:
+            self._longer = freqs(max(n, ROPE_POSITIONS), self.head_dim, self.rope_base).to(device)
+        return self._longer[:n]
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         x = self.input_proj(x.transpose(1, 2))

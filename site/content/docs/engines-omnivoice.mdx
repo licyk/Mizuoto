@@ -64,6 +64,7 @@ icon: Languages
 - **梯度裁剪**按上游的参数顺序（token 嵌入在先）累加各张量的范数。
 - **token 顺序**遵循 `JsonlDatasetReader` 以 42 为种子的顺序。
 - 检查点不保存优化器状态。加载 worker 多于分片时 0.1 会失败；这里多出的 worker 空闲。预览带种子。
+- `training.memory`：对 Qwen3 各层做梯度检查点（重放 LoRA 的 dropout 掩码）；对 LoRA，`low` 还把冻结的线性层权重以自动混合精度的类型存放（CUDA：自动混合精度每次矩阵乘法本来就会转换成这个类型），`lowest` 把 LoRA 层冻结的基座权重留在内存中，每次矩阵乘法时复制到 GPU，AdamW 的状态也放在内存中。在 CPU 上结果相同（比较微型训练器的损失值和适配器）；在 GPU 上开启确定性内核时，float32 与 bfloat16 冻结权重的损失值和梯度相同。LoRA 的峰值：7.3 GB，`low` 下 2.1 GB，`lowest` 下 1.1 GB（RTX 3060，2026-11-04）。
 
 ## 对照结果
 

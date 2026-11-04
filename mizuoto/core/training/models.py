@@ -78,6 +78,39 @@ class MethodInfo(Record):
     """Roughly what a run holds on its GPU, by ``training.memory`` preset (``standard``, ``low``, ``lowest``)."""
 
 
+class PresetPlan(Record):
+    """What a run would hold on its GPU under one ``training.memory`` preset."""
+
+    preset: str
+    memory_mb: float
+    fits: bool | None = None
+    """Within the device's free memory; None where that is unknown (the CPU)."""
+
+
+class TrainingPlan(Record):
+    """A run's memory plan before it starts (``mizuoto train plan``): the device it would take, the estimate per memory
+    preset against that device's free memory, and what would make it fit."""
+
+    experiment: str
+    engine: str
+    method: str
+    base_model: str
+    model_mb: float | None = None
+    device: str
+    free_mb: float | None = None
+    """Free now: Mizuoto's own idle models on the device move off it before a run, so a run may find more."""
+    total_mb: float | None = None
+    preset: str
+    """The ``training.memory`` setting a run would use."""
+    presets: list[PresetPlan] = Field(default_factory=list)
+    batch: dict[str, Any] | None = None
+    """``{"name", "value"}``: the hyperparameter the peak follows, as the run would use it."""
+    fits: bool | None = None
+    """The run's preset fits (None: unknown, or the CPU)."""
+    advice: str | None = None
+    """What would make it fit: another preset or a smaller batch, else a bigger GPU or the CPU."""
+
+
 class ExperimentPatch(Record):
     hyperparams: dict[str, Any] | None = None
     voice: str | None = None

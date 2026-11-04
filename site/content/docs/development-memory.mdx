@@ -54,8 +54,8 @@ audio = ctx.run("codec decoder", [self.h_decoder], decode, self._decoder_memory(
 
 `ModelManager.load(handles, memory)` 按设备决定：
 
-1. **需要** = 句柄尚未放到设备上的字节 + 工作显存（估算乘以其校准系数，见下文）+ `compute.vram_reserve_mb`。
-2. **空闲** = 驱动报告的空闲显存，加上 torch 缓存分配器占着但未使用的部分；设置了 `compute.vram_limit_mb` 时，不超过它减去本进程已占用的量。
+1. **需要** = 句柄尚未放到设备上的字节 + 工作显存（估算乘以其校准系数，见下文）+ 保留量：`compute.vram_reserve_mb`，在 Windows 上再加 200 MB，留给桌面占用的那部分显存（`VramPolicy.device_reserve`；ComfyUI 在 Windows 上保留 600 MB，其他系统 400 MB）。
+2. **空闲** = 驱动报告的空闲显存，加上 torch 缓存分配器占着但未使用的部分；设置了 `compute.vram_limit_mb` 时，不超过它减去本进程已占用的量。这部分未使用的缓存超过空闲显存的四分之一时，先把它还给驱动（`empty_cache`，不做垃圾回收；ComfyUI 在 `free_memory` 中的规则）：这样别的程序可以用它，较大的分配也不会因为缓存中没有一整块连续空间而失败。
 3. 空闲不够时，其他空闲组件让出显存（见下文“让出显存”），然后重新测量空闲显存。
 4. 放得下就整体加载；否则在预算内部分加载，预算为空闲显存减去工作显存和保留量。
 
@@ -132,7 +132,7 @@ audio = ctx.run("codec decoder", [self.h_decoder], decode, self._decoder_memory(
 2. 然后不在 `engines.<id>.pinned_models` 中的模型先于固定的模型；
 3. 然后最久未用的。
 
-任何请求正在使用的组件都不会让出；正在运行的模型中当前阶段用不到的组件则会。每个让出者按放置顺序的逆序逐个单元让出（`partially_unload`），直到满足差额；在 `high` 和 `shared` 模式下整体移走。`empty_cache` 只在让出之后执行，从不每个请求都执行。
+任何请求正在使用的组件都不会让出；正在运行的模型中当前阶段用不到的组件则会。每个让出者按放置顺序的逆序逐个单元让出（`partially_unload`），直到满足差额；在 `high` 和 `shared` 模式下整体移走。`empty_cache` 在让出之后执行，以及在加载前设备上未使用的缓存超过空闲显存四分之一时执行（见上文第 2 步）；从不每步都执行。
 
 部分加载一个阶段的组件时：较小的组件先整体加载，每个都给其余组件至少留下最小工作集，最大的组件得到剩下的部分，其余单元流式加载。
 
@@ -210,8 +210,8 @@ audio = ctx.run("codec decoder", [self.h_decoder], decode, self._decoder_memory(
 | 预设 | 增加 | 结果 |
 | --- | --- | --- |
 | `standard`（默认） | 无：完全按各引擎的训练配方 | 与上游相同 |
-| `low` | 对每个块做梯度检查点（`gradient_checkpointing`：`blocks`、`every:k`；VoxCPM、Qwen3-TTS、OmniVoice、F5-TTS、CosyVoice），重算时恢复全局生成器*以及训练器自己的生成器*；F5-TTS 的 EMA 副本放在内存中；VoxCPM 的 LoRA 冻结权重以 autocast 精度存放 | 相同（在 CPU 上逐个训练器测试） |
-| `lowest` | 另外把 AdamW 的状态放在内存中并在 CPU 上更新（`host_optimizer`；Qwen3-TTS、OmniVoice、不用梯度缩放的 F5-TTS）；VoxCPM 的 LoRA 基座权重在每次矩阵乘法时从内存流式加载（`streamed_linear`） | 在 GPU 上优化器求和的最后几位可能不同 |
+| `low` | 对每个块做梯度检查点（`gradient_checkpointing`：`blocks`、`every:k`；VoxCPM、Qwen3-TTS、OmniVoice、F5-TTS、CosyVoice），重算时恢复全局生成器*以及训练器自己的生成器*；F5-TTS 的 EMA 副本放在内存中；LoRA 冻结的线性层权重以 autocast 精度存放（`frozen_in`：VoxCPM、OmniVoice；Fish Speech 在 `bf16-true` 下本来就是 bfloat16） | 相同（在 CPU 上逐个训练器测试） |
+| `lowest` | 另外把 AdamW 的状态放在内存中并在 CPU 上更新（`host_optimizer`；Qwen3-TTS、OmniVoice、不用梯度缩放的 F5-TTS）；LoRA 冻结的基座权重在每次矩阵乘法时从内存流式加载（`stream_frozen`、`streamed_linear`：VoxCPM、OmniVoice、Fish Speech），模型移到设备时不带这些权重（`place`） | 在 GPU 上优化器求和的最后几位可能不同 |
 
 主机端优化器把 float32 副本和梯度各放在一个缓冲区中，每一步的梯度和参数经过每种设备 dtype 一个的锁页缓冲区传输，只等待一次；它每一步的大部分时间是 AdamW 本身在 CPU 上的运算（Qwen3-TTS 1.7B：每步 5.5 秒中约 4.5 秒），只有融合的优化器才能缩短，但结果会不同。`lowest` 阶段运行时不使用 torch 的大页（`compute.cpu_allocator`）：使用大页时，每一步的分配都卡在内核的内存整理上，运行时间是 2.2 倍。
 

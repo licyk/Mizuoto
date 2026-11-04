@@ -64,6 +64,7 @@ Methods `full` and `lora` (stages `tokens`, `train`, `export`; upstream's `extra
 - **Clipping** sums the per-tensor norms in upstream's parameter order (the token embedding first).
 - **The token order** follows `JsonlDatasetReader`'s seed-42 order.
 - Checkpoints keep no optimiser state. More loader workers than shards made 0.1 fail; here the spare workers idle. Previews are seeded.
+- `training.memory`: gradient checkpointing over the Qwen3 layers (LoRA's dropout masks replayed); for LoRA, `low` also stores the frozen linear weights in the autocast dtype (CUDA: autocast casts them to it at every product anyway) and `lowest` keeps the LoRA layers' frozen base weights in RAM, copied to the GPU for each product, and AdamW's state in RAM. Identical on the CPU (the tiny trainer's losses and adapter); on a GPU with deterministic kernels, the same loss and gradients with float32 and bfloat16 frozen weights. The LoRA's peak: 7.3 GB, 2.1 GB under `low`, 1.1 GB under `lowest` (RTX 3060, 2026-11-04).
 
 ## Parity
 

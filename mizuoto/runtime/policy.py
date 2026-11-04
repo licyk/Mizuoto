@@ -10,7 +10,9 @@ load without a restart. Nothing here is a module global: the manager asks its ru
   - ``none``: everything but the always-resident parts streams (ComfyUI's ``--novram``);
   - ``shared``: unified memory (Apple silicon): offloading frees nothing, so evicting means unloading, and nothing is
     loaded partly. ``auto`` is ``shared`` on MPS and ``normal`` elsewhere.
-- ``reserve_bytes``: device memory left free beyond a request's working memory (``compute.vram_reserve_mb``).
+- ``reserve_bytes``: device memory left free beyond a request's working memory (``compute.vram_reserve_mb``), plus
+  ``os_reserve_bytes`` on a GPU: 200 MB on Windows, whose desktop shares the GPU's memory (ComfyUI reserves 600 MB
+  there and 400 elsewhere), none elsewhere (``device_reserve``).
 - ``ram_reserve_bytes``: host memory left free; below it host copies are dropped first and then idle models unloaded.
 - ``host_copies``: keep a host copy of the weights of a model on a device, so offloading it costs no transfer.
 - ``max_pinned_bytes``: page-locked host memory for weights that stream (0: the automatic budget).
@@ -34,6 +36,7 @@ GB = 2**30
 class VramPolicy:
     mode: str = "auto"
     reserve_bytes: int = 1024 * MB
+    os_reserve_bytes: int = 200 * MB if os.name == "nt" else 0
     ram_reserve_bytes: int | None = None
     host_copies: str = "auto"
     max_pinned_bytes: int = 0
@@ -50,6 +53,11 @@ class VramPolicy:
         if mode == "auto":
             return "normal"
         return "normal" if mode == "shared" else mode
+
+    def device_reserve(self, kind: str) -> int:
+        """Memory to leave free on a device of ``kind`` beyond a request's working memory: the setting, and the OS's
+        share on a GPU (``os_reserve_bytes``)."""
+        return self.reserve_bytes + (self.os_reserve_bytes if kind != "cpu" else 0)
 
     def streams_for(self, kind: str) -> int:
         """Side streams for copies on a device of ``kind``: non-blocking copies only on CUDA and ROCm (ComfyUI's choice)."""

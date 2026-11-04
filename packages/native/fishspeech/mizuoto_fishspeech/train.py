@@ -128,7 +128,8 @@ class FishSpeechTrainer(Trainer):
         from safetensors.torch import save_file
 
         from mizuoto.text.tokenize.bpe import load_bpe
-        from mizuoto_fishspeech.finetune import Draws, Samples, collate, constant_with_warmup, initial_lora, load_groups, lora_state, losses, param_groups, setup_lora
+        from mizuoto.training.memory import place, stream_frozen, wants
+        from mizuoto_fishspeech.finetune import Draws, LoraLinear, Samples, collate, constant_with_warmup, initial_lora, load_groups, lora_state, losses, param_groups, setup_lora
 
         tokens = ctx.workdir / "tokens"
         if not (tokens / "groups.json").is_file():
@@ -152,7 +153,10 @@ class FishSpeechTrainer(Trainer):
             setup_lora(model, lora, init.result(), torch.bfloat16 if precision == "bf16-true" else None)
         if precision == "bf16-true":
             model = model.to(torch.bfloat16)
-        model = model.to(ctx.device)
+        if wants(ctx, "frozen_device", "cpu"):  # the lowest memory preset
+            moved = stream_frozen([m for m in model.modules() if isinstance(m, LoraLinear)], ctx.device)
+            ctx.log(f"Frozen LoRA base weights stream from RAM: {moved / 2**20:.0f} MB off the device")
+        place(model, ctx.device)
         model.train()
 
         optimizer = torch.optim.AdamW(param_groups(model), lr=float(ctx.hp("learning_rate", 1e-4)), **OPTIMIZER)

@@ -43,7 +43,7 @@ from mizuoto.cli.commands.remote import agent, remote_add, remote_list, remote_r
 from mizuoto.cli.commands.runtime import runtime
 from mizuoto.cli.commands.speak import speak
 from mizuoto.cli.commands.system import env_vars, version
-from mizuoto.cli.commands.train import train_delete, train_edit, train_export, train_list, train_methods, train_metrics, train_new, train_run, train_status
+from mizuoto.cli.commands.train import train_delete, train_edit, train_export, train_list, train_methods, train_metrics, train_new, train_plan, train_run, train_status
 from mizuoto.cli.commands.transform import convert, edit
 from mizuoto.cli.commands.voices import (
     design,
@@ -199,6 +199,7 @@ def get_app() -> typer.Typer:
     train_cli.command(help="Create an experiment", name="new")(train_new)
     train_cli.command(help="List experiments", name="list")(train_list)
     train_cli.command(help="Show an experiment's stages", name="status")(train_status)
+    train_cli.command(help="Show a run's memory plan before it starts", name="plan")(train_plan)
     train_cli.command(help="Run an experiment's stages", name="run")(train_run)
     train_cli.command(help="Register the trained weights again", name="export")(train_export)
     train_cli.command(help="Print the losses", name="metrics")(train_metrics)

@@ -310,22 +310,50 @@ def host_optimizer(params: list[Any], make: Callable[[list[Any]], Any]) -> Any:
 
 
 def stream_frozen(layers: Iterable[Any], device: Any) -> int:
-    """Move the frozen ``weight``/``bias`` of LoRA layers (with a ``streamed`` attribute: VoxCPM's ``LoRALinear``) to
-    page-locked RAM and have them stream for each product (``streamed_linear``). Returns the bytes taken off the device."""
+    """Move the frozen ``weight``/``bias`` of LoRA layers (with a ``streamed`` attribute: VoxCPM's ``LoRALinear``, Fish
+    Speech's ``LoraLinear``; or held by their ``base_layer``, peft's layout, as OmniVoice's) to page-locked RAM and have
+    them stream to ``device`` for each product (``streamed_linear``). Returns the bytes kept off the device. Call it
+    before the model goes to its device and move the model with ``place``: the device then never holds them."""
     import torch
 
     moved = 0
-    pin = torch.device(device).type == "cuda" and torch.cuda.is_available()
+    target = torch.device(device)
+    pin = target.type == "cuda" and torch.cuda.is_available()
     for layer in layers:
+        holder = getattr(layer, "base_layer", layer)
         for name in ("weight", "bias"):
-            p = getattr(layer, name, None)
+            p = getattr(holder, name, None)
             if p is None or p.requires_grad:
                 continue
             host = p.data.to("cpu", copy=True)
-            moved += host.numel() * host.element_size() if p.device.type != "cpu" else 0
+            moved += host.numel() * host.element_size() if target.type != "cpu" else 0
             p.data = host.pin_memory() if pin else host
-        layer.streamed = torch.device(device)
+        layer.streamed = target
     return moved
+
+
+def place(model: Any, device: Any) -> None:
+    """``model.to(device)``, leaving in RAM the frozen weights ``stream_frozen`` keeps there (each layer whose
+    ``streamed`` is set): they are swapped for empty tensors while the rest moves, so they are never copied to the
+    device, not even for a moment."""
+    import torch
+
+    kept = []
+    for m in model.modules():
+        if getattr(m, "streamed", None) is None:
+            continue
+        holder = getattr(m, "base_layer", m)
+        for name in ("weight", "bias"):
+            p = getattr(holder, name, None)
+            if p is not None and not p.requires_grad:
+                kept.append((holder, name, p, p.data))
+                p.data = torch.empty(0, dtype=p.dtype)
+    model.to(device)
+    for holder, name, p, data in kept:
+        if getattr(holder, name) is p:  # moved in place (CPU ↔ CUDA)
+            p.data = data
+        else:  # a device whose tensors cannot take a CPU tensor's place (meta): a new parameter took its place
+            setattr(holder, name, torch.nn.Parameter(data, requires_grad=False))
 
 
 def streamed_linear(x: Any, weight: Any, bias: Any, device: Any) -> Any:
