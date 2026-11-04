@@ -49,6 +49,10 @@ from mizuoto.runtime.engine import EngineError
 
 StateDict = dict[str, torch.Tensor]
 
+ADOPTS = sys.platform != "win32"
+"""Whether checkpoint tensors may become parameters' data: not on Windows, where a mapped file cannot be replaced or
+deleted while a model holding it is loaded."""
+
 _read: dict[int, weakref.ref[torch.Tensor]] = {}
 """id → tensor, for the checkpoint tensors ``load_state_dict`` read and no parameter took yet."""
 
@@ -257,7 +261,7 @@ def load_into(module: nn.Module, sd: Mapping[str, torch.Tensor], *, strict: bool
 def _adopt(module: nn.Module, sd: Mapping[str, torch.Tensor]) -> set[str]:
     """Point ``module``'s parameters at the checkpoint tensors of ``sd`` they can use as they are; their keys."""
     placement = _placement.get()
-    if placement is None or not placement.elsewhere or sys.platform == "win32":
+    if placement is None or not placement.elsewhere or not ADOPTS:
         return set()
     params = dict(module.named_parameters(remove_duplicate=False))
     keys_of: dict[int, int] = {}

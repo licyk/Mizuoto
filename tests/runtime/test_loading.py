@@ -28,6 +28,12 @@ def _shares(param: torch.Tensor, src: torch.Tensor) -> bool:
     return param.data_ptr() == src.data_ptr()
 
 
+@pytest.fixture(autouse=True)
+def adopts(monkeypatch):
+    """As on Linux and macOS; Windows never adopts (its own test below)."""
+    monkeypatch.setattr(loading, "ADOPTS", True)
+
+
 @pytest.fixture
 def pickle(tmp_path):
     torch.save(_weights(), tmp_path / "w.pt")
@@ -115,7 +121,7 @@ def test_cast_and_tied_weights_are_copied(pickle, tmp_path):
 
 
 def test_nothing_is_taken_on_windows(pickle, monkeypatch):
-    monkeypatch.setattr(loading.sys, "platform", "win32")
+    monkeypatch.setattr(loading, "ADOPTS", False)  # what sys.platform == "win32" gives
     with loading.placing("cuda:0"):
         sd = loading.load_state_dict(pickle)
         net = Net()
