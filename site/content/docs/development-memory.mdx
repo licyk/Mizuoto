@@ -173,9 +173,9 @@ audio = ctx.run("codec decoder", [self.h_decoder], decode, self._decoder_memory(
 
 ## 报告
 
-- 每个输出的 `meta.memory`：`streamed_mb`（请求期间从内存复制的量）、`loaded_mb`、`size_mb`，部分加载的组件还有 `partial`：每个组件的 `reason`（预算不够、`vram_mode low` 或 `none`、显存不足后被限制，或为别的组件让出了显存），以及当时权衡的 `mode`、`free_mb`、`working_mb`、`reserve_mb`，还有 `loaded_mb`、`size_mb` 和 `gave_up_for`。发生时日志中也有同样的信息。
+- 每个输出的 `meta.memory`：`streamed_mb`（请求期间从内存复制的量）、`loaded_mb`、`size_mb`、`host_mb`（留在内存中的权重：主机副本和流式单元）和 `pinned_mb`（其中锁页的部分），在 CUDA 和 XPU 上还有 `peak_mb`（请求中被测量的各阶段里 torch 在设备上占用的最大值：所有常驻模型的权重加上工作显存，取自校准所测的峰值；请求包含多次调用时取最大值），部分加载的组件还有 `partial`：每个组件的 `reason`（预算不够、`vram_mode low` 或 `none`、显存不足后被限制，或为别的组件让出了显存），以及当时权衡的 `mode`、`free_mb`、`working_mb`、`reserve_mb`，还有 `loaded_mb`、`size_mb` 和 `gave_up_for`。发生时日志中也有同样的信息。
 - `GET /api/v1/runtime` 与 `mizuoto runtime`：每个模型的 `loaded_bytes`、`streamed_bytes`、`host_bytes`；网页界面的已加载模型面板用进度条显示。
-- `mizuoto doctor` 有一项 `memory` 检查结果，列出当前生效的策略（模式、保留量、上限、内存保留量、主机副本、锁页预算、复制流、重试与回退）。
+- `mizuoto doctor` 有一项 `memory` 检查结果，列出当前生效的策略（模式、保留量、上限、内存保留量、主机副本、锁页预算、复制流、重试与回退）；每个装有模型的引擎还有一项 `fits`：在每块 GPU 上，哪些模型能整个加载，哪些只能部分加载（其余从内存流式读取），依据是模型目录中的 `vram_mb` 与 GPU 显存减去 `compute.vram_reserve_mb`、不超过 `vram_limit_mb`、`low` 下取一半（`gpu_budget_mb`；字段在 `data` 中）。目录中的 `vram_mb` 是实测值：在 RTX 3060 上使用默认设置，进程为该模型的短、长一致性用例所占的显存，取两者较大值并向上取整（G13，见[性能](/docs/development-performance#各模型的显存占用g13)）。
 
 ## 静态 KV 缓存与 CUDA 分配器
 

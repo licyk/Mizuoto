@@ -155,7 +155,7 @@ id = "fishspeech/s2-pro"
 variant = "s2_pro"
 title = "Fish Audio S2 Pro"
 description = "The S2 Pro weights and their codec; about 24 GB of GPU memory recommended."
-vram_mb = 22000
+vram_mb = 10200
 recommended = true
 files = { hf = "fishaudio/s2-pro", exclude = [".gitattributes", "*.md", "*.png"], manifest = "fishspeech-s2-pro.files.json" }
 

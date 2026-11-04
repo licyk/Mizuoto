@@ -314,3 +314,43 @@ def test_install_commands_never_replace_torch():
     assert install_command("xformers", {"version": "2.8.0+cpu", "cuda": None}, python="py") is None
     assert install_command("sage", {"version": "2.8.0+rocm6.4", "hip": "6.4"}, python="py") is None
     assert "--no-deps" in (install_command("flash", {"version": "2.8.0+rocm6.4", "hip": "6.4"}, python="py") or "")
+
+
+def test_doctor_says_which_installed_models_fit_each_gpu(services, monkeypatch):
+    """``fits``, per engine: on each GPU, its installed models that load whole and those that load partly, from their
+    ``vram_mb`` against what the memory settings leave of the GPU; nothing without a GPU."""
+    from types import SimpleNamespace
+
+    from mizuoto.core.compute.models import ComputeInfo, DeviceInfo
+    from mizuoto.core.inference.runtime import gpu_budget_mb
+
+    def model(model_id, vram_mb, state="installed"):
+        return SimpleNamespace(id=model_id, engine=model_id.split("/")[0], vram_mb=vram_mb, state=state, remote=None)
+
+    services.runtime.installed_models = lambda: [
+        model("qwen3tts/big", 10500),
+        model("qwen3tts/small", 2200),
+        model("f5tts/one", 900),
+        model("omnivoice/unsized", None),
+        model("voxcpm/gone", 900, "available"),
+    ]
+    cpu = ComputeInfo(backend="CPU", devices=[DeviceInfo(id="cpu", kind="cpu", name="CPU")], probed_with="none")
+    gpu = ComputeInfo(backend="CUDA 13.2", devices=[DeviceInfo(id="cuda:0", kind="cuda", name="RTX 3060", memory_total_mb=12288)], probed_with="nvidia-smi")
+
+    def fits(engine=None):
+        return {f.engine: f for f in services.runtime.doctor(engine).findings if f.check == "fits"}
+
+    monkeypatch.setattr(services.runtime._compute, "info", lambda: cpu)
+    assert fits() == {}
+    monkeypatch.setattr(services.runtime._compute, "info", lambda: gpu)
+    found = fits()
+    assert set(found) == {"qwen3tts", "f5tts"} and all(f.level == "ok" for f in found.values())
+    data = found["qwen3tts"].data
+    assert data is not None and data["devices"][0]["budget_mb"] == 12288 - 1024 and data["devices"][0]["whole"] == ["qwen3tts/big", "qwen3tts/small"]
+    assert set(fits("f5tts")) == {"f5tts"}
+    services.settings.update({"compute": {"vram_limit_mb": 8192}})
+    big = fits()["qwen3tts"]
+    assert big.data is not None and big.data["devices"][0]["partly"] == ["qwen3tts/big"] and "partly, the rest streaming from RAM" in big.message
+    services.settings.update({"compute": {"vram_limit_mb": 0, "vram_mode": "high", "vram_reserve_mb": 2048}})
+    assert fits()["qwen3tts"].level == "warning" and "not at all (vram_mode high)" in fits()["qwen3tts"].message and fits()["f5tts"].level == "ok"
+    assert gpu_budget_mb(12288, 1024, 0, "low") == 6144 and gpu_budget_mb(12288, 1024, 8192, "low") == 4096

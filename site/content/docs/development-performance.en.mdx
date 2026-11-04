@@ -526,11 +526,46 @@ Found on the way:
 | --- | --- | --- | --- |
 | CosyVoice 2, fp32 (default) | 10.42–10.45 s | 10.31–10.32 s (−1.1 %) | identical |
 | CosyVoice 3, fp32 | 12.17–12.19 s | 12.04–12.06 s (−1.1 %) | identical |
-| CosyVoice 2, `fp16` | 19.76–19.85 s | 19.29–19.33 s (−2.4 %) | different |
-| CosyVoice 3, `fp16` | 15.49–15.52 s | 14.93–14.96 s (−3.6 %) | different |
+| CosyVoice 2, `fp16` (after G12) | 204 ms per second of audio | 200 ms (−1.8 %) | different |
+| CosyVoice 3, `fp16` (after G12) | 198 ms | 189 ms (−4.5 %) | different |
 | OmniVoice (bf16) | 6.59–6.63 s | 6.63–6.67 s (+0.6 %) | different |
 
-CosyVoice 2 and 3 offer it (`engines.cosyvoice.load_options.fused_projections`, off; identical on the CPU for both parity cases). OmniVoice's decoder runs over the whole sequence at every step, products large enough that fusing three into one saves nothing: not offered. Under `fp16` CosyVoice 2 was slower than in fp32 here (19.8 against 10.4 s), and in each process the first request's audio differed from the next ones' (the same in every process): both recorded in the backlog.
+CosyVoice 2 and 3 offer it (`engines.cosyvoice.load_options.fused_projections`, off; identical on the CPU for both parity cases). OmniVoice's decoder runs over the whole sequence at every step, products large enough that fusing three into one saves nothing: not offered. Under `fp16` CosyVoice 2 was slower than in fp32 (19.8 against 10.4 s), and in each process the first request's audio differed from the next ones': found and fixed in G12, below. (With `fp16` the fused audio is longer or shorter, so those rows compare time per second of audio.)
+
+## CosyVoice's fp16 (G12)
+
+2026-11-04, the same RTX 3060 and long cases. Under `fp16` each token of the language model ran in its own autocast region (the engine runs only inside `next()`), and autocast keeps its float16 casts of the weights only for a region: every token cast all of the language model's weights again (47,416 copies in one short request, 0.5 s of the device's time). Upstream holds one region over the whole generation. With CUDA graphs it also changed the audio: the first request's differed from the later ones', and both from the eager path's (upstream's order of work). The language model's linear layers now hold their weights in float16 under `fp16` (the values autocast casts them to; embeddings and norms stay float32):
+
+| | Before (per request) | After (per request, ms per second of audio) | fp32, for comparison |
+| --- | --- | --- | --- |
+| CosyVoice 2, ~30 s | 19.8 s | 6.2 s (204) | 10.4 s (345) |
+| CosyVoice 3, ~31 s | 15.5 s | 6.1 s (198) | 12.2 s (361) |
+
+Audio (three requests per process, each hashed): before, eager gave one audio every request and graphs gave another for the first request and a third after; now eager and graphs give the eager audio every request, for both models, which is what the code before gave eagerly.
+
+## GPU memory per model (G13)
+
+2026-11-04, RTX 3060 12 GB, the defaults (bf16 or fp16 on the GPU, CUDA graphs, host copies), one model per process, its short parity case and G1's long one (about 30 s of speech), two requests each. Every model loaded whole. "Process" is the GPU memory nvidia-smi gave the process at its most (the CUDA context and the allocator's cache included); "torch" the most torch held (the new `meta.memory.peak_mb`). The catalogue's `vram_mb`, which the web UI shows as the GPU memory a model takes and the doctor's `fits` weighs, was set from estimates and now is the torch figure rounded up (the reserve, `compute.vram_reserve_mb`, covers the rest):
+
+| Model (the more of the two cases) | Process MB | Torch MB | `vram_mb` |
+| --- | --- | --- | --- |
+| Fish S2 Pro | 11,873 | 10,154 | 22,000 → 10,200 |
+| IndexTTS 2 | 11,249 | 8,485 | 9,000 → 8,500 |
+| VoxCPM 2 | 6,621 | 5,522 | 6,500 → 5,600 |
+| Qwen3-TTS 1.7B Base | 5,395 | 4,648 | 6,500 → 4,700 |
+| CosyVoice 3 | 4,971 | 4,510 | 6,000 → 4,600 |
+| CosyVoice 2 | 3,873 | 3,460 | 5,000 → 3,500 |
+| VoxCPM 1.5 | 4,289 | 2,838 | 3,000 → 2,900 |
+| IndexTTS 1.5 | 3,173 | 2,401 | 4,000 → 2,500 |
+| OmniVoice | 2,537 | 2,107 | 5,000 → 2,200 |
+| GPT-SoVITS v4 | 2,331 | 1,972 | 4,000 → 2,000 |
+| CosyVoice-300M-SFT (short case) | 2,387 | 1,886 | 3,500 → 1,900 |
+| GPT-SoVITS v2 | 1,457 | 1,170 | 2,500 → 1,200 |
+| F5-TTS | 1,013 | 799 | 2,500 → 800 |
+
+Qwen3-TTS 1.7B CustomVoice and VoiceDesign take 4,300 (CustomVoice's short case: 4,000), CosyVoice-300M and its instruct variant SFT's 1,900; models not measured here (Qwen3-TTS 0.6B, GPT-SoVITS v2Pro, v2ProPlus and v5, IndexTTS 2.5, VoxCPM 0.5B, Drama 3) keep their estimates.
+
+**Gathered transfers, measured and not built.** Copying a streamed unit's weights from one page-locked buffer per unit instead of tensor by tensor (an item of the memory plan) would save each copy's fixed cost. With `vram_mode = none` (nearly every weight streamed) on the same card, Qwen3-TTS's talker copied 222 GB in 32,543 copies (6.8 MB each) at 2.87 GB/s and OmniVoice 26 GB in 6,152 at 2.88 GB/s: the card's link (PCIe x4) carries 2.85 GB/s in one 1 GB copy and 2.82 GB/s in 1 MB ones. On a full x16 link (13.4 GB/s) a 4–7 MB copy takes 0.3–0.5 ms, beside which the few microseconds a copy costs are about 1 %.
 
 ## Memory estimates calibrated
 

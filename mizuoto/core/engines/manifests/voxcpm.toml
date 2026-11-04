@@ -145,7 +145,7 @@ id = "voxcpm/2"
 variant = "v2"
 title = "VoxCPM2"
 description = "2B parameters, 30 languages, voice design and controllable cloning, 48 kHz."
-vram_mb = 6500
+vram_mb = 5600
 recommended = true
 files = { hf = "openbmb/VoxCPM2", modelscope = "OpenBMB/VoxCPM2", include = ["config.json", "model.safetensors", "audiovae.pth", "tokenizer.json", "tokenizer_config.json"], manifest = "voxcpm-2.files.json" }
 
@@ -154,7 +154,7 @@ id = "voxcpm/1.5"
 variant = "v1_5"
 title = "VoxCPM 1.5"
 description = "0.6B, Chinese and English cloning at 44.1 kHz."
-vram_mb = 3000
+vram_mb = 2900
 files = { hf = "openbmb/VoxCPM1.5", modelscope = "OpenBMB/VoxCPM1.5", include = ["config.json", "model.safetensors", "audiovae.pth", "tokenizer.json", "tokenizer_config.json"], manifest = "voxcpm-1.5.files.json" }
 
 [[models]]

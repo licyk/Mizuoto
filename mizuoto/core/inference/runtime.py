@@ -55,6 +55,8 @@ class RuntimeService:
         self.inference = inference
         compute.torch_probe = inference.probe_devices
         self.model_options: Callable[[str], dict[str, Any]] | None = None
+        self.installed_models: Callable[[], list[Any]] | None = None
+        """The installed models (``ModelService.list_models``), for the doctor's ``fits`` finding."""
         """Set by ``build_services``: what every load of a model gets besides the engine's load options (its assets)."""
         self.remote: RemoteService | None = None
         """Set by ``build_services``: devices named ``<host>/<device>`` are a remote host's."""
@@ -261,6 +263,38 @@ class RuntimeService:
             parts.append("engines: " + ", ".join(overrides))
         return DoctorFinding(level="ok", check="memory", message="memory: " + "; ".join(parts))
 
+    def _fits_findings(self, compute: ComputeInfo, engine_id: str | None) -> list[DoctorFinding]:
+        """Per engine, which of its installed models load whole on each GPU and which partly (the rest of their weights
+        streaming from RAM, slower), from each model's ``vram_mb`` (the GPU memory a request takes with the model whole,
+        measured) against what the memory settings leave of the GPU. None without a GPU or a model that says its size."""
+        gpus = [d for d in compute.devices if d.kind in ("cuda", "rocm", "xpu") and d.memory_total_mb]
+        if not gpus or self.installed_models is None:
+            return []
+        models = sorted((m for m in self.installed_models() if m.state == "installed" and m.vram_mb and not m.remote), key=lambda m: m.id)
+        c = self._settings.settings.compute
+        budgets = {d.id: gpu_budget_mb(d.memory_total_mb or 0.0, c.vram_reserve_mb, c.vram_limit_mb, c.vram_mode) for d in gpus}
+        findings = []
+        for engine in sorted({m.engine for m in models}):
+            if engine_id is not None and engine != engine_id:
+                continue
+            mine = [m for m in models if m.engine == engine]
+            devices, parts = [], []
+            for d in gpus:
+                budget = budgets[d.id]
+                whole = [m for m in mine if m.vram_mb <= budget]
+                partly = [m for m in mine if m.vram_mb > budget]
+                devices.append({"id": d.id, "name": d.name, "total_mb": d.memory_total_mb, "budget_mb": budget, "whole": [m.id for m in whole], "partly": [m.id for m in partly]})
+                listed = [f"whole: {_sized(whole)}"] if whole else []
+                if partly:
+                    how = "not at all (vram_mode high)" if c.vram_mode == "high" else "partly, the rest streaming from RAM (slower)"
+                    listed.append(f"{how}: {_sized(partly)}")
+                parts.append(f"{d.id} ({budget / 1024:.1f} of {(d.memory_total_mb or 0) / 1024:.0f} GB to use): " + "; ".join(listed))
+            if c.vram_mode == "none":
+                parts.append("vram_mode none streams almost every weight anyway")
+            level: Literal["ok", "warning"] = "warning" if c.vram_mode == "high" and any(d["partly"] for d in devices) else "ok"
+            findings.append(DoctorFinding(level=level, engine=engine, check="fits", message="on " + " | ".join(parts), data={"mode": c.vram_mode, "devices": devices}))
+        return findings
+
     def _accel_finding(self, compute: ComputeInfo) -> DoctorFinding:
         """The attention backends: the settings, each optional package installed or not,
         whether it runs on each GPU (asked of torch only when a package and a GPU are there) and how to install it."""
@@ -441,6 +475,7 @@ class RuntimeService:
         command = install_command(recommended)
         version = torch_version()
         findings: list[DoctorFinding] = [_devices_finding(compute), self._memory_finding()]
+        findings += self._fits_findings(compute, engine_id)
         findings.append(self._accel_finding(compute))
         build: str | None = None
         if version is None:
@@ -513,6 +548,21 @@ class RuntimeService:
                     )
                 )
         return findings
+
+
+def _sized(models: list[Any]) -> str:
+    return ", ".join(f"{m.id} ({m.vram_mb / 1024:.1f} GB)" for m in models)
+
+
+def gpu_budget_mb(total_mb: float, reserve_mb: float, limit_mb: float, mode: str) -> float:
+    """What the memory settings leave of a GPU for models: its memory less ``compute.vram_reserve_mb``, at most
+    ``compute.vram_limit_mb``, half of it under ``vram_mode = low`` (as the model manager's budget)."""
+    budget = total_mb - reserve_mb
+    if limit_mb:
+        budget = min(budget, limit_mb)
+    if mode == "low":  # the weights at most half of the device (within the limit)
+        budget = min(budget, (min(total_mb, limit_mb) if limit_mb else total_mb) / 2)
+    return max(budget, 0.0)
 
 
 def _devices_finding(compute: ComputeInfo) -> DoctorFinding:

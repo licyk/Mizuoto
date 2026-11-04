@@ -1207,7 +1207,11 @@ def merge_attention(total: dict[str, Any] | None, one: dict[str, Any] | None) ->
 
 
 def _merge_memory(total: dict[str, Any], one: dict[str, Any]) -> dict[str, Any]:
-    """A request's memory report over its calls: streamed bytes add up, the residency is the last call's."""
+    """A request's memory report over its calls: streamed bytes add up, the peak is the highest, the residency is the
+    last call's."""
     if not one:
         return total
-    return {**one, "streamed_mb": round(float(total.get("streamed_mb", 0.0)) + float(one.get("streamed_mb", 0.0)), 1)}
+    merged = {**one, "streamed_mb": round(float(total.get("streamed_mb", 0.0)) + float(one.get("streamed_mb", 0.0)), 1)}
+    if "peak_mb" in total or "peak_mb" in one:
+        merged["peak_mb"] = max(float(total.get("peak_mb", 0.0)), float(one.get("peak_mb", 0.0)))
+    return merged

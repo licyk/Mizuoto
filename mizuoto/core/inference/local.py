@@ -274,8 +274,12 @@ class LocalEngine:
                         "streamed_mb": round((manager.streamed_bytes(self.device) - streamed) / 2**20, 1),
                         "loaded_mb": round(usage["loaded"] / 2**20, 1),
                         "size_mb": round(manager.owner_bytes(self._owner(model_id)) / 2**20, 1),
+                        "host_mb": round(usage["host"] / 2**20, 1),
+                        "pinned_mb": round(usage["pinned"] / 2**20, 1),
                     }
                 )
+                if ctx.device_peak:
+                    request.memory["peak_mb"] = round(ctx.device_peak / 2**20, 1)
                 partial = manager.owner_placements(self._owner(model_id))
                 if partial:
                     request.memory["partial"] = partial

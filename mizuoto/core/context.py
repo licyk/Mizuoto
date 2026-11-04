@@ -103,6 +103,7 @@ def build_services(
     models.remote = remote
     models.before_remove = runtime.unload_model
     runtime.model_options = models.load_options
+    runtime.installed_models = lambda: models.list_models(installed=True)
     models.events = events
     audio = AudioService(settings, db, storage)
     outputs = OutputService(settings, db, events, storage)

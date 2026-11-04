@@ -81,6 +81,10 @@ class RequestContext:
         self.applied: dict[str, Any] = {}
         """Parameter values the engine actually used, reported with the result."""
         self.warnings: list[str] = []
+        self.device_peak = 0
+        """The most torch held on the request's device in its measured phases (bytes; the model manager measures each
+        phase's peak to calibrate its estimates, and raises this): every resident model's weights and the working
+        memory. 0 where nothing was measured (the CPU, MPS)."""
         self._progress = progress
         self._scratch_root = scratch_root
         self._tmpdir: Path | None = None

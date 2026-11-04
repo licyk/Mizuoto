@@ -322,7 +322,7 @@ mizuoto asset download gptsovits/s2d-v2pro
 
 ### `doctor`
 
-List the GPUs found (NVIDIA, AMD, Intel, Apple) and how they were found; check torch against them and print the command that installs the right build; list each engine as available or missing (with what it lacks: torch, `mizuoto-fishspeech`, `mizuoto-indextts`) and the optional extras not installed. Exits with code 1 when a check fails.
+List the GPUs found (NVIDIA, AMD, Intel, Apple) and how they were found; check torch against them and print the command that installs the right build; list each engine as available or missing (with what it lacks: torch, `mizuoto-fishspeech`, `mizuoto-indextts`) and the optional extras not installed; and, per engine, which installed models load whole on each GPU and which only partly (the rest of their weights streaming from RAM, slower), under the memory settings in effect. Exits with code 1 when a check fails.
 
 | Argument / option | Meaning |
 | --- | --- |

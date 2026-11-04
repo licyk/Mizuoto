@@ -119,7 +119,7 @@ help = "Half precision on the GPU: faster, slightly different."
 type = "bool"
 default = false
 variants = ["v2", "v3"]
-help = "Fast mode (CosyVoice 2 and 3): each layer's q/k/v and gate/up projections in the language model as one product each (as Qwen3-TTS's). 1–4 % faster on a GPU (most with fp16); the audio may no longer be identical to the original implementation's (the same model, slightly different rounding); outputs list it. Applies when the model next loads."
+help = "Fast mode (CosyVoice 2 and 3): each layer's q/k/v and gate/up projections in the language model as one product each (as Qwen3-TTS's). 1–5 % faster on a GPU (most with fp16); the audio may no longer be identical to the original implementation's (the same model, slightly different rounding); outputs list it. Applies when the model next loads."
 
 [[assets]]
 id = "cosyvoice/wetext"
@@ -134,7 +134,7 @@ id = "cosyvoice/cosyvoice3-0.5b"
 variant = "v3"
 title = "Fun-CosyVoice 3 0.5B"
 description = "The newest CosyVoice: nine languages and Chinese dialects, pronunciation in pinyin or CMU phones."
-vram_mb = 6000
+vram_mb = 4600
 recommended = true
 files = { hf = "FunAudioLLM/Fun-CosyVoice3-0.5B-2512", modelscope = "FunAudioLLM/Fun-CosyVoice3-0.5B-2512", exclude = [".gitattributes", "*.md", "asset/*", "*.batch.onnx", "flow.decoder.estimator.*.onnx", "CosyVoice-BlankEN/model.safetensors", "llm.rl.pt"], manifest = "cosyvoice3-0.5b.files.json" }
 assets = ["cosyvoice/wetext"]
@@ -144,7 +144,7 @@ id = "cosyvoice/cosyvoice2-0.5b"
 variant = "v2"
 title = "CosyVoice 2 0.5B"
 description = "Cloning, instructions and bidirectional streaming."
-vram_mb = 5000
+vram_mb = 3500
 recommended = true
 files = { hf = "FunAudioLLM/CosyVoice2-0.5B", modelscope = "iic/CosyVoice2-0.5B", exclude = [".gitattributes", "*.md", "asset/*", "*.batch.onnx", "flow.decoder.estimator.*.onnx", "CosyVoice-BlankEN/model.safetensors"], manifest = "cosyvoice2-0.5b.files.json" }
 assets = ["cosyvoice/wetext"]
@@ -154,7 +154,7 @@ id = "cosyvoice/cosyvoice-300m"
 variant = "v1_base"
 title = "CosyVoice 300M"
 description = "The first CosyVoice: cloning and cross-lingual cloning."
-vram_mb = 3500
+vram_mb = 1900
 files = { hf = "FunAudioLLM/CosyVoice-300M", modelscope = "iic/CosyVoice-300M", exclude = [".gitattributes", "*.md", "asset/*", "flow.decoder.estimator.*.onnx"], manifest = "cosyvoice-300m.files.json" }
 assets = ["cosyvoice/wetext"]
 
@@ -163,7 +163,7 @@ id = "cosyvoice/cosyvoice-300m-sft"
 variant = "v1_sft"
 title = "CosyVoice 300M SFT"
 description = "Seven preset speakers (Chinese, English, Japanese, Cantonese, Korean)."
-vram_mb = 3500
+vram_mb = 1900
 files = { hf = "FunAudioLLM/CosyVoice-300M-SFT", modelscope = "iic/CosyVoice-300M-SFT", exclude = [".gitattributes", "*.md", "asset/*", ".DS_Store", "flow.decoder.estimator.*.onnx"], manifest = "cosyvoice-300m-sft.files.json" }
 assets = ["cosyvoice/wetext"]
 
@@ -172,7 +172,7 @@ id = "cosyvoice/cosyvoice-300m-instruct"
 variant = "v1_instruct"
 title = "CosyVoice 300M Instruct"
 description = "The preset speakers, steered by a description of the speaker and the delivery."
-vram_mb = 3500
+vram_mb = 1900
 files = { hf = "FunAudioLLM/CosyVoice-300M-Instruct", modelscope = "iic/CosyVoice-300M-Instruct", exclude = [".gitattributes", "*.md", "asset/*", "flow.decoder.estimator.*.onnx"], manifest = "cosyvoice-300m-instruct.files.json" }
 assets = ["cosyvoice/wetext"]
 

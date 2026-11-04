@@ -249,7 +249,7 @@ id = "gptsovits/v2-base"
 variant = "v2"
 title = "GPT-SoVITS v2"
 description = "The pretrained v2 pair, 32 kHz."
-vram_mb = 2500
+vram_mb = 1200
 assets = ["gptsovits/encoders", "gptsovits/g2pw", "gptsovits/nltk-data", "gptsovits/open-jtalk"]
 files = { hf = "lj1995/GPT-SoVITS", include = ["gsv-v2final-pretrained/s1bert25hz-5kh-longer-epoch=12-step=369668.ckpt", "gsv-v2final-pretrained/s2G2333k.pth"], manifest = "gptsovits-v2.files.json" }
 
@@ -277,7 +277,7 @@ id = "gptsovits/v4-base"
 variant = "v4"
 title = "GPT-SoVITS v4"
 description = "Flow-matching SoVITS with a 48 kHz vocoder; needs the reference transcript."
-vram_mb = 4000
+vram_mb = 2000
 assets = ["gptsovits/encoders", "gptsovits/g2pw", "gptsovits/nltk-data", "gptsovits/open-jtalk"]
 files = { hf = "lj1995/GPT-SoVITS", include = ["s1v3.ckpt", "gsv-v4-pretrained/s2Gv4.pth", "gsv-v4-pretrained/vocoder.pth"], manifest = "gptsovits-v4.files.json" }
 

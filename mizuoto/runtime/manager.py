@@ -315,6 +315,11 @@ class ModelManager:
                 peak, now = self.devices.peak(device), self.devices.allocated(device)
                 if peak is not None and now is not None:
                     self._calibrate(key, self._working(device, peak - base, now - base), estimate)
+                    from mizuoto.runtime.context import current
+
+                    ctx = current()
+                    if ctx is not None:  # the request reports its highest (meta.memory.peak_mb)
+                        ctx.device_peak = max(ctx.device_peak, peak)
         finally:
             with self._released:
                 for e in entries:
@@ -515,10 +520,16 @@ class ModelManager:
             return [{"component": e.handle.name.split(":", 1)[-1], **e.handle.placement} for e in self._entries if e.owner == owner and e.handle.partial and e.handle.placement]
 
     def owner_usage(self, owner: str) -> dict[str, int]:
-        """``loaded``, ``streamed`` and ``host`` bytes of ``owner``'s components."""
+        """``loaded``, ``streamed``, ``host`` and ``pinned`` bytes of ``owner``'s components (host: weights kept in RAM, as
+        host copies or streamed; pinned: the page-locked part of those)."""
         with self._lock:
             mine = [e.handle for e in self._entries if e.owner == owner]
-            return {"loaded": sum(h.loaded_bytes for h in mine), "streamed": sum(h.streamed_bytes for h in mine), "host": sum(h.host_bytes for h in mine)}
+            return {
+                "loaded": sum(h.loaded_bytes for h in mine),
+                "streamed": sum(h.streamed_bytes for h in mine),
+                "host": sum(h.host_bytes for h in mine),
+                "pinned": sum(h.pinned_bytes for h in mine),
+            }
 
     def streamed_bytes(self, device: str) -> int:
         """Bytes copied to ``device`` by its streamer so far (a request reports the difference)."""

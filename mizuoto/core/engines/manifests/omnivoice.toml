@@ -151,7 +151,7 @@ id = "omnivoice/omnivoice"
 variant = "v0"
 title = "OmniVoice"
 description = "One model for cloning, attribute design and its own voice; the Higgs Audio v2 tokenizer is included."
-vram_mb = 5000
+vram_mb = 2200
 recommended = true
 files = { hf = "k2-fsa/OmniVoice", modelscope = "k2-fsa/OmniVoice", manifest = "omnivoice.files.json" }
 

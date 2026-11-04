@@ -150,7 +150,7 @@ variant = "base"
 title = "Qwen3-TTS 1.7B Base"
 description = "Clones a voice from a 3–20 s clip; with the clip's transcript it follows the voice more closely."
 size_mb = 4520
-vram_mb = 6500
+vram_mb = 4700
 recommended = true
 files = { hf = "Qwen/Qwen3-TTS-12Hz-1.7B-Base", modelscope = "Qwen/Qwen3-TTS-12Hz-1.7B-Base", manifest = "qwen3tts-1.7b-base.files.json" }
 
@@ -169,7 +169,7 @@ variant = "custom_voice"
 title = "Qwen3-TTS 1.7B CustomVoice"
 description = "Nine preset speakers, steered by an instruction (emotion, pace, style)."
 size_mb = 4520
-vram_mb = 6500
+vram_mb = 4300
 recommended = true
 files = { hf = "Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice", modelscope = "Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice", manifest = "qwen3tts-1.7b-custom-voice.files.json" }
 
@@ -188,7 +188,7 @@ variant = "voice_design"
 title = "Qwen3-TTS 1.7B VoiceDesign"
 description = "Creates a voice from a description such as \"a warm, low male voice, slightly hoarse\"."
 size_mb = 4520
-vram_mb = 6500
+vram_mb = 4300
 recommended = true
 files = { hf = "Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign", modelscope = "Qwen/Qwen3-TTS-12Hz-1.7B-VoiceDesign", manifest = "qwen3tts-1.7b-voice-design.files.json" }
 

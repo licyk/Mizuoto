@@ -322,7 +322,7 @@ mizuoto asset download gptsovits/s2d-v2pro
 
 ### `doctor`
 
-列出找到的 GPU（NVIDIA、AMD、Intel、Apple）及查找方式；检查 torch 与它们是否匹配，并打印安装正确版本的命令；逐个列出引擎可用或缺失（以及缺什么：torch、`mizuoto-fishspeech`、`mizuoto-indextts`），以及没有安装的可选依赖。有检查失败时以退出码 1 结束。
+列出找到的 GPU（NVIDIA、AMD、Intel、Apple）及查找方式；检查 torch 与它们是否匹配，并打印安装正确版本的命令；逐个列出引擎可用或缺失（以及缺什么：torch、`mizuoto-fishspeech`、`mizuoto-indextts`），以及没有安装的可选依赖；并按引擎列出已安装的模型在每块 GPU 上能整个加载还是只能部分加载（其余权重从内存流式读取，更慢），依据当前生效的显存设置。有检查失败时以退出码 1 结束。
 
 | 参数 / 选项 | 说明 |
 | --- | --- |

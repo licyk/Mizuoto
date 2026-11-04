@@ -127,7 +127,7 @@ id = "f5tts/v1-base"
 variant = "v1_base"
 title = "F5-TTS v1 Base"
 description = "The current F5-TTS release, with the Vocos vocoder."
-vram_mb = 2500
+vram_mb = 800
 recommended = true
 files = { hf = "SWivid/F5-TTS", subdir = "F5TTS_v1_Base", include = ["F5TTS_v1_Base/model_1250000.safetensors", "F5TTS_v1_Base/vocab.txt"], manifest = "f5tts-v1-base.files.json" }
 extra = [{ hf = "charactr/vocos-mel-24khz", into = "vocos", include = ["config.yaml", "pytorch_model.bin"], manifest = "f5tts-vocos.files.json" }]

@@ -188,7 +188,7 @@ id = "indextts/v1.5"
 variant = "v1_5"
 title = "IndexTTS-1.5"
 description = "Chinese and English cloning, stable and quick."
-vram_mb = 4000
+vram_mb = 2500
 files = { hf = "IndexTeam/IndexTTS-1.5", include = ["config.yaml", "bpe.model", "gpt.pth", "bigvgan_generator.pth"], manifest = "indextts-1.5.files.json" }
 
 [[models]]
@@ -196,7 +196,7 @@ id = "indextts/v2"
 variant = "v2"
 title = "IndexTTS-2"
 description = "Emotion from a clip, weights or a description, kept apart from the timbre."
-vram_mb = 9000
+vram_mb = 8500
 recommended = true
 assets = ["indextts/w2v-bert", "indextts/semantic-codec", "indextts/campplus", "indextts/bigvgan"]
 files = { hf = "IndexTeam/IndexTTS-2", exclude = [".gitattributes", "*.md", "LICENSE*"], manifest = "indextts-2.files.json" }

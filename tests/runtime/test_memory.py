@@ -936,3 +936,41 @@ def test_a_cancel_reaches_a_request_waiting_for_its_weights_to_copy(monkeypatch)
     others: list[Any] = [SimpleNamespace(load_device="cpu", simulated=False), SimpleNamespace(load_device="cuda:0", simulated=True)]
     manager._await_copies(others)
     assert copies.queries == 0
+
+
+def test_a_request_reports_the_highest_peak_of_its_measured_phases():
+    """``meta.memory.peak_mb``: the request context keeps the highest device peak the manager measured in its phases
+    (weights and working memory), and a phase outside any request touches none."""
+
+    class Measuring(DeviceService):
+        def __init__(self) -> None:
+            super().__init__(simulate={"cpu": 1 << 40}, strict=True)
+            self.used = 0
+
+        def allocated(self, name: str) -> int | None:
+            return 1000
+
+        def start_peak(self, name: str) -> None:
+            pass
+
+        def peak(self, name: str) -> int | None:
+            return 1000 + self.used
+
+    devices = Measuring()
+    m = ModelManager(devices, policy=lambda: VramPolicy(reserve_bytes=0, host_copies="on"))
+    h = ModelHandle(Blocks(2), name="tts/m:decoder", load_device="cpu")
+    m.register("M", [h])
+    from mizuoto.runtime.context import RequestContext
+
+    ctx = RequestContext("p", seed=1)
+    with ctx.bind():
+        for used in (300 * MB, 700 * MB, 200 * MB):
+            devices.used = used
+            with m.use([h], 100 * MB):
+                pass
+    assert ctx.device_peak == 1000 + 700 * MB
+    devices.used = 900 * MB
+    with m.use([h], 100 * MB):  # no request bound
+        pass
+    assert ctx.device_peak == 1000 + 700 * MB
+    assert set(m.owner_usage("M")) == {"loaded", "streamed", "host", "pinned"}
