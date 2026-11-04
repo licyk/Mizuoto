@@ -219,6 +219,7 @@ Fish Audio S2 Pro：双自回归模型，约一千万小时、五十种左右语
 - **语言**：IndexTTS-2.5 的日语文本需要可选依赖 `mizuoto-indextts[ja]`。
 - **共享文件**：IndexTTS-2 和 2.5 需要 `indextts/w2v-bert`（2.2 GB）、`indextts/campplus`、`indextts/bigvgan`，IndexTTS-2 还需要 `indextts/semantic-codec`，随模型一起下载。
 - **训练**：无。
+- **流式输出**：流式请求在每句生成完后发送这一句的音频。想更早听到声音，可设选项 `stream_chunk`（v2/v2.5；100 是不错的取值，约 1.6 秒语音）：每生成这么多个编码就发送一段交叉淡化的音频，在 RTX 3060 上约 2 秒后就有第一段，而不必等第一句全部生成。它使用单束采样，整个请求耗时更长（IndexTTS 2 约 1.5 倍）；详见 [IndexTTS](/docs/engines-indextts)。
 - **加载选项**：`use_qwen_emo`（默认开）、`use_torch_compile`（v2/v2.5：与 `compute.compile` 一样编译 s2mel DiT 和 BigVGAN，见 [性能与加速](/docs/advanced-performance)）。
 
 ## 语音识别（asr）

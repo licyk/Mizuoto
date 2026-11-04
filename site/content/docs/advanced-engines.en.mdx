@@ -219,6 +219,7 @@ bilibili's zero-shot TTS: clones from a clip without its transcript. Best for: e
 - **Languages**: Japanese text for IndexTTS-2.5 needs the optional extra `mizuoto-indextts[ja]`.
 - **Shared files**: IndexTTS-2 and 2.5 need `indextts/w2v-bert` (2.2 GB), `indextts/campplus` and `indextts/bigvgan`, and IndexTTS-2 also `indextts/semantic-codec`; they are downloaded with the model.
 - **Training**: none.
+- **Streaming**: a streamed request sends each sentence's audio when it is done. For audio sooner, set the option `stream_chunk` (v2/v2.5; 100 is a good value, about 1.6 s of speech): audio every that many codes, cross-faded, the first after about 2 s on an RTX 3060 instead of the whole first sentence's time. It samples with one beam, and the whole request takes longer (IndexTTS 2 about 1.5×); details on [IndexTTS](/docs/engines-indextts).
 - **Load options**: `use_qwen_emo` (on by default), `use_torch_compile` (v2/v2.5: compiles the s2mel DiT and BigVGAN, as `compute.compile` does; see [Performance](/docs/advanced-performance)).
 
 ## Speech recognition (asr)

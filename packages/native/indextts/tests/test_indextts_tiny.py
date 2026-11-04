@@ -272,10 +272,11 @@ def reference(tmp_path_factory) -> Path:
     return path
 
 
-def speak(engine, reference, seed=3, text="Hello there.", style=None, stream=False, ctx=None, voice=None, **params):
+def speak(engine, reference, seed=3, text="Hello there.", style=None, stream=False, ctx=None, voice=None, options=None, **params):
     ctx = ctx or RequestContext("r", seed=seed)
     voice = voice or VoiceSpec(references=[Reference(audio_path=str(reference), transcript="")])
-    task = SynthesisTask(text=text, language="en", voice=voice, style=style or StyleSpec(), params={"seed": seed, "max_new_tokens": 6, **params}, options={}, stream=stream)
+    params = {"seed": seed, "max_new_tokens": 6, **params}
+    task = SynthesisTask(text=text, language="en", voice=voice, style=style or StyleSpec(), params=params, options=dict(options or {}), stream=stream)
     with torch.inference_mode():
         return list(engine.synthesize(task, ctx)), ctx
 
@@ -310,6 +311,78 @@ def test_streaming_and_speed(models, reference):
     assert chunks[-1].final and chunks[-1].samples.size == 0 and sum(c.samples.size for c in chunks) > 0
     (slow,), ctx = speak(models["v2_5"], reference, speed=0.5)
     assert ctx.applied["duration_factor"] == 2.0 and ctx.applied["lang"] == "en" and slow.samples.size
+
+
+@pytest.mark.parametrize("variant", ["v2", "v2_5", "v1_5"])
+def test_one_beam_samples_as_transformers_does(models, variant):
+    """``num_beams = 1``: transformers' ``_sample`` (processors over the raw logits, one draw a step), not beam
+    sampling with one beam: the codes a step-by-step reference draws over the whole sequence each step, and the
+    generator where it leaves it. With the KV cache upstream embeds each new code at the position after its own (the
+    cached step's ``attention_mask.shape[1] - mel_len``); without it, at its own."""
+    from mizuoto.runtime.sampling import HfSampling, hf_sample
+    from mizuoto_indextts.gpt import BeamSampling, sample_steps
+
+    gpt = models[variant].gpt
+    g = torch.Generator().manual_seed(11)
+    prompt = torch.randn(1, 7, gpt.c.model_dim, generator=g) * 0.5
+    hf = HfSampling(do_sample=True, temperature=0.9, top_k=5, top_p=0.9, repetition_penalty=2.0)
+    with torch.inference_mode():
+        for cache in (True, False):
+            want_g = torch.Generator().manual_seed(5)
+            ids = torch.ones((1, prompt.shape[1] + 1), dtype=torch.long)
+            ids[:, -1] = gpt.c.start_mel_token
+            want: list[int] = []
+            while True:
+                mel = ids[:, prompt.shape[1] :]
+                positions = torch.arange(mel.shape[1]) + (torch.arange(mel.shape[1]) > 0).long() * int(cache)
+                emb = gpt.mel_embedding(mel) + gpt.mel_pos_embedding.emb(positions)[None]
+                hidden, _ = gpt.gpt(torch.cat([prompt, emb], dim=1))
+                token = hf_sample(gpt.logits(hidden)[:, -1, :].float(), ids, hf, want_g)
+                ids = torch.cat([ids, token[:, None]], dim=-1)
+                want.append(int(token))
+                if want[-1] == gpt.c.stop_mel_token or len(want) == 12:
+                    break
+            s = BeamSampling(num_beams=1, max_new_tokens=12, top_k=5, top_p=0.9, temperature=0.9, repetition_penalty=2.0, kv_cache=cache)
+            got_g = torch.Generator().manual_seed(5)
+            got = list(sample_steps(gpt, prompt, s, got_g))
+            assert len(got) > 3 and got == want
+            assert torch.equal(got_g.get_state(), want_g.get_state())
+
+
+@pytest.mark.parametrize("variant", ["v2", "v2_5"])
+def test_streaming_within_a_segment(models, reference, variant):
+    """``stream_chunk``: audio every few codes, windows overlapping by ``stream_overlap`` codes and cross-faded, with
+    one beam; the same under a seed. It needs one beam and an overlap smaller than the window."""
+    options = {"stream_chunk": 4, "stream_overlap": 1}
+    chunks, ctx = speak(models[variant], reference, text="Hello there.", stream=True, options=options, max_new_tokens=20, segment_silence_ms=0)
+    speech = [c for c in chunks if c.samples.size]
+    assert chunks[-1].final and len(speech) >= 2
+    assert ctx.applied["num_beams"] == 1 and ctx.applied["stream_chunk"] == 4 and ctx.applied["stream_overlap"] == 1
+    again, _ = speak(models[variant], reference, text="Hello there.", stream=True, options=options, max_new_tokens=20, segment_silence_ms=0)
+    assert all(np.array_equal(a.samples, b.samples) for a, b in zip(chunks, again, strict=True))
+    unstreamed, ctx = speak(models[variant], reference, options=options, max_new_tokens=20)
+    assert "stream_chunk" not in ctx.applied and ctx.applied.get("num_beams") is None  # only a streamed request chunks
+    with pytest.raises(EngineError, match="one beam"):
+        speak(models[variant], reference, stream=True, options={**options, "num_beams": 3})
+    with pytest.raises(EngineError, match="less than"):
+        speak(models[variant], reference, stream=True, options={"stream_chunk": 4, "stream_overlap": 4})
+
+
+def test_the_chunk_joiner_cross_fades_the_overlaps():
+    """Each window's audio goes out but its last ``overlap`` samples, which a Hann cross-fade joins with the next
+    window's first; the last window goes out whole, its end faded: the windows' lengths less one overlap each join."""
+    from mizuoto_indextts.engine import ChunkJoiner
+
+    joiner = ChunkJoiner(100)
+    windows = [np.full(1000, 0.5), np.full(1000, 0.5), np.full(700, 0.5)]
+    out = [joiner.push(w, last=i == len(windows) - 1) for i, w in enumerate(windows)]
+    assert [len(o) for o in out] == [900, 900, 700] and joiner.flush().size == 0
+    joined = np.concatenate(out)
+    window = np.hanning(200)
+    assert np.allclose(joined[900:1000], 0.5 * (window[100:] + window[:100]))  # the cross-fade of two equal signals
+    assert joined[-1] == 0.0 and np.allclose(joined[:900], 0.5)
+    held = ChunkJoiner(100)
+    assert len(held.push(np.full(1000, 0.5), last=False)) == 900 and len(held.flush()) == 100
 
 
 def test_cancel(models, reference):
@@ -446,6 +519,16 @@ def test_cuda_graphs_decode_exactly_as_eagerly_on_a_gpu(tmp_path_factory, refere
                     (a,), _ = speak(eager, reference, style=style, ctx=RequestContext("r", seed=3, device="cuda"), max_new_tokens=40)
                     (b,), _ = speak(graphed, reference, style=style, ctx=RequestContext("r", seed=3, device="cuda"), max_new_tokens=40)
                     assert a.samples.size and (a.samples == b.samples).all(), variant
+                # one beam after three: the graphs captured for three beams are not replayed for one
+                one = {"num_beams": 1}
+                (a,), _ = speak(eager, reference, ctx=RequestContext("r", seed=3, device="cuda"), options=one, max_new_tokens=40)
+                (b,), ctx = speak(graphed, reference, ctx=RequestContext("r", seed=3, device="cuda"), options=one, max_new_tokens=40)
+                assert ctx.applied.get("cuda_graphs") and a.samples.shape == b.samples.shape and (a.samples == b.samples).all(), variant
+                if variant != "v1_5":  # streaming within a segment: the GPT's steps between the windows' decoding
+                    chunked = {"stream_chunk": 6, "stream_overlap": 2}
+                    a_chunks, _ = speak(eager, reference, stream=True, ctx=RequestContext("r", seed=3, device="cuda"), options=chunked, max_new_tokens=40)
+                    b_chunks, _ = speak(graphed, reference, stream=True, ctx=RequestContext("r", seed=3, device="cuda"), options=chunked, max_new_tokens=40)
+                    assert len(a_chunks) == len(b_chunks) and all((x.samples == y.samples).all() for x, y in zip(a_chunks, b_chunks, strict=True)), variant
 
 
 @pytest.mark.skipif(not torch.cuda.is_available() or torch.version.hip is not None, reason="CUDA graphs need an NVIDIA GPU")

@@ -101,6 +101,8 @@ class IndexTtsEngine(Engine):
         "length_penalty": OptionSpec("float", 0.0, -2.0, 2.0),
         "max_text_tokens_per_segment": OptionSpec("int", 120, 20, 600),
         "use_random": OptionSpec("bool", False),
+        "stream_chunk": OptionSpec("int", 0, 0, 400),
+        "stream_overlap": OptionSpec("int", 5, 1, 50),
     }
 
     def detect_variant(self, model_dir: Path) -> str | None:
@@ -164,6 +166,51 @@ def fade_out_tail(wav: torch.Tensor, rate: int, fade_ms: float = TAIL_FADE_MS) -
     out = wav.clone()
     out[..., -n:] = (out[..., -n:].to(torch.float32) * ramp).to(wav.dtype)
     return out
+
+
+class ChunkJoiner:
+    """The TensorRT backend's ``StreamingDecoder`` joins: each window's audio but its last ``overlap`` samples goes out,
+    those held back to be cross-faded (a Hann window's halves) with the next window's first ``overlap``; the last
+    window's audio goes out whole, its last 512 samples faded out (``_fade_out_tail``)."""
+
+    FADE = 512
+
+    def __init__(self, overlap: int) -> None:
+        self.overlap = overlap
+        self.tail: Any = None
+
+    @staticmethod
+    def _fade_out(audio: Any) -> Any:
+        import numpy as np
+
+        if len(audio) <= ChunkJoiner.FADE:
+            return audio
+        audio = audio.copy()
+        audio[-ChunkJoiner.FADE :] *= np.linspace(1.0, 0.0, ChunkJoiner.FADE)
+        return audio
+
+    def push(self, audio: Any, last: bool) -> Any:
+        import numpy as np
+
+        audio = np.asarray(audio, dtype=np.float64)
+        if self.tail is not None:
+            head, audio = audio[: self.overlap], audio[self.overlap :]
+            n = min(len(self.tail), len(head))
+            window = np.hanning(2 * n)
+            audio = np.concatenate([self.tail[:n] * window[n:] + head[:n] * window[:n], audio])
+            self.tail = None
+        if last:
+            return self._fade_out(audio)
+        split = max(len(audio) - self.overlap, 0)
+        self.tail = audio[split:]
+        return audio[:split]
+
+    def flush(self) -> Any:
+        """What is held back when the codes ran out at a window's end (none came after it)."""
+        import numpy as np
+
+        tail, self.tail = self.tail, None
+        return self._fade_out(tail) if tail is not None else np.zeros(0)
 
 
 def load_audio(path: str, sr: int | None, max_seconds: float = MAX_REFERENCE_SECONDS) -> tuple[torch.Tensor, int]:
@@ -507,7 +554,7 @@ class LoadedIndexTts2(LoadedEngine):
         """One segment's waveform, scaled to 16-bit range (float, clamped), (1, samples)."""
         import torch
 
-        from mizuoto_indextts.gpt import beam_sample
+        from mizuoto_indextts.gpt import generate
 
         g = ctx.generator_for(self.device)
         half = torch.autocast(self.device.type, dtype=self.half or torch.float16, enabled=self.half is not None)
@@ -516,7 +563,7 @@ class LoadedIndexTts2(LoadedEngine):
             with half:
                 conds = self.gpt._conds(speech_latent, emovec, 1)
                 prompt, pad = self.gpt.prompt(conds, text, lang)
-                return beam_sample(self.gpt, prompt, sampling, g, ctx.check_cancel, pad=pad)
+                return generate(self.gpt, prompt, sampling, g, ctx.check_cancel, pad=pad)
 
         out = ctx.run("gpt", [self.h_gpt], sample, self._gpt_memory(sampling, int(text.shape[-1])))
         if self.gpt.graphed and not self.gpt.graphs_failed:
@@ -542,6 +589,13 @@ class LoadedIndexTts2(LoadedEngine):
             assert gpt_layer is not None
             s_infer = ctx.run("s2mel", [self.h_s2mel, self.h_codec], lambda: self.semantic_codec.quantizer.vq2emb(codes_t.unsqueeze(1)).transpose(1, 2) + gpt_layer(latent.float()))
             target_lengths = (torch.LongTensor([code_len]).to(self.device) * 1.72).long()
+        return self._decode(s_infer, target_lengths, spk, g, ctx)
+
+    def _decode(self, s_infer: torch.Tensor, target_lengths: torch.Tensor, spk: SpeakerCond, g: torch.Generator, ctx: RequestContext) -> torch.Tensor:
+        """The semantic features through the length regulator, the s2mel's flow (after the reference's prompt) and
+        BigVGAN: the waveform scaled to 16-bit range (float, clamped), (1, samples)."""
+        import torch
+
         frames = int(target_lengths.max()) + spk.ref_mel.size(-1)
 
         def flow() -> torch.Tensor:
@@ -554,12 +608,104 @@ class LoadedIndexTts2(LoadedEngine):
         mel = ctx.run("s2mel", [self.h_s2mel], flow, 2 * 8 * frames * frames * 4 + 512 * 2**20)
         mel = mel[:, :, spk.ref_mel.size(-1) :]
         ctx.check_cancel()
-        from mizuoto.nn.dsp.tiles import tiled_1d
+        from mizuoto.nn.dsp.tiles import context_tiled_1d
 
         vocoder = self.compiled_bigvgan or self.bigvgan
-        tiled = ("in tiles of 256 frames", lambda: tiled_1d(vocoder, mel.float(), int(self.mel_args["hop_size"])).squeeze().unsqueeze(0).squeeze(1))
+        # each tile with the frames its samples depend on each side: the whole's samples up to the sums' rounding
+        context = self.bigvgan.context_frames()
+        hop = int(self.mel_args["hop_size"])
+        tiled = ("in tiles of 256 frames", lambda: context_tiled_1d(vocoder, mel.float(), hop, tile=256, before=context, after=context).squeeze().unsqueeze(0).squeeze(1))
         wav = ctx.run("bigvgan", [self.h_bigvgan], lambda: vocoder(mel.float()).squeeze().unsqueeze(0).squeeze(1), bigvgan_memory(mel.shape[-1] * 256, 1272), fallback=tiled)
         return torch.clamp(32767 * wav, -32767.0, 32767.0).cpu()
+
+    def _segment_chunks(
+        self,
+        text: torch.Tensor,
+        lang: torch.Tensor | None,
+        spk: SpeakerCond,
+        speech_latent: torch.Tensor,
+        emovec: torch.Tensor,
+        sampling: Any,
+        duration_factor: float,
+        chunk: int,
+        overlap: int,
+        ctx: RequestContext,
+    ) -> Iterator[torch.Tensor]:
+        """One segment's waveform as it is generated (option ``stream_chunk``), scaled to 16-bit range, (1, samples)
+        each: the TensorRT backend's streaming (``FasterIndexTTS2``, ``StreamingDecoder``), on the native models.
+
+        The GPT samples with one beam, so each code is final when drawn. Every ``chunk`` codes, a window of the last
+        ``chunk`` codes (``overlap`` of them shared with the window before) goes through the decoding a whole segment
+        takes (IndexTTS 2: the GPT's latents over the codes so far, which a causal model gives for a prefix as for the
+        whole; 2.5: the semantic codec over the window), the s2mel's flow after the reference's prompt and BigVGAN.
+        Neighbouring windows' audio is joined by a Hann cross-fade over the overlap's ``int(overlap × 1.72)`` frames, and
+        the segment's last 512 samples fade out, as upstream's. The decoder draws its noise between the GPT's steps, so
+        the codes differ from an unstreamed request's under the same seed."""
+        import numpy as np
+        import torch
+
+        from mizuoto_indextts.gpt import sample_steps
+
+        g = ctx.generator_for(self.device)
+        half = torch.autocast(self.device.type, dtype=self.half or torch.float16, enabled=self.half is not None)
+        hop = int(self.mel_args["hop_size"])
+        joiner = ChunkJoiner(int(overlap * 1.72) * hop)
+        memory = self._gpt_memory(sampling, int(text.shape[-1]))
+        codes: list[int] = []
+        steps: Iterator[int] | None = None
+        next_at, stride, finished = chunk, chunk - overlap, False
+        stopped = False
+        while not finished:
+            with ctx.use([self.h_gpt], memory), half:
+                if steps is None:
+                    conds = self.gpt._conds(speech_latent, emovec, 1)
+                    prompt, pad = self.gpt.prompt(conds, text, lang)
+                    steps = sample_steps(self.gpt, prompt, sampling, g, ctx.check_cancel, pad=pad)
+                else:
+                    self.gpt.begin_decoding()  # new graphs if its weights moved while the window decoded
+                while len(codes) < next_at:
+                    code = next(steps, None)
+                    if code is None or code == self.stop_mel_token:
+                        finished, stopped = True, code is not None
+                        break
+                    codes.append(code)
+            if self.gpt.graphed and not self.gpt.graphs_failed:
+                ctx.applied["cuda_graphs"] = True
+            start = next_at - chunk
+            if finished and start >= len(codes):
+                break
+            end = len(codes) if finished else next_at
+            window = torch.tensor([codes[start:end]], dtype=torch.long, device=self.device)
+            ctx.check_cancel()
+            if self.variant == "v2_5":
+                s_infer = ctx.run("semantic codec", [self.h_codec], lambda window=window: self.semantic_codec.decode(window))
+                target_lengths = torch.LongTensor([int(s_infer.shape[1] * 1.72 * duration_factor)]).to(self.device)
+            else:
+                prefix = torch.tensor([codes[:end]], dtype=torch.long, device=self.device)
+
+                def latents(prefix: torch.Tensor = prefix, start: int = start) -> torch.Tensor:
+                    with half:
+                        return self.gpt.latents(speech_latent, text, prefix, emovec)[:, start:]
+
+                latent = ctx.run("gpt", [self.h_gpt], latents, self._gpt_memory(sampling, int(text.shape[-1]), end))
+                gpt_layer = self.gpt_layer
+                assert gpt_layer is not None
+                s_infer = ctx.run(
+                    "s2mel",
+                    [self.h_s2mel, self.h_codec],
+                    lambda window=window, latent=latent, layer=gpt_layer: self.semantic_codec.quantizer.vq2emb(window.unsqueeze(1)).transpose(1, 2) + layer(latent.float()),
+                )
+                target_lengths = (torch.LongTensor([end - start]).to(self.device) * 1.72).long()
+            wav = self._decode(s_infer, target_lengths, spk, g, ctx)
+            piece = joiner.push(wav.reshape(-1).numpy(), last=finished)
+            if piece.size:
+                yield torch.from_numpy(np.ascontiguousarray(piece, dtype=np.float32))[None]
+            next_at += stride
+        if not stopped:
+            ctx.warn(f"Generation stopped at max_new_tokens ({sampling.max_new_tokens}); the segment may be cut short")
+        rest = joiner.flush()
+        if rest.size:
+            yield torch.from_numpy(np.ascontiguousarray(rest, dtype=np.float32))[None]
 
     def _texts(self, task: SynthesisTask, max_tokens: int, lang: str | None) -> list[torch.Tensor]:
         """The segments' token ids, (1, n) int32 each."""
@@ -617,6 +763,20 @@ class LoadedIndexTts2(LoadedEngine):
             length_penalty=float(recorded.get("length_penalty", 0.0)),
             max_new_tokens=int(recorded.get("max_mel_tokens", 1500)),
         )
+        chunk = int(o.get("stream_chunk") or 0) if task.stream else 0
+        overlap = int(o["stream_overlap"]) if o.get("stream_overlap") is not None else 5
+        if chunk:
+            # streaming within a segment needs final codes: one beam (upstream's TensorRT streaming follows the first)
+            if int(recorded.get("num_beams", 1)) != 1:
+                raise EngineError(
+                    "stream_chunk samples with one beam: leave num_beams unset or set it to 1",
+                    {"option": "num_beams", "hint": "stream_chunk needs num_beams = 1"},
+                    code=codes.INVALID_INPUT,
+                )
+            if overlap >= chunk:
+                raise EngineError("stream_overlap must be less than stream_chunk", {"option": "stream_overlap"}, code=codes.INVALID_INPUT)
+            sampling.num_beams = recorded["num_beams"] = 1
+            recorded.update(stream_chunk=chunk, stream_overlap=overlap)
         ctx.applied.update(recorded)
         max_tokens = 120
         if o.get("max_text_tokens_per_segment") is not None:
@@ -679,6 +839,12 @@ class LoadedIndexTts2(LoadedEngine):
             wavs = []
             for index, text in enumerate(texts):
                 ctx.progress("generating", index / len(texts))
+                if chunk:
+                    for piece in self._segment_chunks(text, lang_t, spk, speech_latent, emovec, sampling, duration_factor, chunk, overlap, ctx):
+                        yield AudioChunk((piece.float().numpy().reshape(-1) / 32768.0).astype(np.float32), rate, task.segment)
+                    if silence_ms > 0:
+                        yield AudioChunk((silence.numpy().reshape(-1) / 32768.0).astype(np.float32), rate, task.segment)
+                    continue
                 wav = self._segment(text, lang_t, spk, speech_latent, emovec, sampling, duration_factor, ctx)
                 wavs.append(wav)
                 if task.stream:
@@ -792,7 +958,7 @@ class LoadedIndexTts15(LoadedEngine):
         import numpy as np
         import torch
 
-        from mizuoto_indextts.gpt import BeamSampling, beam_sample, remove_long_silence
+        from mizuoto_indextts.gpt import BeamSampling, generate, remove_long_silence
         from mizuoto_indextts.text import split_segments
 
         voice = task.voice
@@ -851,7 +1017,7 @@ class LoadedIndexTts15(LoadedEngine):
                     with half:
                         latent_in = self.gpt.get_conditioning(cond_mel.transpose(1, 2), lengths)
                         prompt, pad = self.gpt.prompt(latent_in, text)
-                        return latent_in, beam_sample(self.gpt, prompt, sampling, g, ctx.check_cancel, pad=pad)
+                        return latent_in, generate(self.gpt, prompt, sampling, g, ctx.check_cancel, pad=pad)
 
                 latent_in, out = ctx.run("gpt", [self.h_gpt], sample, gpt_memory(self.gpt, beams, tokens, int(sampling.max_new_tokens), bool(self.half)))
                 if self.gpt.graphed and not self.gpt.graphs_failed:

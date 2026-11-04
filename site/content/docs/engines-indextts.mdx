@@ -48,6 +48,7 @@ IndexTTS-2 对每个文本分段：
 
 - **按 transformers 4.52 的计算方式实现 GPT-2**：`Conv1D` 即 `addmm`，tanh GELU，SDPA 在提示上因果且不带掩码，在每个新 token 上不带掩码。
 - **束采样**，即上游所用的旧版 transformers 路径：log-softmax 依次经过重复惩罚（作用于所有 id，包括提示的占位 id）、温度、top-k 和 top-p（至少保留两个），加上各束的分数，不放回地抽取 `2 × num_beams` 个候选，再由 `BeamSearchScorer` 维护假设。
+- **单束时采样**（`num_beams = 1`），与 transformers 此时的做法相同（`_sample`）：各处理器作用于原始 logits，而不是其 log-softmax（对目前所有 id 的重复惩罚、温度、top-k 和 top-p，至少保留一个），然后每步一次多项式抽样（`gpt.sample_steps`、`runtime.sampling.hf_sample`）。在 CPU 上 1.5、2 和 2.5 都与上游完全相同（用例 `*-beam1`，2026-11-04）。mizuoto-indextts 0.2.6 之前，单束时运行的是只有一束的束采样，上游从不这样做：同一请求得到的是另一种结果（上游 81,920 个样本，当时为 89,088）。
 - **IndexTTS-1.5 不用 KV 缓存**，除非以 fp16 运行，与上游相同：每一步都重新计算整个序列，用缓存的话求和结果会不同。
 - **在 GPU 上，上游在哪里计算什么就在哪里计算**：1.5 的参考音频 mel 在 CPU 上计算（上游在 CPU 上算好再移到设备；GPU 的 FFT 舍入不同，仅这一点就改变了束搜索最终选定的码）；transformers 的 GPT-2 加上的空位置编码是 float32，所以带缓存的每一步中 fp16 或 bf16 的嵌入会变成 float32，与提示一样（`wpe_zeros`）；权重归一化在加载设备上折叠（上游把 BigVGAN 移到 GPU 后才去掉权重归一化，编解码器和 CFM 的权重归一化则每次调用都在 GPU 上计算；`norm_on`：折叠前把权重归一化的参数对移到该设备）。2.5 的提示按上游在批次中的构造方式：用全零行左填充到最长文本，transformers 的 GPT-2 再用 SDPA 的加性掩码把它屏蔽（填充的键取该 dtype 的最小值，填充行自身的掩码清零），预填充和每一个带缓存的步骤都如此（`padding_masks`）；单个提示没有填充，因而没有掩码。1.5 的 BigVGAN 输出按其自身的 dtype 缩放到 int16，与上游相同：fp16 下 `32767 × wav` 先在 float16 中舍入再截断（−7.99976 变为 −8.0，而不是 −7）。
 - **抽样顺序**：所有抽样都按上游的顺序（先 GPT，后 DiT 的噪声）来自请求的生成器。
@@ -60,13 +61,24 @@ IndexTTS-2 对每个文本分段：
 - **不做 w2v-BERT 的 layer drop 抽样**：在 eval 模式下它们从不改变输出。
 - **尺寸来自配置。** 上游写死的尺寸（w2v-BERT 的宽度、`gpt_layer`）改为取自配置，这样小型测试模型也能构建；真实模型得到的数值相同。
 - **严格加载。** 检查点严格加载；上游对缺失的键保留随机权重（已发布的检查点中没有缺失的键）。
-- **未移植**：TensorRT、上游的加速引擎和 BigVGAN 的 CUDA 内核（0.1 的加载选项 `use_accel`、`use_trt`、`trt_precision`、`use_cuda_kernel`），以及 2.5 的低显存文本切分（上游在显存不足 10 GB 的 GPU 上把文本切成 40 个字符的片段；Mizuoto 由运行时管理显存）。`use_torch_compile` 会为 s2mel DiT 和 BigVGAN 开启 `compute.compile`。
+- **未移植**：TensorRT、上游的加速引擎和 BigVGAN 的 CUDA 内核（0.1 的加载选项 `use_accel`、`use_trt`、`trt_precision`、`use_cuda_kernel`；TensorRT 后端的分段内流式输出即下文的选项 `stream_chunk`），以及 2.5 的低显存文本切分（上游在显存不足 10 GB 的 GPU 上把文本切成 40 个字符的片段；Mizuoto 由运行时管理显存）。`use_torch_compile` 会为 s2mel DiT 和 BigVGAN 开启 `compute.compile`。
 
 ## 显存与速度
 
-阶段：音色未缓存时依次是 w2v-BERT、CAM++、语义编解码器和长度调节器（情感音频只用 w2v-BERT）；有情感文本时是情感模型；然后是 GPT（`kind="sequence"`；它的 GPT-2 `Conv1D` 层像线性层一样流式加载）、s2mel 和 BigVGAN。克隆已缓存的音色时从不放置 w2v-BERT 或 CAM++。开启 `compute.oom_fallback` 时，若 BigVGAN 显存不足，就分块解码（IndexTTS 2/2.5）。GPT 的工作内存按每个分段估算：其文本 token 数和每个 token 24 个编码（实际语速约为 5），不超过 `max_mel_tokens`，计入每一束，按它实际计算所用的 dtype。
+阶段：音色未缓存时依次是 w2v-BERT、CAM++、语义编解码器和长度调节器（情感音频只用 w2v-BERT）；有情感文本时是情感模型；然后是 GPT（`kind="sequence"`；它的 GPT-2 `Conv1D` 层像线性层一样流式加载）、s2mel 和 BigVGAN。克隆已缓存的音色时从不放置 w2v-BERT 或 CAM++。开启 `compute.oom_fallback` 时，若 BigVGAN 显存不足，就按 256 帧一块分块解码，每块两侧各带上样本所依赖的 39 帧：与整段的样本只差求和的舍入（IndexTTS 2/2.5）。GPT 的工作内存按每个分段估算：其文本 token 数和每个 token 24 个编码（实际语速约为 5），不超过 `max_mel_tokens`，计入每一束，按它实际计算所用的 dtype。
 
-束采样原来每一步约等待设备十次（`torch.multinomial` 的检查、评分器用 `.item()` 读取每个候选、停止判断、束重排、位置嵌入的下标张量）。现在只等一次：抽样用 `multinomial` 自己的 `topk(p / Exp(1), 2 × beams)`（`runtime.sampling.multinomial_draws`，在 CPU 和 CUDA 上 id 和生成器状态都相同）；候选的分数、token 和所属束一次读回，评分器在主机上根据这些值做决定；位置嵌入直接取表中的一行。开启 `compute.cuda_graphs`（NVIDIA，GPT 完整位于设备上并使用 KV 缓存：IndexTTS 2/2.5，以及 fp16 下的 1.5）时，所有束的 GPT-2 单 token 步骤以 CUDA 图运行在每层注意力的两侧；缓存、它的束重排和采样仍以 eager 方式进行。音频相同，按 1.5 的尺寸每步快 2.6–3.2 倍。所有层各束的键和值共用一个缓冲区（`BeamCaches`）：每一步把它加长一个位置，各束的行按重排顺序每束复制一次，然后每层在原处写入新的键和值；每层的键和值仍是原来 `index_select` 和 `torch.cat` 得到的连续张量，复制量减半（30 秒语音快 ×1.11）。
+束采样原来每一步约等待设备十次（`torch.multinomial` 的检查、评分器用 `.item()` 读取每个候选、停止判断、束重排、位置嵌入的下标张量）。现在只等一次：抽样用 `multinomial` 自己的 `topk(p / Exp(1), 2 × beams)`（`runtime.sampling.multinomial_draws`，在 CPU 和 CUDA 上 id 和生成器状态都相同）；候选的分数、token 和所属束一次读回，评分器在主机上根据这些值做决定；位置嵌入直接取表中的一行。开启 `compute.cuda_graphs`（NVIDIA，GPT 完整位于设备上并使用 KV 缓存：IndexTTS 2/2.5，以及 fp16 下的 1.5）时，所有束的 GPT-2 单 token 步骤以 CUDA 图运行在每层注意力的两侧；缓存、它的束重排和采样仍以 eager 方式进行。音频相同，按 1.5 的尺寸每步快 2.6–3.2 倍。所有层各束的键和值共用一个缓冲区（`BeamCaches`）：每一步把它加长一个位置，各束的行按重排顺序每束复制一次，然后每层在原处写入新的键和值；每层的键和值仍是原来 `index_select` 和 `torch.cat` 得到的连续张量，复制量减半（30 秒语音快 ×1.11）。 CUDA 图按束数分别捕获：mizuoto-indextts 0.2.6 之前，三束请求之后的单束请求会重放三束的图而失败。
+
+**分段内流式输出**（选项 `stream_chunk`，IndexTTS 2/2.5，仅流式请求；默认 0，关闭）。默认情况下，流式请求在每个分段生成完后才发送它的音频，与上游的 `stream_return` 相同，所以第一段音频要等第一个分段完整生成之后。设 `stream_chunk = n` 时，就是上游 TensorRT 后端的流式方式（`FasterIndexTTS2` 的 `StreamingDecoder`），但运行在原生模型上：GPT 用单束采样（这样每个编码一抽出就是最终的；`num_beams` 必须不设或为 1），每生成 `n` 个编码，就把最近 `n` 个编码组成的窗口（与前一个窗口共享 `stream_overlap` 个编码，默认 5）按整个分段的方式解码：IndexTTS 2 的隐变量由 GPT 对目前所有编码计算（因果模型对前缀给出的隐变量与整段相同），2.5 用语义编解码器处理该窗口；然后是参考音频提示之后的 s2mel 流和 BigVGAN。相邻窗口用 Hann 交叉淡化在 `int(overlap × 1.72)` 帧上拼接，分段最后 512 个样本淡出，与上游相同。解码器在 GPT 的步骤之间抽取噪声，所以同一种子下编码与非流式请求不同。每个窗口的流都要重新处理整个参考提示，所以整个请求总耗时更长。在 RTX 3060 上（2026-11-04），IndexTTS 2 合成一句 13 秒的英文、2.5 合成一句 12 秒的中文，预热后，开启 CUDA 图：
+
+| | 首段音频 | 整个请求 | RTF |
+| --- | --- | --- | --- |
+| IndexTTS 2，按分段（3 束 / 1 束） | 12.0 / 11.9 秒 | 12.0 / 11.9 秒 | 0.98 / 0.79 |
+| IndexTTS 2，`stream_chunk` 100 / 50 | 2.6 / 1.9 秒 | 18.2 / 28.1 秒 | 1.35 / 2.07 |
+| IndexTTS 2.5，按分段（3 束 / 1 束） | 5.7 / 5.0 秒 | 5.8 / 5.1 秒 | 0.47 / 0.43 |
+| IndexTTS 2.5，`stream_chunk` 100 / 50 | 2.2 / 1.7 秒 | 6.6 / 11.1 秒 | 0.55 / 0.91 |
+
+Whisper 对每一条的转写都与文本一致（2.5 在 50 个编码时有一个同音字）。RTF 大于 1 时音频生成得比播放慢，所以在这块显卡上 IndexTTS 2 会在分块之间停顿；100 个编码（约 1.6 秒语音）是上游的默认值，也是更好的折中。
 
 CPU 上以 fp32 运行 `compute.compile`：s2mel DiT 的热启动时间减少 7 %，BigVGAN 减少 20 %；音频与 eager 相差不超过 6.1e-5（87.7 dB）。
 

@@ -16,7 +16,7 @@ keeps the best beams and finished hypotheses.
 from __future__ import annotations
 
 import math
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from typing import Any
 
@@ -26,7 +26,7 @@ from torch.nn import functional as F
 
 from mizuoto.runtime import ops as default_ops
 from mizuoto.runtime.accel import Site, attention
-from mizuoto.runtime.sampling import multinomial_draws, repetition_penalty, top_k, top_p
+from mizuoto.runtime.sampling import HfSampling, hf_sample, multinomial_draws, repetition_penalty, top_k, top_p
 from mizuoto_indextts.conditioning import ConformerEncoder, PerceiverResampler
 
 SITE = Site("indextts.gpt", approx_ok=False)  # autoregressive: quantised attention derails its sampling
@@ -277,6 +277,8 @@ class UnifiedVoice(nn.Module):
         self._graphs: Any = None
         self._steps: Any = None
         self._step_ports: tuple[torch.Tensor, torch.Tensor] | None = None
+        self._captured: dict[tuple[int, ...], tuple[Any, tuple[torch.Tensor, torch.Tensor] | None]] = {}
+        """The steps captured with ``_graphs``, by the step input's shape: one set per number of beams."""
         self.graphs_failed = False
         self.graphed = False
 
@@ -285,13 +287,21 @@ class UnifiedVoice(nn.Module):
         graphs = None if self.graphs_failed else self.graphs_for()
         if graphs is not self._graphs:
             self._graphs, self._steps, self._step_ports = graphs, None, None
+            self._captured.clear()
         self.graphed = graphs is not None
 
     def step_logits(self, emb: torch.Tensor, caches: list[list[torch.Tensor]], mask: torch.Tensor | None = None) -> torch.Tensor:
         """A one-token step of every beam: the last position's mel logits in float32, (beams, codes); ``caches`` is
         updated. Eagerly, or as graphs around each layer's attention, which replay the same kernels."""
-        if self._graphs is not None and self._steps is None:
-            self._steps = self._capture_steps(emb)
+        if self._graphs is not None and (self._steps is None or self._step_ports is None or self._step_ports[0].shape != emb.shape):
+            # graphs replay fixed shapes: a decoding with another number of beams has steps of its own
+            shape = tuple(emb.shape)
+            if shape not in self._captured:
+                self._step_ports = None
+                steps = self._capture_steps(emb)
+                if steps is not None:
+                    self._captured[shape] = (steps, self._step_ports)
+            self._steps, self._step_ports = self._captured.get(shape, (None, None))
         if self._steps is None:
             hidden, new = self.gpt(emb, caches, mask)
             caches[:] = new
@@ -578,6 +588,77 @@ def beam_sample(
     if length < out_len:
         out[0, length] = c.stop_mel_token
     return out[:, prompt_len:]
+
+
+def sample_steps(
+    model: UnifiedVoice,
+    prompt: torch.Tensor,
+    s: BeamSampling,
+    generator: torch.Generator,
+    check: Callable[[], None] | None = None,
+    pad: int = 0,
+) -> Iterator[int]:
+    """``inference_model.generate(...)`` for one prompt with ``num_beams=1``: transformers then samples instead of
+    searching (``_sample``). The processors run over the raw logits in its order (repetition penalty over every id so
+    far, the prompt's placeholders included; temperature; top-k and top-p keeping one), then one multinomial draw.
+    Yields each code as it is drawn, the stop token last when one is drawn; stops at ``max_new_tokens``. Each code is
+    final when drawn, so a caller can decode the codes so far while generation goes on (``stream_chunk``)."""
+    c = model.c
+    device = prompt.device
+    mel_len = prompt.shape[1]
+    ids = torch.ones((1, mel_len + 1), dtype=torch.long, device=device)
+    ids[:, -1] = c.start_mel_token
+    max_length = ids.shape[1] + s.max_new_tokens
+    hf = HfSampling(do_sample=True, temperature=s.temperature, top_k=s.top_k, top_p=s.top_p, repetition_penalty=s.repetition_penalty)
+    caches: BeamCaches | None = None
+    if s.kv_cache:
+        model.begin_decoding()
+    while True:
+        if check is not None:
+            check()
+        if caches is None:
+            start = model.mel_embedding(ids[:, mel_len:]) + model.mel_pos_embedding(ids[:, mel_len:])
+            emb = torch.cat([prompt, start], dim=1)
+            hidden, new_caches = model.gpt(emb, None, padding_masks(emb, pad)[0] if pad else None)
+            caches = BeamCaches(new_caches, max_length) if s.kv_cache else None
+            logits = model.logits(hidden)[:, -1, :].clone().float()
+        else:
+            emb = model.mel_embedding(ids[:, -1:]) + model.mel_pos_embedding.fixed(ids.shape[1] - mel_len, device)
+            logits = model.step_logits(emb, caches, padding_masks(emb, pad, ids.shape[1])[1] if pad else None)
+        token = hf_sample(logits, ids, hf, generator)
+        ids = torch.cat([ids, token[:, None]], dim=-1)
+        code = int(token.item())
+        yield code
+        if code == c.stop_mel_token or ids.shape[-1] >= max_length:
+            return
+        if caches is not None:
+            caches.advance([0])
+
+
+def sample(
+    model: UnifiedVoice,
+    prompt: torch.Tensor,
+    s: BeamSampling,
+    generator: torch.Generator,
+    check: Callable[[], None] | None = None,
+    pad: int = 0,
+) -> torch.Tensor:
+    """``sample_steps``' codes as ``beam_sample`` returns them: (1, n), ending in the stop token when one was drawn."""
+    return torch.tensor([list(sample_steps(model, prompt, s, generator, check, pad))], dtype=torch.long, device=prompt.device)
+
+
+def generate(
+    model: UnifiedVoice,
+    prompt: torch.Tensor,
+    s: BeamSampling,
+    generator: torch.Generator,
+    check: Callable[[], None] | None = None,
+    pad: int = 0,
+) -> torch.Tensor:
+    """Upstream's ``generate``: beam sampling, or sampling for one beam."""
+    if s.num_beams == 1:
+        return sample(model, prompt, s, generator, check, pad)
+    return beam_sample(model, prompt, s, generator, check, pad)
 
 
 def remove_long_silence(codes: torch.Tensor, stop_mel_token: int, silent_token: int = 52, max_consecutive: int = 30) -> tuple[torch.Tensor, torch.Tensor]:

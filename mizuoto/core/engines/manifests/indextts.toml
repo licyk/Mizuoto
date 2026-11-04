@@ -142,6 +142,22 @@ type = "bool"
 default = false
 help = "Sample the emotion from the emotion matrix rather than take the nearest (IndexTTS-2)."
 
+[options.stream_chunk]
+type = "int"
+default = 0
+min = 0
+max = 400
+variants = ["v2", "v2_5"]
+help = "Streamed requests: send audio every this many codes (100 is about 1.6 s of speech), not each sentence when it is done. Samples with one beam; 0: by sentence."
+
+[options.stream_overlap]
+type = "int"
+default = 5
+min = 1
+max = 50
+variants = ["v2", "v2_5"]
+help = "Codes each streamed chunk shares with the one before, cross-faded."
+
 # -- load options ---------------------------------------------------------------------
 
 [load_options.use_qwen_emo]

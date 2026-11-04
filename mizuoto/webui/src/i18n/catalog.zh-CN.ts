@@ -124,6 +124,8 @@ const catalog: Record<string, string> = {
   'Streamed chunks of fixed length: the first sound comes sooner, a little rougher.': '固定长度的流式分块：首个声音来得更快，但略显粗糙。',
   'fixed length chunk': '固定长度分块',
   'Beams of the GPT\'s search: more is steadier and slower.': 'GPT 搜索的束数：越多越稳定，越慢。',
+  'Streamed requests: send audio every this many codes (100 is about 1.6 s of speech), not each sentence when it is done. Samples with one beam; 0: by sentence.': '流式请求：每生成这么多个编码就发送一次音频（100 个约为 1.6 秒语音），而不是每句完成后才发送。使用单束采样；0：按句发送。',
+  'Codes each streamed chunk shares with the one before, cross-faded.': '每个流式分块与前一块共享并交叉淡化的编码数。',
   'num beams': '束数',
   'length penalty': '长度惩罚',
   'How long a segment upstream cuts the text into may be, in text tokens.': '上游切分文本时每段的最大长度（以文本 token 计）。',
