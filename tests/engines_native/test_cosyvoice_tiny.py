@@ -495,3 +495,41 @@ def test_fused_projections_with_cuda_graphs_decode_as_their_eager_path_on_a_gpu(
     (eager, _), (graphed, applied) = run(False), run(True)
     assert applied["fused_projections"] and applied["cuda_graphs"]
     assert eager.shape == graphed.shape and (eager == graphed).all()
+
+
+def test_fp16_keeps_the_language_models_linear_weights_in_float16(model_dir):
+    """``fp16``: the language model's linear layers hold the float16 values autocast computes them with (cast once at
+    load, not at every token); embeddings and norms stay float32, as autocast computes them."""
+    from mizuoto.engines.cosyvoice.engine import _half_linears
+
+    model = _load(model_dir)
+    _half_linears(model.llm)
+    layer = model.llm.llm.model.model.layers[0]
+    assert layer.self_attn.q_proj.weight.dtype == layer.self_attn.q_proj.bias.dtype == layer.mlp.down_proj.weight.dtype == torch.float16
+    assert model.llm.llm_decoder.weight.dtype == torch.float16
+    assert model.llm.speech_embedding.weight.dtype == layer.input_layernorm.weight.dtype == torch.float32
+
+
+@pytest.mark.skipif(not torch.cuda.is_available() or torch.version.hip is not None, reason="CUDA graphs need an NVIDIA GPU")
+@pytest.mark.parametrize("version", [2, 3])
+def test_fp16_decodes_alike_with_and_without_cuda_graphs_every_request(version, model_dir, reference, tmp_path):
+    """Under ``fp16`` each token ran in its own autocast region, which cast every weight again; with CUDA graphs the
+    first request's audio then differed from the next ones' and from the eager path's. Cast once at load, every
+    request gives the eager path's audio (upstream's: one region over the generation, eager)."""
+    from tests.engines_native.test_cosyvoice_train_tiny import _tiny
+
+    folder = model_dir
+    if version == 3:
+        (tmp_path / "v3").mkdir()
+        folder = _tiny(tmp_path / "v3", 3)
+    clip = VoiceSpec(references=[Reference(audio_path=str(reference), transcript="a reference")])
+
+    def run(graphs: bool) -> list:
+        model = _load(folder, "cuda", graphs, fp16=True)
+        for h in model.handles:
+            h.load()
+        return [joined(speak(model, clip, ctx=RequestContext("r", seed=3, device="cuda"))[0]) for _ in range(3)]
+
+    eager, graphed = run(False), run(True)
+    for audio in [*eager[1:], *graphed]:
+        assert audio.shape == eager[0].shape and (audio == eager[0]).all()

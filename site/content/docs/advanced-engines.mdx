@@ -106,7 +106,7 @@ Web UI 中，**模型** › **引擎** 列出每个引擎的可用状态、设�
 - **流式**：v2/v3 逐 token 流式输出；流式文本输入需要参考音频的文本（零样本克隆或 instruct2）。
 - **训练**（GPU 或 CPU）：**Fine-tune the language model**（`llm`）和 **Fine-tune the LLM and the flow**（`llm_flow`），起点为 v1_base、v2、v3，按上游 LibriTTS 流程，至少 60 秒数据，导出为新模型。只训 LLM 时韵律与发音跟随数据集；连 flow 一起训时音色也跟随数据集。
 - **共享文件**：`cosyvoice/wetext`（13 MB，把数字、日期和单位写成文字的文本规范化语法），随第一个模型一起下载。
-- **加载选项**：`fp16`（GPU 上用半精度：更快，结果略有不同）；`fused_projections`（CosyVoice 2 和 3，默认关闭）：快速模式，语言模型的 q/k/v 与 gate/up 投影各合并为一次乘法，在 GPU 上快 1–4%，此时音频可能不再与原始实现逐位一致（输出会列出 `fused_projections`）。
+- **加载选项**：`fp16`（GPU 上用半精度：更快，结果略有不同）；`fused_projections`（CosyVoice 2 和 3，默认关闭）：快速模式，语言模型的 q/k/v 与 gate/up 投影各合并为一次乘法，在 GPU 上快 1–5%，此时音频可能不再与原始实现逐位一致（输出会列出 `fused_projections`）。
 
 ## F5-TTS
 

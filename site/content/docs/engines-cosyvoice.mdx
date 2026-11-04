@@ -18,7 +18,7 @@ icon: Radio
 
 变体由目录中的 yaml 决定（`cosyvoice.yaml`、`cosyvoice2.yaml`、`cosyvoice3.yaml`）；带 `spk2info.pt` 的 CosyVoice 1 目录是 SFT 或 Instruct。目录中有 yaml、`llm.pt`、`flow.pt`、`hift.pt`、`campplus.onnx`、`speech_tokenizer_v1.onnx` / `v2` / `v3`、`spk2info.pt`，v2/v3 还有 `CosyVoice-BlankEN` 的配置和分词器（不含其权重，`llm.pt` 会替换它们）。共享资源 `cosyvoice/wetext` 存放文本规范化用的 FST。ONNX 模型只转换一次，缓存为 `<model>/.mizuoto/converted-<key>.safetensors`（ONNX 文件旁的 `<name>.safetensors` 优先）。
 
-能力：预置说话人、指令、克隆与跨语种克隆、音色转换、流式输出，v2/v3 还有流式文本输入。精度：fp32；加载选项 `fp16` 让语言模型和 flow 在 CUDA autocast 下运行，与上游的 `fp16` 相同。快速模式（加载选项 `fused_projections`，CosyVoice 2 和 3）：Qwen2 语言模型的 q/k/v 与 gate/up 投影各合并为一次乘法（`QwenDecoder.fuse`，与 Qwen3-TTS 的相同），输出中会注明；在 CPU 上结果相同，在 RTX 3060 上用 fp32 时相同且快 1.1%，用 `fp16` 时快 2.4–3.6%，音频会改变。
+能力：预置说话人、指令、克隆与跨语种克隆、音色转换、流式输出，v2/v3 还有流式文本输入。精度：fp32；加载选项 `fp16` 让语言模型和 flow 在 CUDA autocast 下运行，与上游的 `fp16` 相同。上游在整个生成过程中只用一个 autocast 区域；这里每个 token 在各自的区域中运行（引擎只在 `next()` 中运行），而 autocast 只在一个区域内保留权重的 float16 副本，于是每个 token 都要把语言模型的全部权重重新转换一次：`fp16` 最多比 fp32 慢一倍，而且使用 CUDA graphs 时第一个请求的音频与之后的请求以及即时执行路径都不同。现在在 `fp16` 下，语言模型的线性层直接以 float16 保存权重，即 autocast 计算时所用的值（`_half_linears`，加载时完成；嵌入和归一化保持 float32，与 autocast 的计算方式相同）：每个请求都得到即时执行路径的音频，无论是否使用 graphs，比 fp32 快 1.7–1.8 倍（[性能](/docs/development-performance#cosyvoice-的-fp16g12)）。快速模式（加载选项 `fused_projections`，CosyVoice 2 和 3）：Qwen2 语言模型的 q/k/v 与 gate/up 投影各合并为一次乘法（`QwenDecoder.fuse`，与 Qwen3-TTS 的相同），输出中会注明；在 CPU 上结果相同，在 RTX 3060 上用 fp32 时相同且每秒音频快 1%，用 `fp16` 时快 2–5%，音频会改变。
 
 ## 工作原理
 

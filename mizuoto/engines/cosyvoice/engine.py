@@ -173,6 +173,8 @@ class LoadedCosyVoice(LoadedEngine):
         self.fused_projections = v > 1 and bool(spec.options.get("fused_projections"))
         if self.fused_projections:
             self.llm.fuse()
+        if self.fp16:
+            _half_linears(self.llm)
         self.llm.eval()
 
         ctx.check_cancel()
@@ -813,3 +815,24 @@ class _null:
 
     def __exit__(self, *args: object) -> None:
         return None
+
+
+def _half_linears(module: Any) -> None:
+    """``fp16``: the language model's linear layers hold their weights in float16, the values autocast computes them with.
+
+    Under autocast a linear layer computes with its weight and bias cast to float16, and autocast keeps those casts
+    only until its outermost region ends. Upstream holds one region over a whole generation; here each token runs in
+    a region of its own (the engine runs only inside ``next()``, so autocast cannot stay on between tokens), so every
+    token cast all of the language model's weights again: CosyVoice 2 took twice as long with ``fp16`` as without on
+    an RTX 3060. Cast once at load, they are the same float16 values, and autocast leaves a float16 weight as it is: the
+    same audio. Only linear layers: autocast casts nothing else of the model's weights the same way (embeddings and
+    norms compute in float32 under it, and stay so).
+    """
+    import torch
+    from torch import nn
+
+    for m in module.modules():
+        if isinstance(m, nn.Linear):
+            m.weight.data = m.weight.data.to(torch.float16)
+            if m.bias is not None:
+                m.bias.data = m.bias.data.to(torch.float16)
