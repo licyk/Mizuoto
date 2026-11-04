@@ -5259,6 +5259,11 @@ export interface components {
              */
             asr_model: string;
             /**
+             * Asr Beams
+             * @default 5
+             */
+            asr_beams: number;
+            /**
              * Reference Policy
              * @default trim
              * @enum {string}

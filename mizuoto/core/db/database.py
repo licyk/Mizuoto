@@ -126,6 +126,10 @@ MIGRATIONS: list[str] = [
         value TEXT NOT NULL
     );
     """,
+    # 4: the beam search width a transcript was made with (tts.asr_beams); every earlier transcript used 5
+    """
+    ALTER TABLE transcripts ADD COLUMN beams INTEGER NOT NULL DEFAULT 5;
+    """,
 ]
 
 

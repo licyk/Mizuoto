@@ -1,7 +1,8 @@
 """Speech recognition for Mizuoto's own needs.
 
 ``AsrService.transcribe`` runs the ``asr`` engine (an internal engine that offers ``transcribe`` through
-``call``). Results are cached by the audio's SHA-256 and the model, so a reference clip is transcribed once.
+``call``). Results are cached by the audio's SHA-256, the model and the beam search width (``tts.asr_beams``, passed
+as the engine's ``beam_size``), so a reference clip is transcribed once; a changed width transcribes it again.
 Every call goes through one lock: the loaded model is shared by transcription jobs and by synthesis jobs that
 need a reference transcript.
 """
@@ -85,8 +86,12 @@ class AsrService:
     def available(self, model: str | None = None) -> bool:
         return self.unavailable_reason(model) is None
 
+    def beams(self) -> int:
+        return self._settings.settings.tts.asr_beams
+
     def cached(self, sha256: str, model: str | None = None) -> Transcript | None:
-        row = self._db.fetchone("SELECT * FROM transcripts WHERE sha256 = ? AND model = ?", (sha256, model or self.default_model()))
+        """The stored transcript of a clip by this model at the current beam width, or None."""
+        row = self._db.fetchone("SELECT * FROM transcripts WHERE sha256 = ? AND model = ? AND beams = ?", (sha256, model or self.default_model(), self.beams()))
         return self._row(row) if row is not None else None
 
     def transcribe(self, audio: AudioFile | Path, language: str | None = None, model: str | None = None, ctx: JobContext | None = None) -> Transcript:
@@ -106,11 +111,12 @@ class AsrService:
         device = self._runtime.device_for(ENGINE)
         es = self._settings.settings.engines.get(ENGINE)
         cancel = ctx.cancel_event if ctx is not None else None
+        beams = self.beams()
         with self._lock:
             eng = self._runtime.loaded(
                 ModelRef(model, ENGINE, info.variant, info.path), device, es.dtype if es else "auto", dict(es.load_options) if es else {}, EngineRequest(cancel=cancel)
             )
-            payload = {"path": str(wav), "language": None if language in (None, "auto") else language}
+            payload = {"path": str(wav), "language": None if language in (None, "auto") else language, "options": {"beam_size": beams}}
             result: dict[str, Any] = eng.call("transcribe", payload, EngineRequest(id=new_id("asr"), cancel=cancel))
         transcript = Transcript(
             sha256=record.sha256,
@@ -121,8 +127,8 @@ class AsrService:
             created_at=now_iso(),
         )
         self._db.execute(
-            "INSERT OR REPLACE INTO transcripts(sha256, model, language, text, segments, created_at) VALUES (?, ?, ?, ?, ?, ?)",
-            (transcript.sha256, model, transcript.language, transcript.text, json.dumps([s.model_dump() for s in transcript.segments]), transcript.created_at),
+            "INSERT OR REPLACE INTO transcripts(sha256, model, language, text, segments, created_at, beams) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (transcript.sha256, model, transcript.language, transcript.text, json.dumps([s.model_dump() for s in transcript.segments]), transcript.created_at, beams),
         )
         return transcript
 

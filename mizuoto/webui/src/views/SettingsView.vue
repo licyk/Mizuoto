@@ -228,6 +228,15 @@ const previewShown = ref(true);
             </div>
             <Switch :model-value="s.tts.auto_transcribe" :label="t('settings.autoTranscribe')" @update:model-value="patch({ tts: { auto_transcribe: $event } })" />
             <SelectField v-if="asrOptions.length" :model-value="s.tts.asr_model" :label="t('settings.asrModel')" :options="asrOptions" @update:model-value="patch({ tts: { asr_model: $event } })" />
+            <TextField
+              type="number"
+              :min="2"
+              :max="10"
+              :model-value="s.tts.asr_beams"
+              :label="t('settings.asrBeams')"
+              :supporting-text="t('settings.asrBeamsHint')"
+              @change="patch({ tts: { asr_beams: Number($event) } })"
+            />
             <SelectField :model-value="s.tts.reference_policy" :label="t('settings.referencePolicy')" :options="policyOptions" @update:model-value="patch({ tts: { reference_policy: $event } })" />
             <Switch :model-value="s.tts.strict_params" :label="t('settings.strictParams')" :supporting-text="t('settings.strictHint')" @update:model-value="patch({ tts: { strict_params: $event } })" />
             <Switch :model-value="s.tts.micro_batch" :label="t('settings.microBatch')" :supporting-text="t('settings.microBatchHint')" @update:model-value="patch({ tts: { micro_batch: $event } })" />

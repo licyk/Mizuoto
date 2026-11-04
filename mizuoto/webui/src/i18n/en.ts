@@ -599,6 +599,8 @@ export default {
     normalize: 'Levelling',
     autoTranscribe: 'Transcribe reference clips without a transcript',
     asrModel: 'Speech recognition model',
+    asrBeams: 'Speech recognition beams',
+    asrBeamsHint: '2–10; 5 by default. More can be slightly more accurate, and slower.',
     referencePolicy: 'A reference clip too long for a model',
     referencePolicies: { trim: 'Cut it to fit', reject: 'Refuse it' },
     strictParams: 'Refuse parameters a model does not take',

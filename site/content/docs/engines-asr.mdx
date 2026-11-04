@@ -10,7 +10,7 @@ Mizuoto 自己的语音识别：Whisper large-v3-turbo（[openai/whisper](https:
 
 只有一个变体 `whisper`（目录模型 `asr/whisper-large-v3-turbo`）；模型按 `config.json` 构建，所以同样格式的其他 Whisper 尺寸也能加载。模型目录包含 `config.json`、`generation_config.json`、`model.safetensors`（或 `pytorch_model.bin`）、`preprocessor_config.json`、`tokenizer.json` 和 `tokenizer_config.json`。
 
-引擎只响应一个操作 `call("transcribe", {"path", "language", "options"})`，返回 `{text, language, segments, duration}`。`AsrService` 为它持有一把锁，并按音频的 SHA-256 和模型缓存转写结果。
+引擎只响应一个操作 `call("transcribe", {"path", "language", "options"})`，返回 `{text, language, segments, duration}`。`AsrService` 为它持有一把锁，把设置 `tts.asr_beams`（默认 5）作为 `beam_size` 传入，并按音频的 SHA-256、模型和这个束宽缓存转写结果。
 
 精度：在支持 bf16 的 CUDA GPU 上用 bf16（否则 fp16），其他设备用 fp32；`engines.asr.dtype` 可覆盖。
 
@@ -35,7 +35,7 @@ Mizuoto 自己的语音识别：Whisper large-v3-turbo（[openai/whisper](https:
 
 ## 与上游一致的做法
 
-- **5 束。** 流水线的默认生成配置（`num_beams=5`）优先于模型的贪心默认值，所以无论 `beam_size` 怎么设，0.1 总是用 5 束解码；选项 `beam_size` 为 1 时保持这 5 束，更大的值则设定束数。束搜索是 transformers 4.57 向量化的 `_beam_search`（先 log-softmax，再经处理器，`2 × beams` 个候选）。
+- **5 束。** 流水线的默认生成配置（`num_beams=5`）优先于模型的贪心默认值，所以无论 `beam_size` 怎么设，0.1 总是用 5 束解码；选项 `beam_size` 为 1 时保持这 5 束，更大的值则设定束数。0.1 从不传这个选项；Mizuoto 传入 `tts.asr_beams`，默认值 5 得到与 0.1 相同的转写。束搜索是 transformers 4.57 向量化的 `_beam_search`（先 log-softmax，再经处理器，`2 × beams` 个候选）。
 - **每个窗口内的 seek 循环。** 每个窗口都补齐到 30 秒；以一对时间戳结束的解码会从该时间戳重新解码（特征平移，后面补零），时间戳对之后的 token 被丢弃。`_decode_asr` 为重新开始的时间戳重新定基，并合并重叠的窗口。
 - **特征**来自 transformers 的 `WhisperFeatureExtractor`，使用它自己的 float64 slaney 滤波器组和转置后的乘法，而不是 openai-whisper 的 log-mel。Turbo 的 `tokenizer_config.json` 设置了 `clean_up_tokenization_spaces`（" ." 变成 "."），按分段应用。
 - **注意力**：先投影查询再乘以 `head_dim ** -0.5`，SDPA 使用 `scale=1`，q、k、v 都是连续张量；解码器在多 token 提示上为无掩码的因果注意力，每个新 token 不加掩码，缓存按拼接增长。

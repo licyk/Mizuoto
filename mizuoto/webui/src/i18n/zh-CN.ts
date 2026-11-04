@@ -599,6 +599,8 @@ export default {
     normalize: '音量均衡',
     autoTranscribe: '自动识别没有文本的参考音频',
     asrModel: '语音识别模型',
+    asrBeams: '语音识别束宽',
+    asrBeamsHint: '2–10，默认 5。更大的值可能略准一些，也更慢。',
     referencePolicy: '参考音频对模型来说过长时',
     referencePolicies: { trim: '裁剪以适配', reject: '拒绝' },
     strictParams: '拒绝模型不接受的参数',

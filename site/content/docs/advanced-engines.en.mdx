@@ -234,4 +234,4 @@ mizuoto model download asr/whisper-large-v3-turbo
 mizuoto asr clip.wav --lang zh
 ```
 
-Transcripts are cached by the audio's SHA-256 and the model, so the same clip is never transcribed twice. `tts.auto_transcribe` (on by default) and `tts.asr_model` control automatic transcription; see [Configuration](/docs/cli-config).
+Transcripts are cached by the audio's SHA-256, the model and the beam width, so the same clip is never transcribed twice with the same settings. `tts.auto_transcribe` (on by default), `tts.asr_model` and `tts.asr_beams` (5 by default) control automatic transcription; see [Configuration](/docs/cli-config).

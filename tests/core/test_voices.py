@@ -108,6 +108,31 @@ def test_asr_fills_transcripts(services, asr, tmp_path):
     assert job.state == "completed" and job.result["text"] == "dummy transcript of 2.5 seconds"
 
 
+def test_asr_beams_reach_the_engine_and_key_the_cache(services, asr, tmp_path, monkeypatch):
+    import mizuoto.engines.dummy.engine as dummy
+
+    seen: list[dict] = []
+    real = dummy._call
+
+    def spy(op, payload, ctx):
+        if op == "transcribe":
+            seen.append(payload.get("options"))
+        return real(op, payload, ctx)
+
+    monkeypatch.setattr(dummy, "_call", spy)
+    clip = make_clip(tmp_path, "beams.wav", 1.0)
+    first = asr.transcribe(clip)
+    assert seen == [{"beam_size": 5}]  # the default: 0.1's five beams
+    assert asr.transcribe(clip) == first and len(seen) == 1  # cached
+    services.settings.update({"tts": {"asr_beams": 8}})
+    assert asr.cached(first.sha256) is None  # made with another width
+    asr.transcribe(clip)
+    assert seen[-1] == {"beam_size": 8} and len(seen) == 2
+    assert asr.cached(first.sha256) is not None
+    services.settings.update({"tts": {"asr_beams": 5}})
+    assert asr.cached(first.sha256) is None  # one transcript per clip and model: the latest width's
+
+
 def test_retranscribe_without_asr_names_the_model_and_keeps_the_transcripts(services, tmp_path):
     voice, _ = services.voices.create_from_audio("Rt", [make_clip(tmp_path, "a.wav", 1.5)], ["Kept."], language="en")
     with pytest.raises(ValidationError) as e:

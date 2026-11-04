@@ -234,4 +234,4 @@ mizuoto model download asr/whisper-large-v3-turbo
 mizuoto asr clip.wav --lang zh
 ```
 
-转写结果按音频的 SHA-256 和模型缓存，同一段音频不会重复识别。设置 `tts.auto_transcribe`（默认开）和 `tts.asr_model` 控制自动转写，见 [配置](/docs/cli-config)。
+转写结果按音频的 SHA-256、模型和束宽缓存，设置不变时同一段音频不会重复识别。设置 `tts.auto_transcribe`（默认开）、`tts.asr_model` 和 `tts.asr_beams`（默认 5）控制自动转写，见 [配置](/docs/cli-config)。

@@ -10,7 +10,7 @@ Mizuoto's own speech recognition: Whisper large-v3-turbo ([openai/whisper](https
 
 One variant, `whisper` (catalogue model `asr/whisper-large-v3-turbo`); the model is built from `config.json`, so other Whisper sizes in the same format load too. The folder holds `config.json`, `generation_config.json`, `model.safetensors` (or `pytorch_model.bin`), `preprocessor_config.json`, `tokenizer.json` and `tokenizer_config.json`.
 
-The engine answers one operation, `call("transcribe", {"path", "language", "options"})`, which returns `{text, language, segments, duration}`. `AsrService` holds one lock for it and caches transcripts by the audio's SHA-256 and the model.
+The engine answers one operation, `call("transcribe", {"path", "language", "options"})`, which returns `{text, language, segments, duration}`. `AsrService` holds one lock for it, passes the setting `tts.asr_beams` (default 5) as `beam_size`, and caches transcripts by the audio's SHA-256, the model and that width.
 
 Precision: bf16 on a CUDA GPU that has it (else fp16), fp32 elsewhere; `engines.asr.dtype` overrides.
 
@@ -35,7 +35,7 @@ Shared: `nn/dsp/mel.py` (`hf_whisper_filters`, `hf_whisper_log_mel`), `nn/dsp/wa
 
 ## What reproduces upstream
 
-- **Five beams.** The pipeline's default generation config (`num_beams=5`) wins over the model's greedy default, so 0.1 always decoded with 5 beams, whatever `beam_size` said; the option `beam_size` 1 keeps those 5 beams, and a larger value sets the number. The beam search is transformers 4.57's vectorised `_beam_search` (log-softmax, then the processors, `2 × beams` candidates).
+- **Five beams.** The pipeline's default generation config (`num_beams=5`) wins over the model's greedy default, so 0.1 always decoded with 5 beams, whatever `beam_size` said; the option `beam_size` 1 keeps those 5 beams, and a larger value sets the number. 0.1 never passed the option at all; Mizuoto passes `tts.asr_beams`, whose default 5 gives 0.1's transcripts. The beam search is transformers 4.57's vectorised `_beam_search` (log-softmax, then the processors, `2 × beams` candidates).
 - **The seek loop inside each window.** Every window is padded to 30 s; a decoding that ends on a timestamp pair is decoded again from that timestamp (the features shifted, zeros after), and the tokens after the pair are dropped. `_decode_asr` re-bases the restarted timestamps and merges the overlapping windows.
 - **Features** are transformers' `WhisperFeatureExtractor`, with its own float64 slaney filterbank and a transposed product, not openai-whisper's log-mel. Turbo's `tokenizer_config.json` sets `clean_up_tokenization_spaces` (" ." becomes "."), applied per segment.
 - **Attention**: the query projected then scaled by `head_dim ** -0.5`, SDPA with `scale=1` on contiguous q, k and v; the decoder causal without a mask for a multi-token prompt and unmasked per new token, its cache grown by concatenation.

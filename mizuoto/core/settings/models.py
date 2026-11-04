@@ -168,6 +168,9 @@ class TtsSettings(Record):
     auto_transcribe: bool = True
     """Transcribe a reference clip without a transcript (needs the asr engine)."""
     asr_model: str = "asr/whisper-large-v3-turbo"
+    asr_beams: int = Field(default=5, ge=2, le=10)
+    """Beam search width for transcripts. 5 (the default) is what transformers' speech-recognition pipeline used, and
+    0.1 with it; more beams can be slightly more accurate and take longer. Transcripts are cached per width."""
     reference_policy: Literal["trim", "reject"] = "trim"
     """What to do with a reference clip outside a model's length window: cut it to fit (the default) or refuse it."""
     max_text_chars: int = Field(default=20000, ge=100)

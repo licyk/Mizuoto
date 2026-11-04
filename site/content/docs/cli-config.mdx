@@ -205,6 +205,7 @@ mizuoto webui
 | `tts.normalize` | `peak` | 音量均衡：`none`、`peak` 或 `loudness` | **语音** › **音量均衡** |
 | `tts.auto_transcribe` | `true` | 参考音频没有文本时用语音识别转写（需要下载语音识别模型 `tts.asr_model`） | **语音** › **自动识别没有文本的参考音频** |
 | `tts.asr_model` | `asr/whisper-large-v3-turbo` | 语音识别模型 | **语音** › **语音识别模型** |
+| `tts.asr_beams` | `5` | 转写的束搜索宽度（2–10）；5 与 0.1 相同。更大的值可能略准一些，也更慢。转写按束宽缓存，改了之后音频会重新转写 | **语音** › **语音识别束宽** |
 | `tts.reference_policy` | `trim` | 参考音频超出模型的长度范围时：`trim` 在限制前最安静的位置截断（截断后原文本不再匹配，被丢弃），`reject` 拒绝 | **语音** › **参考音频对模型来说过长时** |
 | `tts.max_text_chars` | `20000` | 一次请求的最多字符数（至少 100） | — |
 | `tts.strict_params` | `false` | 拒绝模型不接受的参数；关闭时丢弃并给出警告 | **语音** › **拒绝模型不接受的参数** |

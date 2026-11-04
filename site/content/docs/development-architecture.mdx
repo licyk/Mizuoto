@@ -237,7 +237,7 @@ with open_services() as services:
 - `fit_voice(voice, model, variant)` 回答“这个模型能否用这个音色、怎样用”：模式（`preset`、`design`、`clone`、`clone_no_transcript`）、还需要什么（`transcribe`、`trim`）、警告，或不能用的原因。合成和界面的音色选择器都用它。
 - **音色缓存。** 加载模型之后，任务对每个键调用一次 `prepare_voice`，写入 `voices/<slug>/cache/<引擎>/<模型>/<键>/` 并记下 `cache.json`；临时参考音频写入 `cache/voices/…`。键是（模型、模型版本、参考音频的 SHA-256 与转写、音色模式、Mizuoto 版本，以及需要接受许可的引擎的发行包版本）的哈希，所以升级 Mizuoto 或该发行包会重建一次缓存。
 - **音色自有权重**（`Voice.weights[engine]`）：清单有 `[weights]` 角色的引擎（GPT-SoVITS 的 `gpt` 和 `sovits`）可以带一个音色专属的微调，存于 `weights/<引擎>/`，随音色导出导入；版本由文件判断，与变体的 `weights_version` 相同时才使用。
-- 缺少转写时，开启 `tts.auto_transcribe` 且 ASR 可用就先转写（结果按音频 SHA-256 和模型缓存在 `transcripts` 表里，并写回音色）；否则模型有 `clone_no_transcript` 就用它，没有就报 `capability_not_supported` 并提示安装命令。
+- 缺少转写时，开启 `tts.auto_transcribe` 且 ASR 可用就先转写（结果按音频 SHA-256、模型和束宽缓存在 `transcripts` 表里，并写回音色）；否则模型有 `clone_no_transcript` 就用它，没有就报 `capability_not_supported` 并提示安装命令。
 
 ## 远程主机
 
