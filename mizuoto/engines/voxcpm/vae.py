@@ -173,6 +173,7 @@ class Decoder(nn.Module):
             input_dim, output_dim = channels // 2**i, channels // 2 ** (i + 1)
             layers.append(DecoderBlock(input_dim, output_dim, stride, output_dim if config.depthwise else 1))
         layers += [Snake1d(output_dim), CausalConv1d(output_dim, 1, kernel_size=7, padding=3), nn.Tanh()]
+        self.rates = list(config.decoder_rates)
         self.conditioned = config.sr_bin_boundaries is not None
         self.sr_bin_boundaries: torch.Tensor | None = None
         if not self.conditioned:
@@ -184,6 +185,18 @@ class Decoder(nn.Module):
         buckets = len(config.sr_bin_boundaries or []) + 1
         conds: list[Any] = [RateCondition(layer.input_channels, buckets) if isinstance(layer, DecoderBlock) else None for layer in layers]
         self.sr_cond_model = nn.ModuleList(conds)  # None where a layer takes no condition, as upstream
+
+    def context_frames(self) -> int:
+        """How many latent frames before it an output sample can depend on (a bound; it is causal): what a tile decoded
+        alone needs before it to give the whole's samples (``context_tiled_1d``). The first convolution's kernel of 7,
+        then per block its transposed convolution (kernel 2 × stride: two input samples) and residual units (kernels of
+        7 dilated 1, 3 and 9), then the last convolution's kernel of 7."""
+        field, rate = 6.0, 1
+        for stride in self.rates:
+            field += 2 / rate
+            rate *= stride
+            field += 6 * (1 + 3 + 9) / rate
+        return math.ceil(field + 6 / rate)
 
     def forward(self, x: torch.Tensor, sr_cond: torch.Tensor | None = None) -> torch.Tensor:
         if not self.conditioned:

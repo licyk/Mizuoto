@@ -486,9 +486,15 @@ class LoadedVoxCpm(LoadedEngine):
             ctx.applied["retries"] = used - seed  # generated again this many times (upstream's last_successful_seed)
         ctx.check_cancel()
         ctx.progress("decoding", None)
-        from mizuoto.nn.dsp.tiles import tiled_1d
+        from mizuoto.nn.dsp.tiles import context_tiled_1d
 
-        tiled = ("in tiles of 256 latent frames", lambda: tiled_1d(self.vae.decode, latent.to(torch.float32), self.vae.decode_chunk_size))
+        # each tile after the latent frames its first sample depends on (the decoder is causal): the whole's samples up
+        # to the sums' rounding
+        context = self.vae.decoder.context_frames()
+        tiled = (
+            "in tiles of 256 latent frames",
+            lambda: context_tiled_1d(self.vae.decode, latent.to(torch.float32), self.vae.decode_chunk_size, tile=256, before=context),
+        )
         audio = ctx.run("vae", [self.h_vae], lambda: self.vae.decode(latent.to(torch.float32)), self._decode_memory(latent.shape[-1] * self.vae.decode_chunk_size), fallback=tiled)
         if cfgv.version == 2:
             if context_len > 0:

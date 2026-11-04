@@ -275,9 +275,11 @@ class LoadedF5Tts(LoadedEngine):
         return torch.where(cond_mask, cond, out)
 
     def _decode(self, mel: torch.Tensor, ctx: RequestContext) -> torch.Tensor:
-        from mizuoto.nn.dsp.tiles import tiled_1d
+        from mizuoto.nn.dsp.tiles import context_tiled_1d
 
-        tiled = ("in tiles of 256 frames", lambda: tiled_1d(self.vocoder.decode, mel, HOP_LENGTH))
+        # each tile with the 29 frames its samples depend on each side: the whole's samples up to the sums' rounding
+        context = self.vocoder.context_frames()
+        tiled = ("in tiles of 256 frames", lambda: context_tiled_1d(self.vocoder.decode, mel, HOP_LENGTH, tile=256, before=context, after=context))
         return ctx.run("vocoder", [self.h_vocoder], lambda: self.vocoder.decode(mel), self._vocoder_memory(mel.shape[-1]), fallback=tiled)
 
     # -- reference ----------------------------------------------------------------------

@@ -202,6 +202,28 @@ class BigVGAN(nn.Module):
         x = self.conv_post(self.activation_post(x))
         return torch.tanh(x) if self.use_tanh_at_final else torch.clamp(x, min=-1.0, max=1.0)
 
+    def context_frames(self) -> int:
+        """How many mel frames on each side an output sample can depend on (a bound): what a tile decoded alone needs
+        around it to give the whole's samples (``context_tiled_1d``). Per upsampling stage, its transposed convolution
+        (kernel k, stride u: (k + u) / 2u input samples) and the widest of its parallel AMP blocks: each anti-aliased
+        activation 5 samples a side (its ×2 sinc filter up, then down), each convolution of kernel k and dilation d
+        d(k − 1)/2; the first convolution and the last (kernels of 7) and the last activation."""
+        h = self.h
+        act = 5
+
+        def block(k: int, dilations: list[int]) -> float:
+            if str(h["resblock"]) == "1":
+                return sum(act + d * (k - 1) / 2 + act + (k - 1) / 2 for d in dilations)
+            return sum(act + d * (k - 1) / 2 for d in dilations)
+
+        widest = max(block(k, d) for k, d in zip(h["resblock_kernel_sizes"], h["resblock_dilation_sizes"], strict=True))
+        field, rate = 3.0, 1
+        for u, k in zip(h["upsample_rates"], h["upsample_kernel_sizes"], strict=True):
+            field += (k + u) / (2 * u) / rate
+            rate *= u
+            field += widest / rate
+        return math.ceil(field + (act + 3) / rate)
+
 
 class SpeakerBigVGAN(nn.Module):
     """IndexTTS-1.5's BigVGAN (``indextts/BigVGAN/models.py``): GPT latents in, conditioned on an ECAPA-TDNN

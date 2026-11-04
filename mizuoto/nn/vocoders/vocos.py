@@ -6,6 +6,7 @@ checkpoint's ``feature_extractor.*`` buffers are not needed to decode and are ig
 
 from __future__ import annotations
 
+import math
 from typing import Any
 
 import torch
@@ -86,6 +87,15 @@ class Vocos(nn.Module):
 
     def decode(self, features: torch.Tensor) -> torch.Tensor:
         return self.head(self.backbone(features))
+
+    def context_frames(self) -> int:
+        """How many frames on each side an output sample can depend on (a bound): the backbone's centred kernels of 7
+        (the embedding and each block's depthwise convolution: 3 a side each) and the inverse STFT's window, whose
+        samples ``n_fft / 2`` either side of a frame's centre it adds to. What a tile decoded alone needs around it to
+        give the whole's samples (``context_tiled_1d``; the whole gives ``hop`` samples a frame, one frame's fewer at
+        its end)."""
+        istft = self.head.istft
+        return 3 + 3 * len(self.backbone.convnext) + math.ceil(istft.n_fft / 2 / istft.hop_length)
 
     @staticmethod
     def ignorable() -> list[str]:

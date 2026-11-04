@@ -1,16 +1,18 @@
-"""Decoding a long sequence in overlapping tiles.
+"""Decoding a long sequence in tiles, the engines' fallback when a whole utterance's decoding does not fit
+(``compute.oom_fallback``).
 
-A convolutional decoder (a vocoder, a VAE) needs memory in proportion to its input's length. When a whole utterance does
-not fit, ``tiled_1d`` decodes it in tiles of ``tile`` frames that overlap by ``overlap`` frames and joins them with a
-linear cross-fade over the overlaps, as ComfyUI's ``tiled_scale_multidim`` does for audio VAEs (tile 256, overlap 32).
-Each tile sees less context at its edges than the whole would, so the result differs slightly from decoding at once:
-only used when the engine and ``compute.oom_fallback`` allow it.
+A convolutional decoder (a vocoder, a VAE) needs memory in proportion to its input's length, but each output sample
+depends on the inputs only within a receptive field. ``context_tiled_1d`` decodes each tile with the context frames
+around it that field reaches (only before it for a causal decoder) and keeps the tile's own samples. With the context
+at least the field on each side (each decoder bounds its own: ``context_frames()``), and the decoder giving
+``upsample`` samples a frame (or a fixed number fewer at the sequence's end, as a centred inverse STFT does), this is
+the same function as decoding at once, the sequence's ends padded as the whole's are; only the sums' order (other
+lengths, other kernels) may differ in the last bits. Every engine's tiled fallback uses it.
 
-A decoder whose output sample depends on the inputs only within a receptive field needs no fade: ``context_tiled_1d``
-decodes each tile with context frames around it (only before it for a causal decoder) and keeps the tile's own samples.
-With the context at least the receptive field on each side, and the decoder giving exactly ``upsample`` samples a frame
-(the sequence's ends padded as the whole's are), this is the same function as decoding at once; only the sums' order
-(other lengths, other kernels) may differ in the last bits.
+``tiled_1d`` is the older way, for a decoder without such a bound: tiles of ``tile`` frames overlapping by ``overlap``
+frames, joined with a linear cross-fade (ComfyUI's ``tiled_scale_multidim`` for audio VAEs, tile 256, overlap 32); each
+tile sees less context at its edges than the whole would, so the result differs slightly at the seams. No engine here
+uses it now; it stays for released engine packages that call it.
 """
 
 from __future__ import annotations

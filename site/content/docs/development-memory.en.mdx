@@ -21,7 +21,7 @@ The user-facing settings are in [Performance](/docs/advanced-performance); the r
 | `ModelManager` | `mizuoto/runtime/manager.py` | Every registered component, the budget, eviction, partial loading, the OOM retry's clean-up, calibration, reporting |
 | `RequestContext.use` / `run` | `mizuoto/runtime/context.py` | A phase of a request; `run` adds the exact retry and the fallback |
 | `peak_bytes`, `BufferCache` | `mizuoto/runtime/lm/cache.py` | KV cache peaks for estimates; the static cache |
-| `tiled_1d`, `context_tiled_1d` | `mizuoto/nn/dsp/tiles.py` | Decoding in tiles (a fallback): cross-faded, or each with the context its receptive field needs |
+| `context_tiled_1d` | `mizuoto/nn/dsp/tiles.py` | Decoding in tiles (a fallback), each with the context the decoder's receptive field needs |
 | `DeviceService` | `mizuoto/runtime/device.py` | Free memory, `vram_limit_mb`, simulated devices |
 | Training tools | `mizuoto/training/memory.py` | Checkpointing, presets, host optimizer, streamed frozen weights, estimates |
 
@@ -155,15 +155,23 @@ A phase under `ctx.use` (one that yields audio or consumes a generator) is not r
 | --- | --- |
 | ASR | one 30 s window at a time |
 | GPT-SoVITS | one text at a time |
-| F5-TTS | Vocos in tiles |
+| F5-TTS | Vocos in tiles with context |
 | Fish Speech (S2 Pro, Drama 3) | the codec's decoder in tiles with context |
-| IndexTTS | BigVGAN in tiles |
+| IndexTTS 2 / 2.5 | BigVGAN in tiles with context |
 | OmniVoice | the audio tokenizer's decoder in tiles with context |
-| VoxCPM | the VAE in tiles |
+| VoxCPM | the VAE's decoder in tiles with context |
 
-`tiled_1d` decodes 256 frames at a time with 32 frames of overlap, cross-faded (ComfyUI's audio VAE tiling). Qwen3-TTS's codec already decodes in chunks; CosyVoice's HiFT carries a phase that tiles would break.
+Each decoder's output samples depend on a bounded window of its input frames, so the tiles need no fade: `context_tiled_1d` decodes each tile (256 frames, 128 for OmniVoice) with the frames that window reaches around it (before it only, for a causal decoder) and keeps the tile's own samples. The decoder computes the bound from its layers (`context_frames()`): Vocos 29 frames each side (its kernels and the inverse STFT's window), IndexTTS 2's BigVGAN 39 each side, VoxCPM's causal VAEs 20–22 before, Fish's causal codec decoder 20 before, HiggsAudio's DAC (OmniVoice) 12 each side. The tiles compute the same function as the whole and differ only in the sums' rounding, measured on 60 s of speech (2026-11-04, `/root/vllm_server/tiles/`):
 
-`context_tiled_1d` needs no fade, for a decoder of convolutions whose output samples each depend on a bounded window of frames: it decodes each tile with the frames that window reaches around it (before it only, for a causal decoder) and keeps the tile's own samples. The decoder computes that bound from its layers (`context_frames()`: Fish's causal codec decoder 20 frames, HiggsAudio's DAC 12 each side), so the tiles compute the same function as the whole, and differ only in the sums' rounding: on the CPU in float32 by 1.6e-7 (Fish) and 4e-7 (OmniVoice) at most; on an RTX 3060, over 60 s, at 40 dB SNR in Fish's bf16 (its bf16 against float32 is 37.9 dB) and 64 dB in OmniVoice's float32 (its GPU against the CPU: 63 dB). The decoders' working memory for those 60 s fell from 5,050 to 275 MB (Fish) and 1,049 to 108 MB (OmniVoice).
+| Decoder | CPU, float32: SNR (max diff) | RTX 3060: tiles against whole | the GPU's own noise | Working memory, whole → tiles |
+| --- | --- | --- | --- | --- |
+| F5-TTS's Vocos | 118 dB (4.8e-6) | 43 dB | 40 dB (GPU against CPU) | 173 → 32 MB |
+| IndexTTS 2's BigVGAN | 124 dB (2.5e-6) | 55 dB | 36 dB (GPU against CPU) | 1,638 → 100 MB |
+| VoxCPM 0.5B / 1.5 / 2's VAE | 127 / 125 / 119 dB (≤ 1.2e-6) | 61 / 66 / 63 dB | 61 / 65 / 63 dB (GPU against CPU) | 1,834 → 331, 3,370 → 618, 1,840 → 348 MB |
+| Fish Speech's codec decoder (bf16) | (1.6e-7) | 40 dB | 37.9 dB (bf16 against float32) | 5,050 → 275 MB |
+| OmniVoice's tokenizer | (4e-7) | 64 dB | 63 dB (GPU against CPU) | 1,049 → 108 MB |
+
+With half the context (or one frame) the seams differ visibly, which the tests check. Qwen3-TTS's codec already decodes in chunks; CosyVoice's HiFT carries a phase that tiles would break. `tiled_1d` (overlapping tiles, cross-faded, as ComfyUI tiles audio VAEs) is no longer used by an engine here; it stays for released engine packages that call it.
 
 ## Working-memory estimates
 

@@ -21,7 +21,7 @@ icon: MemoryStick
 | `ModelManager` | `mizuoto/runtime/manager.py` | 所有已登记的组件、预算、让出显存、部分加载、显存不足重试前的清理、校准、报告 |
 | `RequestContext.use` / `run` | `mizuoto/runtime/context.py` | 请求的一个阶段；`run` 另加精确重试和回退 |
 | `peak_bytes`、`BufferCache` | `mizuoto/runtime/lm/cache.py` | 供估算用的 KV 缓存峰值；静态缓存 |
-| `tiled_1d`、`context_tiled_1d` | `mizuoto/nn/dsp/tiles.py` | 分块解码（一种回退方式）：交叉淡化，或每块带上感受野所需的上下文 |
+| `context_tiled_1d` | `mizuoto/nn/dsp/tiles.py` | 分块解码（一种回退方式），每块带上解码器感受野所需的上下文 |
 | `DeviceService` | `mizuoto/runtime/device.py` | 空闲显存、`vram_limit_mb`、模拟设备 |
 | 训练工具 | `mizuoto/training/memory.py` | 梯度检查点、预设、主机端优化器、流式加载的冻结权重、估算 |
 
@@ -155,15 +155,23 @@ audio = ctx.run("codec decoder", [self.h_decoder], decode, self._decoder_memory(
 | --- | --- |
 | ASR | 一次一个 30 秒窗口 |
 | GPT-SoVITS | 一次一句 |
-| F5-TTS | Vocos 分块解码 |
+| F5-TTS | Vocos 带上下文分块解码 |
 | Fish Speech（S2 Pro、Drama 3） | 编解码器的解码器带上下文分块解码 |
-| IndexTTS | BigVGAN 分块解码 |
+| IndexTTS 2 / 2.5 | BigVGAN 带上下文分块解码 |
 | OmniVoice | 音频分词器的解码器带上下文分块解码 |
-| VoxCPM | VAE 分块解码 |
+| VoxCPM | VAE 的解码器带上下文分块解码 |
 
-`tiled_1d` 每次解码 256 帧，重叠 32 帧并交叉淡化（ComfyUI 的音频 VAE 分块方式）。Qwen3-TTS 的编解码器本来就分段解码；CosyVoice 的 HiFT 带有相位状态，分块会破坏它。
+每个解码器的输出样本只依赖输入帧的一个有限窗口，所以分块不需要淡化：`context_tiled_1d` 解码每一块（256 帧，OmniVoice 为 128 帧）时带上这个窗口在块周围所及的帧（因果解码器只带前面的），只保留这一块自己的样本。解码器根据自己的层算出这个界（`context_frames()`）：Vocos 每侧 29 帧（它的卷积核和逆 STFT 的窗口），IndexTTS 2 的 BigVGAN 每侧 39 帧，VoxCPM 的因果 VAE 之前 20–22 帧，Fish 的因果编解码器解码器之前 20 帧，HiggsAudio 的 DAC（OmniVoice）每侧 12 帧。分块计算的是与整段相同的函数，只差求和的舍入，在 60 秒语音上测量（2026-11-04，`/root/vllm_server/tiles/`）：
 
-`context_tiled_1d` 不需要淡化，适用于由卷积组成、每个输出样本只依赖有限帧窗口的解码器：它解码每一块时带上这个窗口在块周围所及的帧（因果解码器只带前面的），只保留这一块自己的样本。解码器根据自己的层算出这个界（`context_frames()`：Fish 的因果编解码器解码器为 20 帧，HiggsAudio 的 DAC 每侧 12 帧），所以分块计算的是与整段相同的函数，差别只在求和的舍入：CPU 上 float32 最多相差 1.6e-7（Fish）和 4e-7（OmniVoice）；在 RTX 3060 上对 60 秒音频，Fish 的 bf16 下 SNR 为 40 dB（它的 bf16 与 float32 相比为 37.9 dB），OmniVoice 的 float32 下为 64 dB（它的 GPU 与 CPU 相比为 63 dB）。这 60 秒的解码器工作显存从 5,050 MB 降到 275 MB（Fish），从 1,049 MB 降到 108 MB（OmniVoice）。
+| 解码器 | CPU，float32：SNR（最大差） | RTX 3060：分块对整段 | GPU 自身的噪声 | 工作显存，整段 → 分块 |
+| --- | --- | --- | --- | --- |
+| F5-TTS 的 Vocos | 118 dB（4.8e-6） | 43 dB | 40 dB（GPU 对 CPU） | 173 → 32 MB |
+| IndexTTS 2 的 BigVGAN | 124 dB（2.5e-6） | 55 dB | 36 dB（GPU 对 CPU） | 1,638 → 100 MB |
+| VoxCPM 0.5B / 1.5 / 2 的 VAE | 127 / 125 / 119 dB（≤ 1.2e-6） | 61 / 66 / 63 dB | 61 / 65 / 63 dB（GPU 对 CPU） | 1,834 → 331、3,370 → 618、1,840 → 348 MB |
+| Fish Speech 的编解码器解码器（bf16） | （1.6e-7） | 40 dB | 37.9 dB（bf16 对 float32） | 5,050 → 275 MB |
+| OmniVoice 的分词器 | （4e-7） | 64 dB | 63 dB（GPU 对 CPU） | 1,049 → 108 MB |
+
+上下文减半（或只有一帧）时接缝处明显不同，测试会检查这一点。Qwen3-TTS 的编解码器本来就分段解码；CosyVoice 的 HiFT 带有相位状态，分块会破坏它。`tiled_1d`（重叠分块并交叉淡化，即 ComfyUI 对音频 VAE 的分块方式）不再被这里的引擎使用，保留它是为了调用它的已发布引擎包。
 
 ## 工作显存估算
 

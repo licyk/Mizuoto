@@ -58,7 +58,7 @@ Shared: `runtime/ops.py`, `runtime/loading.py` (weight norm folded), `runtime/gr
 
 ## Memory and speed
 
-Phases: the VAE encodes a voice prompt and decodes; the model (`kind="sequence"`; the local encoder and DiT `hot`, since they run many times a patch) generates; streaming holds both. If the VAE runs out of memory with `compute.oom_fallback` on, it decodes in tiles of 256 latent frames.
+Phases: the VAE encodes a voice prompt and decodes; the model (`kind="sequence"`; the local encoder and DiT `hot`, since they run many times a patch) generates; streaming holds both. If the VAE runs out of memory with `compute.oom_fallback` on, it decodes in tiles of 256 latent frames, each after the 20–22 frames its first sample depends on (the decoder is causal): the whole's samples up to the sums' rounding.
 
 A patch is the DiT's Euler steps (each a guidance pair), the local encoder, the stop head and both language models' steps: some 6 000 small kernels, and three waits for the device (the stop flag and each language model's position copied from a Python integer). `model.PatchDecoder` runs a patch over fixed tensors with one wait, for the stop flag. The language models step before the flag is read (upstream reads it first and stops before stepping); they draw nothing and their caches are dropped when generation ends, so the patches are the same. A full cache raises where upstream's step would.
 

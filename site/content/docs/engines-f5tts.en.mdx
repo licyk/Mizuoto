@@ -47,7 +47,7 @@ Shared: `nn/transformer/dit.py` (AdaLN-zero, ConvNeXtV2 text blocks, interleaved
 
 ## Memory and speed
 
-Two phases: the transformer with the mel (every ODE step; guidance doubles the batch) and Vocos. If Vocos runs out of memory with `compute.oom_fallback` on, it decodes in tiles of 256 frames overlapping by 32 and cross-faded (`applied.fallbacks` says so).
+Two phases: the transformer with the mel (every ODE step; guidance doubles the batch) and Vocos. If Vocos runs out of memory with `compute.oom_fallback` on, it decodes in tiles of 256 frames, each with the 29 frames its samples depend on each side (its kernels and the inverse STFT's window): the whole's samples up to the sums' rounding (`applied.fallbacks` says so).
 
 `compute.compile` wraps the DiT or UNetT in `torch.compile(dynamic=True)`. On a CPU in fp32 with 8 threads the transformer's warm time drops 23 % (a request from 60 to 45 s); the first request pays about 30 s of compilation; the audio stays within 9.2e-5 of eager (89 dB). The CPU allocator and thread placement of `compute.cpu_allocator` and `compute.cpu_threads` make F5-TTS 10–20 % faster on Linux without changing a result.
 

@@ -47,7 +47,7 @@ icon: Waves
 
 ## 显存与速度
 
-两个阶段：transformer 加 mel（每个 ODE 步；引导使批次翻倍）和 Vocos。开启 `compute.oom_fallback` 时，若 Vocos 显存不足，它会以 256 帧为一块、重叠 32 帧并交叉淡化地分块解码（`applied.fallbacks` 会注明）。
+两个阶段：transformer 加 mel（每个 ODE 步；引导使批次翻倍）和 Vocos。开启 `compute.oom_fallback` 时，若 Vocos 显存不足，它会以 256 帧为一块分块解码，每块两侧各带上样本所依赖的 29 帧（它的卷积核和逆 STFT 的窗口）：与整段的样本只差求和的舍入（`applied.fallbacks` 会注明）。
 
 `compute.compile` 用 `torch.compile(dynamic=True)` 包装 DiT 或 UNetT。在 CPU 上以 fp32、8 线程运行时，transformer 预热后的耗时下降 23 %（一个请求从 60 秒降到 45 秒）；第一个请求要付出约 30 秒的编译时间；音频与 eager 的差异在 9.2e-5 以内（89 dB）。`compute.cpu_allocator` 和 `compute.cpu_threads` 的 CPU 分配器与线程绑定，能让 F5-TTS 在 Linux 上快 10–20 %，且不改变任何结果。
 

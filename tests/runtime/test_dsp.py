@@ -190,3 +190,70 @@ def test_a_dac_decoder_tiled_with_its_context_gives_the_whole():
         whole = decoder(x)
         tiled = context_tiled_1d(decoder, x, 24, tile=64, before=context, after=context)
     assert tiled.shape == whole.shape and float((tiled - whole).abs().max()) < 1e-5 * float(whole.abs().max())
+
+
+def _tiles_match(decode, x, hop, before, after, tolerance=1e-5):
+    """Tiles of 64 frames with the context give the whole's samples to rounding; with one frame of context they do not."""
+    from mizuoto.nn.dsp.tiles import context_tiled_1d
+
+    with torch.no_grad():
+        whole = decode(x)
+        tiled = context_tiled_1d(decode, x, hop, tile=64, before=before, after=after)
+        short = context_tiled_1d(decode, x, hop, tile=64, before=min(before, 1), after=min(after, 1))
+    peak = float(whole.abs().max())
+    assert tiled.shape == whole.shape and peak > 0
+    assert float((tiled - whole).abs().max()) < tolerance * peak
+    assert float((short - whole).abs().max()) > 1e-3 * peak
+
+
+def test_vocos_bigvgan_and_voxcpms_vae_tiled_with_their_context_give_the_whole():
+    """The decoders whose out-of-memory fallback tiles with context: their ``context_frames()`` bound their receptive
+    field (Vocos with its inverse STFT, BigVGAN with either AMP block, VoxCPM's causal VAE plain and conditioned)."""
+    from mizuoto.engines.voxcpm.config import VaeConfig
+    from mizuoto.engines.voxcpm.vae import AudioVAE
+    from mizuoto.nn.vocoders.bigvgan import BigVGAN
+    from mizuoto.nn.vocoders.vocos import Vocos
+    from mizuoto.runtime import ops
+
+    gen = torch.Generator().manual_seed(3)
+    vocos = Vocos(
+        {
+            "backbone": {"init_args": {"input_channels": 20, "dim": 16, "intermediate_dim": 32, "num_layers": 3}},
+            "head": {"init_args": {"dim": 16, "n_fft": 64, "hop_length": 16, "padding": "center"}},
+        }
+    )
+    ops.init_random(vocos, gen, scale=0.2)
+    assert vocos.context_frames() == 3 + 3 * 3 + 2
+    _tiles_match(vocos.decode, torch.randn(1, 20, 400, generator=gen), 16, vocos.context_frames(), vocos.context_frames())
+
+    for resblock in ("1", "2"):
+        h = {
+            "resblock": resblock,
+            "upsample_rates": [4, 2],
+            "upsample_kernel_sizes": [8, 4],
+            "upsample_initial_channel": 16,
+            "resblock_kernel_sizes": [3, 5],
+            "resblock_dilation_sizes": [[1, 3], [1, 2]],
+            "use_tanh_at_final": False,
+            "activation": "snakebeta",
+            "snake_logscale": True,
+            "num_mels": 10,
+        }
+        bigvgan = BigVGAN(h)
+        ops.init_random(bigvgan, gen, scale=0.2)
+        with torch.no_grad():
+            for name, buffer in bigvgan.named_buffers():  # the anti-aliasing filters are computed, not drawn
+                buffer.copy_(BigVGAN(h).get_buffer(name))
+            for name, p in bigvgan.named_parameters():
+                if name.endswith(("alpha", "beta")):
+                    p.zero_()  # exp(0) = 1: Snake at its usual scale
+        context = bigvgan.context_frames()
+        _tiles_match(bigvgan, torch.randn(1, 10, 300, generator=gen), 8, context, context)
+
+    for config in (
+        VaeConfig(encoder_dim=2, encoder_rates=[4, 5], latent_dim=8, decoder_dim=16, decoder_rates=[5, 4], depthwise=True),
+        VaeConfig(encoder_dim=2, encoder_rates=[4, 5], latent_dim=8, decoder_dim=16, decoder_rates=[5, 4, 3], out_sample_rate=48000, sr_bin_boundaries=[20000, 40000], version=2),
+    ):
+        vae = AudioVAE(config)
+        ops.init_random(vae, gen, scale=0.3)
+        _tiles_match(vae.decode, torch.randn(1, 8, 300, generator=gen), vae.decode_chunk_size, vae.decoder.context_frames(), 0)
