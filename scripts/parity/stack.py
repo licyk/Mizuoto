@@ -289,6 +289,8 @@ def cmd_run(args: argparse.Namespace) -> int:
                 record["settings"] = settings
             record["device"] = args.device
             record["name"] = name
+            if "torch" in sys.modules:  # CPU kernels split their sums by it: outputs made with other counts differ
+                record["threads"] = sys.modules["torch"].get_num_threads()
             if path is not None:
                 shutil.copyfile(path, folder / f"{name}.wav")
                 runs = ", ".join(f"{w:.1f}s" for w in record.get("wall_seconds_runs", [record["wall_seconds"]]))

@@ -151,7 +151,7 @@ $W/native-env/bin/python scripts/parity/compare.py qwen3tts --a reference --b na
 | 脚本 | 作用 |
 | --- | --- |
 | `stack.py run <cases.jsonl> --impl reference\|native\|upstream` | 让每个用例（一个 `SpeakRequest`，或一个 `convert` / `edit` 请求）走某一实现的完整链路，把音频和行为存进 `fixtures/<engine>/<case>/<name>`。`--name` 设置本次运行的文件名（如 `reference-repeat`、`reference-t28`），`--only` 选用例，`--setting k=v` 对整次运行应用一项设置，`--repeat` 在同一条链路里把每个用例再跑几遍，`--device`（默认 `cpu`） |
-| `compare.py <engine…> [--a reference] [--b native]` | 逐采样比较两次运行（`--tolerance`；`--report` 写出 Markdown 报告）；不运行模型，直接从夹具打印当前的对照表 |
+| `compare.py <engine…> [--a reference] [--b native]` | 逐采样比较两次运行（`--tolerance`；`--report` 写出 Markdown 报告）；不运行模型，直接从夹具打印当前的对照表。CPU 上的运行只有在线程数相同时才能逐位比较（CPU 内核按线程数拆分求和）：`stack.py` 会记录每次运行的线程数（`threads`），线程数不同时对照表会写出两者。VoxCPM 的夹具是用 8 个线程生成的（`OMP_NUM_THREADS=8`、`compute.cpu_threads=off`）；Mizuoto 默认每个物理核心绑定一个线程，在开发机上是 12 个，此时本地实现和上游给出的输出都与夹具相差一个 int16 步长（2026-11-04：在 8 和 12 个线程时两者彼此完全相同） |
 | `train.py run <engine> --impl reference\|native --model <id> --method <m> --hp k=v --name <n>` | 用某一实现在工作区的数据集上训练，保留实验、指标、预览和导出结果 |
 | `train.py compare <engine> <name>` | 比较两种实现的训练结果；导出的音色或模型可以交给另一种实现加载 |
 | `perf.py`、`train_perf.py` | 按阶段计时同样的用例和微调，并与上一轮的音频、指标和权重对照（见[性能工作](/docs/development-performance)） |

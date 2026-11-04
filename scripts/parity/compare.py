@@ -60,6 +60,8 @@ def compare_case(folder: Path, a: str, b: str, tolerance: float) -> dict[str, An
     ba, bb = behaviour(ra), behaviour(rb)
     diffs = [k for k in ba if ba[k] != bb[k]]
     row: dict[str, Any] = {"case": folder.name, "behaviour_diffs": diffs, "a_wall": ra.get("wall_seconds"), "b_wall": rb.get("wall_seconds")}
+    if ra.get("threads") and rb.get("threads") and ra["threads"] != rb["threads"]:
+        row["threads"] = (ra["threads"], rb["threads"])  # CPU sums split by the thread count: not comparable bit for bit
     wa, wb = folder / f"{a}.wav", folder / f"{b}.wav"
     if wa.exists() and wb.exists():
         import numpy as np
@@ -92,7 +94,7 @@ def table(rows: list[dict[str, Any]], a: str, b: str) -> str:
         lines.append(
             "| {case} | {ident} | {mx} | {snr} | {ln} | {bd} | {wa} / {wb} | {ok} |".format(
                 case=r["case"],
-                ident="yes" if r.get("identical") else "no",
+                ident="yes" if r.get("identical") else ("no, {} / {} threads".format(*r["threads"]) if r.get("threads") else "no"),
                 mx="—" if r.get("max_abs") is None else f"{r['max_abs']:.2e}",
                 snr="—" if snr is None else ("∞" if snr == math.inf else f"{snr:.1f}"),
                 ln="—" if not lengths else f"{lengths[0]} / {lengths[1]}",
