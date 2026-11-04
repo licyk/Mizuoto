@@ -23,7 +23,7 @@ from __future__ import annotations
 
 import json
 import math
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass, fields
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -538,12 +538,26 @@ class LoadedOmniVoice(LoadedEngine):
         def decode(t: torch.Tensor) -> np.ndarray:
             return self.audio_tokenizer.decode(t.to(self.device).unsqueeze(0))[0].cpu().numpy()
 
+        def decode_tiled(t: torch.Tensor) -> np.ndarray:
+            """The tokenizer's decoder (a DAC: convolutions) in tiles of 128 frames (~5 s), each decoded with the frames its
+            samples depend on each side (12 for HiggsAudio v2's): the whole's samples up to float rounding (4e-7 on the
+            CPU)."""
+            from mizuoto.nn.dsp.tiles import context_tiled_1d
+
+            codes = t.to(self.device).unsqueeze(0)
+            context = self.audio_tokenizer.acoustic_decoder.context_frames()
+            return context_tiled_1d(self.audio_tokenizer.decode, codes, self.audio_tokenizer.hop_length, tile=128, before=context, after=context)[0].cpu().numpy()
+
+        def run(one: Callable[[torch.Tensor], np.ndarray]) -> np.ndarray:
+            return cross_fade_chunks([one(t) for t in tokens], self.sampling_rate) if isinstance(tokens, list) else one(tokens)
+
         frames = max(int(t.shape[-1]) for t in tokens) if isinstance(tokens, list) else int(tokens.shape[-1])
         audio = ctx.run(
             "audio tokenizer",
             [self.h_tokenizer],
-            lambda: cross_fade_chunks([decode(t) for t in tokens], self.sampling_rate) if isinstance(tokens, list) else decode(tokens),
+            lambda: run(decode),
             self._tokenizer_memory(frames * self.audio_tokenizer.hop_length),
+            fallback=("in tiles of 128 frames", lambda: run(decode_tiled)),
         )
         if config.postprocess_output:
             audio = remove_silence(audio, self.sampling_rate, mid_sil=500, lead_sil=100, trail_sil=100)

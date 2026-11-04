@@ -21,7 +21,7 @@ icon: MemoryStick
 | `ModelManager` | `mizuoto/runtime/manager.py` | 所有已登记的组件、预算、让出显存、部分加载、显存不足重试前的清理、校准、报告 |
 | `RequestContext.use` / `run` | `mizuoto/runtime/context.py` | 请求的一个阶段；`run` 另加精确重试和回退 |
 | `peak_bytes`、`BufferCache` | `mizuoto/runtime/lm/cache.py` | 供估算用的 KV 缓存峰值；静态缓存 |
-| `tiled_1d` | `mizuoto/nn/dsp/tiles.py` | 以重叠分块解码（一种回退方式） |
+| `tiled_1d`、`context_tiled_1d` | `mizuoto/nn/dsp/tiles.py` | 分块解码（一种回退方式）：交叉淡化，或每块带上感受野所需的上下文 |
 | `DeviceService` | `mizuoto/runtime/device.py` | 空闲显存、`vram_limit_mb`、模拟设备 |
 | 训练工具 | `mizuoto/training/memory.py` | 梯度检查点、预设、主机端优化器、流式加载的冻结权重、估算 |
 
@@ -156,10 +156,14 @@ audio = ctx.run("codec decoder", [self.h_decoder], decode, self._decoder_memory(
 | ASR | 一次一个 30 秒窗口 |
 | GPT-SoVITS | 一次一句 |
 | F5-TTS | Vocos 分块解码 |
+| Fish Speech（S2 Pro、Drama 3） | 编解码器的解码器带上下文分块解码 |
 | IndexTTS | BigVGAN 分块解码 |
+| OmniVoice | 音频分词器的解码器带上下文分块解码 |
 | VoxCPM | VAE 分块解码 |
 
 `tiled_1d` 每次解码 256 帧，重叠 32 帧并交叉淡化（ComfyUI 的音频 VAE 分块方式）。Qwen3-TTS 的编解码器本来就分段解码；CosyVoice 的 HiFT 带有相位状态，分块会破坏它。
+
+`context_tiled_1d` 不需要淡化，适用于由卷积组成、每个输出样本只依赖有限帧窗口的解码器：它解码每一块时带上这个窗口在块周围所及的帧（因果解码器只带前面的），只保留这一块自己的样本。解码器根据自己的层算出这个界（`context_frames()`：Fish 的因果编解码器解码器为 20 帧，HiggsAudio 的 DAC 每侧 12 帧），所以分块计算的是与整段相同的函数，差别只在求和的舍入：CPU 上 float32 最多相差 1.6e-7（Fish）和 4e-7（OmniVoice）；在 RTX 3060 上对 60 秒音频，Fish 的 bf16 下 SNR 为 40 dB（它的 bf16 与 float32 相比为 37.9 dB），OmniVoice 的 float32 下为 64 dB（它的 GPU 与 CPU 相比为 63 dB）。这 60 秒的解码器工作显存从 5,050 MB 降到 275 MB（Fish），从 1,049 MB 降到 108 MB（OmniVoice）。
 
 ## 工作显存估算
 

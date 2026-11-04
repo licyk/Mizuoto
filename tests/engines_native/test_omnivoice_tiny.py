@@ -227,6 +227,50 @@ def test_runs_identically_with_its_weights_placed_by_phase_and_streamed(loaded, 
     check_streamed(loaded, lambda m: run(m, text=long, options={**QUIET, "audio_chunk_threshold": 0.5, "audio_chunk_duration": 0.5}), monkeypatch)
 
 
+def test_the_tokenizer_falls_back_to_tiles_when_allowed(loaded, monkeypatch):
+    """The audio tokenizer's decoding runs out of memory on every try; with compute.oom_fallback it decodes in tiles
+    (one here: the tiny clip is short), the same audio, and the request says so."""
+    from mizuoto.runtime.policy import VramPolicy
+    from tests.engines_native.streaming import simulated
+
+    (expected,), _ = speak(loaded, seed=5)
+    original = loaded.audio_tokenizer.decode
+    calls = {"n": 0}
+
+    def flaky(codes):
+        calls["n"] += 1
+        if calls["n"] <= 3:  # the first try and both retries
+            raise torch.OutOfMemoryError("CUDA out of memory")
+        return original(codes)
+
+    with simulated(loaded, 1.0, monkeypatch) as manager:
+        policy = VramPolicy(reserve_bytes=0, host_copies="on", oom_fallback=True)
+        manager._policy = lambda: policy
+        monkeypatch.setattr(loaded.audio_tokenizer, "decode", flaky)
+        ctx = RequestContext("r", seed=5)
+        ctx.manager = manager
+        (got,), _ = speak(loaded, seed=5, ctx=ctx)
+    assert np.array_equal(got.samples, expected.samples)
+    assert ctx.applied["fallbacks"] == {"audio tokenizer": "in tiles of 128 frames"} and ctx.applied["oom_retries"] == {"audio tokenizer": 2}
+
+
+def test_the_tokenizer_in_tiles_gives_the_whole(loaded):
+    """Over many tiles, each decoded with the frames its samples depend on each side, the tiles' samples are the
+    whole's to float rounding; with half the context they are not."""
+    from mizuoto.nn.dsp.tiles import context_tiled_1d
+
+    tokenizer = loaded.audio_tokenizer
+    context = tokenizer.acoustic_decoder.context_frames()
+    codes = torch.randint(0, 8, (1, tokenizer.num_quantizers, 300), generator=torch.Generator().manual_seed(4))
+    with torch.inference_mode():
+        whole = tokenizer.decode(codes)
+        tiled = context_tiled_1d(tokenizer.decode, codes, tokenizer.hop_length, tile=128, before=context, after=context)
+        short = context_tiled_1d(tokenizer.decode, codes, tokenizer.hop_length, tile=128, before=context // 2, after=context // 2)
+    peak = float(whole.abs().max())
+    assert tiled.shape == whole.shape and float((tiled - whole).abs().max()) < 1e-4 * peak
+    assert float((short - whole).abs().max()) > 1e-3 * peak
+
+
 def test_packed_guidance_computes_each_sequence_as_its_own_row(loaded, reference):
     """``packed_guidance``: an item's conditional and unconditional sequences side by side in one row, under a
     block-diagonal mask with each one's positions from 0, give the logits upstream's two padded rows give (to rounding),

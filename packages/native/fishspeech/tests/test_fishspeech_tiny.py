@@ -246,6 +246,45 @@ def test_runs_identically_with_its_weights_placed_by_phase_and_streamed(loaded, 
     check_streamed(loaded, lambda m: (lambda r: (r[0], np.frombuffer(r[1], dtype=np.uint8)))(codec(m)), monkeypatch)
 
 
+def test_the_codec_falls_back_to_tiles_when_allowed(loaded, reference, monkeypatch):
+    """The codec's decoding runs out of memory on every try; with compute.oom_fallback its decoder runs in tiles (one
+    here: the tiny clip is short), the same audio, and the request says so."""
+    from mizuoto.runtime.policy import VramPolicy
+    from tests.engines_native.streaming import simulated
+
+    expected = np.concatenate([c.samples for c in speak(loaded, voice_of(reference))[0]])
+
+    def out_of_memory(indices):
+        raise torch.OutOfMemoryError("CUDA out of memory")
+
+    with simulated(loaded, 1.0, monkeypatch) as manager:
+        policy = VramPolicy(reserve_bytes=0, host_copies="on", oom_fallback=True)
+        manager._policy = lambda: policy
+        monkeypatch.setattr(loaded.codec, "from_indices", out_of_memory)
+        ctx = RequestContext("r", seed=3)
+        ctx.manager = manager
+        got = np.concatenate([c.samples for c in speak(loaded, voice_of(reference), ctx=ctx)[0]])
+    assert np.array_equal(got, expected)
+    assert ctx.applied["fallbacks"] == {"codec": "in tiles of 256 latent frames"} and ctx.applied["oom_retries"] == {"codec": 2}
+
+
+def test_the_codec_decoder_in_tiles_gives_the_whole(loaded):
+    """Over many tiles, each decoded after the frames its first sample depends on (the causal decoder's bound: 21
+    for the tiny codec's rates), the tiles' samples are the whole's to float rounding; with 16
+    frames they are not."""
+    from mizuoto.nn.dsp.tiles import context_tiled_1d
+
+    decoder = loaded.codec.decoder
+    assert decoder.context_frames() == 21  # 6 + (2 + 78/8) + (2/8 + 78/32) + 6/32, rounded up
+    latent = torch.randn(1, TINY_CODEC.latent_dim, 700, generator=torch.Generator().manual_seed(4))
+    with torch.inference_mode():
+        whole = decoder(latent)
+        tiled = context_tiled_1d(decoder, latent, 32, tile=256, before=decoder.context_frames())
+        short = context_tiled_1d(decoder, latent, 32, tile=256, before=16)
+    assert tiled.shape == whole.shape and float((tiled - whole).abs().max()) < 1e-4
+    assert float((short - whole).abs().max()) > 0.1
+
+
 @pytest.mark.skipif(not torch.cuda.is_available() or torch.version.hip is not None, reason="CUDA graphs need an NVIDIA GPU")
 def test_cuda_graphs_decode_exactly_as_eagerly_on_a_gpu(model_dir, reference):
     """compute.cuda_graphs (mizuoto.runtime.graphs): the slow step as graphs around its attention calls and the frame's

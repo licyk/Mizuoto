@@ -125,6 +125,7 @@ class DacDecoder(nn.Module):
         self.snake1 = Snake1d(output_dim)
         self.conv2 = ops.Conv1d(output_dim, 1, kernel_size=7, padding=3)
         self.tanh = tanh
+        self.rates = list(upsampling_ratios)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         x = self.conv1(x)
@@ -132,3 +133,14 @@ class DacDecoder(nn.Module):
             x = block(x)
         x = self.conv2(self.snake1(x))
         return torch.tanh(x) if self.tanh else x
+
+    def context_frames(self) -> int:
+        """How many input frames on each side an output sample can depend on (a bound): what a tile decoded alone needs
+        around it to give the whole's samples (``context_tiled_1d``)."""
+        field = 3.0  # the first convolution's kernel of 7, centred
+        rate = 1
+        for stride in self.rates:
+            field += 2 / rate  # a transposed convolution of kernel 2 × stride: two input samples
+            rate *= stride
+            field += 3 * (1 + 3 + 9) / rate  # the residual units' centred kernels of 7, dilated 1, 3 and 9
+        return math.ceil(field + 3 / rate)

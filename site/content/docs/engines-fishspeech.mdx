@@ -49,7 +49,7 @@ Fish Audio S2 Pro 与 Drama 3（[fishaudio/fish-speech](https://github.com/fisha
 
 ## 显存与速度
 
-阶段：编解码器编码参考音频并解码每批帧；语言模型（`kind="sequence"`，快 transformer 为 `hot`）生成每一批，生成继续时重新放置。每批的工作内存是慢模型缓存的真实上限：参考音频的编码、每个文本 token、之前各批的帧和 `max_new_tokens`，不超过 `max_seq_len`。模型完整运行需要约 22 GB 显存；不够时运行时会流式加载部分权重。
+阶段：编解码器编码参考音频并解码每批帧；语言模型（`kind="sequence"`，快 transformer 为 `hot`）生成每一批，生成继续时重新放置。每批的工作内存是慢模型缓存的真实上限：参考音频的编码、每个文本 token、之前各批的帧和 `max_new_tokens`，不超过 `max_seq_len`。在默认设置下（bf16），S2 Pro 最多占用 10.2 GB 显存（[性能](/docs/development-performance) 上的 G13）；不够时运行时会流式加载部分权重。开启 `compute.oom_fallback` 时，如果编解码器解码显存不足，它的卷积解码器按 256 个潜在帧（约 3 秒）一块解码，每块之前带上第一个样本所依赖的 20 帧（解码器是因果的），量化器部分整段运行：与整段的样本只差求和的舍入（GPU 上 bf16 下 SNR 40 dB，而 bf16 与 float32 相比为 37.9 dB），60 秒只需 275 MB 而不是 5 GB。
 
 一帧是一次慢 transformer 步骤加十个码本。原本的循环每帧约等待设备 22 次：轮次结束检查；把非语义 token 的码本嵌入置零的掩码赋值（`vq_sum[~mask] = 0` 会把掩码读回）；用列表下标取快 transformer 的掩码和旋转编码行（每个码本两次拷贝到设备）；采样器中把 Python 布尔值存入设备张量，每次抽样两次。它们都换成了完全等价的写法（`torch.where`、切片、`fill_`），解码步骤的掩码直接按它本来的样子生成为一行全真。每帧只剩一次等待。
 
@@ -74,7 +74,7 @@ Fish Audio S2 Pro 与 Drama 3（[fishaudio/fish-speech](https://github.com/fisha
 
 ## 限制
 
-- 完整运行模型需要约 22 GB 显存；在 CPU 上以 fp32 运行，速度慢。
+- 完整运行模型（S2 Pro）需要约 10 GB 显存；在 CPU 上以 fp32 运行，速度慢。
 - `normalize` 和 `repetition_penalty` 没有效果（与上游相同），top-k 不能更改。
 - 结果受 Fish Audio Research License 约束：不可商用，也不能用于训练其他引擎。
 

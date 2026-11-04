@@ -79,7 +79,7 @@ Mizuoto 像 ComfyUI 一样管理显存。一个请求的每一步只放上它需
 
 ### 显存不足
 
-请求的某一步仍然显存不足时（估计偏小，或其他程序占用了显存），Mizuoto 把这块 GPU 上其他空闲模型移走，把这一步自己的一半权重留在内存中，并用相同的随机数重新运行这一步，所以结果相同，只是更慢；最多重试两次。仍然不够且开启了 `compute.oom_fallback` 时，有更省显存方式的引擎会使用它（语音识别逐个 30 秒窗口，GPT-SoVITS 逐句，F5-TTS、IndexTTS 和 VoxCPM 的解码器分块）。否则请求以 `compute_unavailable` 失败（`detail.reason` 为 `out_of_memory`），并且与 ComfyUI 一样，Mizuoto 会卸载所有 GPU 上未在使用的模型，让下一次尝试从空的设备开始（CPU 上的模型保留）。如果再次失败，把引擎换到另一个设备，把 `compute.vram_mode` 设为 `low` 或 `none`，或调小 `compute.max_resident_models`。Mizuoto 还会记住每一步实际用了多少显存，下次预留相应的量。
+请求的某一步仍然显存不足时（估计偏小，或其他程序占用了显存），Mizuoto 把这块 GPU 上其他空闲模型移走，把这一步自己的一半权重留在内存中，并用相同的随机数重新运行这一步，所以结果相同，只是更慢；最多重试两次。仍然不够且开启了 `compute.oom_fallback` 时，有更省显存方式的引擎会使用它（语音识别逐个 30 秒窗口，GPT-SoVITS 逐句，F5-TTS、Fish Speech、IndexTTS、OmniVoice 和 VoxCPM 的解码器分块）。否则请求以 `compute_unavailable` 失败（`detail.reason` 为 `out_of_memory`），并且与 ComfyUI 一样，Mizuoto 会卸载所有 GPU 上未在使用的模型，让下一次尝试从空的设备开始（CPU 上的模型保留）。如果再次失败，把引擎换到另一个设备，把 `compute.vram_mode` 设为 `low` 或 `none`，或调小 `compute.max_resident_models`。Mizuoto 还会记住每一步实际用了多少显存，下次预留相应的量。
 
 ## 编译模型（`compute.compile`）
 

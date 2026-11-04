@@ -5,6 +5,12 @@ not fit, ``tiled_1d`` decodes it in tiles of ``tile`` frames that overlap by ``o
 linear cross-fade over the overlaps, as ComfyUI's ``tiled_scale_multidim`` does for audio VAEs (tile 256, overlap 32).
 Each tile sees less context at its edges than the whole would, so the result differs slightly from decoding at once:
 only used when the engine and ``compute.oom_fallback`` allow it.
+
+A decoder whose output sample depends on the inputs only within a receptive field needs no fade: ``context_tiled_1d``
+decodes each tile with context frames around it (only before it for a causal decoder) and keeps the tile's own samples.
+With the context at least the receptive field on each side, and the decoder giving exactly ``upsample`` samples a frame
+(the sequence's ends padded as the whole's are), this is the same function as decoding at once; only the sums' order
+(other lengths, other kernels) may differ in the last bits.
 """
 
 from __future__ import annotations
@@ -46,3 +52,19 @@ def tiled_1d(decode: Callable[[torch.Tensor], torch.Tensor], x: torch.Tensor, up
         start += stride
     assert out is not None and weight is not None
     return out / weight.clamp(min=1e-6)
+
+
+def context_tiled_1d(decode: Callable[[torch.Tensor], torch.Tensor], x: torch.Tensor, upsample: int, tile: int, before: int, after: int = 0) -> torch.Tensor:
+    """``decode(x)`` for ``x`` of shape (..., frames) giving exactly (..., frames × ``upsample``), a tile of ``tile`` frames
+    at a time, each decoded with up to ``before`` frames before it and ``after`` frames after it whose samples are
+    dropped (``after=0`` for a causal decoder)."""
+    frames = x.shape[-1]
+    if frames <= tile:
+        return decode(x)
+    pieces = []
+    for start in range(0, frames, tile):
+        end = min(start + tile, frames)
+        begin, stop = max(0, start - before), min(frames, end + after)
+        y = decode(x[..., begin:stop])
+        pieces.append(y[..., (start - begin) * upsample : (end - begin) * upsample])
+    return torch.cat(pieces, dim=-1)

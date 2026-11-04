@@ -49,7 +49,7 @@ Shared: `text/tokenize/bpe.py`, `runtime/lm/cache.py`, `runtime/graphs.py`, `nn/
 
 ## Memory and speed
 
-Phases: the codec encodes references and decodes each batch of frames; the language model (`kind="sequence"`, the fast transformer `hot`) generates each batch, placed again as generation resumes. Each batch's working memory is the slow model's cache for its true bound: the references' codes, every text token, the frames of the batches before it and `max_new_tokens`, within `max_seq_len`. The model needs about 22 GB of GPU memory to run whole; with less, the runtime streams part of its weights.
+Phases: the codec encodes references and decodes each batch of frames; the language model (`kind="sequence"`, the fast transformer `hot`) generates each batch, placed again as generation resumes. Each batch's working memory is the slow model's cache for its true bound: the references' codes, every text token, the frames of the batches before it and `max_new_tokens`, within `max_seq_len`. S2 Pro took 10.2 GB of GPU memory at most with the defaults (bf16; G13 on [Performance](/docs/development-performance)); with less, the runtime streams part of its weights. If the codec's decoding runs out of memory with `compute.oom_fallback` on, its convolution decoder runs in tiles of 256 latent frames (about 3 s), each after the 20 frames its first sample depends on (the decoder is causal), and the quantizer's side whole: the whole's samples up to the sums' rounding (40 dB SNR in bf16 on a GPU, where bf16 against float32 is 37.9 dB), in 275 MB instead of 5 GB for 60 s.
 
 A frame is one slow-transformer step and ten codebooks. The plain loop waited for the device about 22 times a frame: the end-of-turn check; a masked assignment zeroing the codebook embeddings of non-semantic tokens (`vq_sum[~mask] = 0` reads the mask back); the fast transformer's mask and rotary rows taken with list indices (two copies to the device per codebook); a Python boolean stored into a device tensor in the sampler, twice per draw. Each became an exact equivalent (`torch.where`, slices, `fill_`), and the decoding step's mask is made as the one all-true row it is. One wait per frame remains.
 
@@ -74,7 +74,7 @@ Codes identical to upstream's seeded `generate_long` on the CPU in fp32; the tok
 
 ## Limitations
 
-- About 22 GB of GPU memory to run the model whole; on a CPU it runs in fp32 and is slow.
+- About 10 GB of GPU memory to run the model whole (S2 Pro); on a CPU it runs in fp32 and is slow.
 - `normalize` and `repetition_penalty` have no effect (as upstream), and top-k cannot be changed.
 - Results are under the Fish Audio Research License: not for commercial use, and not for training other engines.
 

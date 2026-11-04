@@ -142,3 +142,51 @@ def test_matcha_mel_for_each_configuration():
     for name, n_fft, n_mels, sr, hop, win, fmin, fmax in MATCHA:
         x = torch.from_numpy(signal(sr, 0.5)).unsqueeze(0)
         same(mel.matcha_mel(x, n_fft, n_mels, sr, hop, win, fmin, fmax, center=False), data[f"matcha/{name}"], exact_torch(meta))
+
+
+def test_tiles_with_context_give_the_whole_of_a_convolution_stack():
+    """``context_tiled_1d`` over a causal and a centred stack of convolutions with a transposed one: with the context
+    the receptive field needs (here 4 frames before, and 4 after for the centred one), the tiles' samples are the
+    whole's to float rounding, the length exact; with too little context they are not."""
+    from mizuoto.nn.dsp.tiles import context_tiled_1d
+
+    gen = torch.Generator().manual_seed(0)
+
+    class Causal(torch.nn.Module):
+        def __init__(self) -> None:
+            super().__init__()
+            self.up = torch.nn.ConvTranspose1d(4, 3, 8, stride=4)
+            self.conv = torch.nn.Conv1d(3, 1, 9)
+
+        def forward(self, x):
+            y = torch.tanh(self.up(x)[..., : x.shape[-1] * 4])  # each sample from its frame and the one before
+            return self.conv(torch.nn.functional.pad(y, (8, 0)))  # 8 samples before: 2 frames
+
+    centred = torch.nn.Sequential(torch.nn.ConvTranspose1d(4, 3, 8, stride=4, padding=2), torch.nn.Tanh(), torch.nn.Conv1d(3, 1, 9, padding=4))
+    x = torch.randn(1, 4, 1000, generator=gen)
+    for model, after in ((Causal(), 0), (centred, 4)):
+        for p in model.parameters():
+            p.data = torch.randn(p.shape, generator=gen) * 0.3
+        with torch.no_grad():
+            whole = model(x)
+            tiled = context_tiled_1d(model, x, 4, tile=128, before=4, after=after)
+            short = context_tiled_1d(model, x, 4, tile=128, before=0, after=0)
+        assert tiled.shape == whole.shape == (1, 1, 4000)
+        assert float((tiled - whole).abs().max()) < 1e-6
+        assert float((short - whole).abs().max()) > 1e-3
+
+
+def test_a_dac_decoder_tiled_with_its_context_gives_the_whole():
+    from mizuoto.nn.codecs.dac import DacDecoder
+    from mizuoto.nn.dsp.tiles import context_tiled_1d
+    from mizuoto.runtime import ops
+
+    decoder = DacDecoder(8, 16, [4, 3, 2], odd_output_padding=True, tanh=False)
+    ops.init_random(decoder, torch.Generator().manual_seed(1), scale=0.3)
+    context = decoder.context_frames()
+    assert context == 21  # 3 + (2 + 39/4) + (2/4 + 39/12) + (2/12 + 39/24) + 3/24, rounded up
+    x = torch.randn(1, 8, 300, generator=torch.Generator().manual_seed(2))
+    with torch.no_grad():
+        whole = decoder(x)
+        tiled = context_tiled_1d(decoder, x, 24, tile=64, before=context, after=context)
+    assert tiled.shape == whole.shape and float((tiled - whole).abs().max()) < 1e-5 * float(whole.abs().max())

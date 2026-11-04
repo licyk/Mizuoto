@@ -290,8 +290,21 @@ class LoadedFishSpeech(LoadedEngine):
             with autocast:
                 return self.codec.from_indices(frames[None])[0].squeeze()
 
+        def tiled() -> torch.Tensor:
+            """The codec's causal convolution decoder (the memory) in tiles of 256 latent frames (64 codes, ~3 s), each
+            decoded after the frames its first sample depends on (20 for S2 Pro's decoder): the whole's samples up to
+            float rounding (1.6e-7 on the CPU). The quantizer's side runs whole."""
+            import math
+
+            from mizuoto.nn.dsp.tiles import context_tiled_1d
+
+            with autocast:
+                latent = self.codec.quantizer.decode(frames[None].clone())
+                decoder = self.codec.decoder
+                return context_tiled_1d(decoder, latent, math.prod(decoder.rates), tile=256, before=decoder.context_frames())[0].squeeze()
+
         with torch.inference_mode():
-            audio = ctx.run("codec", [self.h_codec], decode, self._decode_memory(frames.shape[-1] * 2048))
+            audio = ctx.run("codec", [self.h_codec], decode, self._decode_memory(frames.shape[-1] * 2048), fallback=("in tiles of 256 latent frames", tiled))
         return audio.float().cpu().numpy().reshape(-1)
 
     def synthesize(self, task: SynthesisTask, ctx: RequestContext) -> Iterator[AudioChunk]:

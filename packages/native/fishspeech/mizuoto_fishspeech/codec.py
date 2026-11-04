@@ -333,9 +333,21 @@ class Decoder(nn.Module):
             layers.append(DecoderBlock(input_dim, output_dim, stride, ops))
         layers += [Snake1d(output_dim), CausalConv(output_dim, 1, 7, ops, wn=True), nn.Tanh()]
         self.model = nn.Sequential(*layers)
+        self.rates = list(rates)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         return self.model(x)
+
+    def context_frames(self) -> int:
+        """How many input frames before it an output sample can depend on (a bound; it is causal): what a tile decoded
+        alone needs before it to give the whole's samples (``context_tiled_1d``)."""
+        field = 6.0  # the first convolution's kernel of 7
+        rate = 1
+        for stride in self.rates:
+            field += 2 / rate  # a transposed convolution of kernel 2 × stride: two input samples
+            rate *= stride
+            field += 6 * (1 + 3 + 9) / rate  # the residual units' kernels of 7, dilated 1, 3 and 9
+        return math.ceil(field + 6 / rate)
 
 
 # -- quantizer --------------------------------------------------------------------------------------------
