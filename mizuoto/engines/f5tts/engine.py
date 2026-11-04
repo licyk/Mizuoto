@@ -139,7 +139,7 @@ class LoadedF5Tts(LoadedEngine):
         from mizuoto.runtime import ops
         from mizuoto.runtime.compile import compile_module
         from mizuoto.runtime.handle import ModelHandle
-        from mizuoto.runtime.loading import load_into, load_state_dict
+        from mizuoto.runtime.loading import cast, load_into, load_state_dict
 
         folder = spec.model_dir
         assert folder is not None
@@ -172,13 +172,13 @@ class LoadedF5Tts(LoadedEngine):
         self.transformer: DiT | UNetT = backbone(**arch, text_num_embeds=len(self.vocab), mel_dim=N_MELS, ops=ops.default)
         model = nn.Module()
         model.add_module("transformer", self.transformer)
-        model.to(self.dtype)  # upstream casts before loading, so the checkpoint's fp32 values are rounded into it
         raw = load_state_dict(checkpoints[0])
         if checkpoints[0].suffix == ".pt" and "ema_model_state_dict" in raw:
             raw = raw["ema_model_state_dict"]
         state = {k.replace("ema_model.", ""): v for k, v in raw.items() if k not in ("initted", "step")}
         for key in ("mel_spec.mel_stft.mel_scale.fb", "mel_spec.mel_stft.spectrogram.window"):
             state.pop(key, None)
+        cast(model, self.dtype, state)  # upstream casts before loading, so the checkpoint's fp32 values are rounded into it
         load_into(model, state, what="F5-TTS model")
         del raw, state
         model.eval()

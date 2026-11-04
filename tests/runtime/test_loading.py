@@ -139,3 +139,75 @@ def test_strictness_is_unchanged_for_taken_keys(tmp_path):
 def test_trim_heap_runs_anywhere():
     loading.trim_heap()
     loading.trim_heap()  # the second call reuses the function looked up by the first
+
+
+class Built(torch.nn.Module):
+    """What engines build before loading: unwritten weights the checkpoint fills, values computed when built that it
+    does not hold (a rotary table, a norm's ones), a tied pair and an integer buffer."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.proj = torch.nn.Linear(16, 16)
+        self.norm = torch.nn.LayerNorm(16)
+        self.embed = torch.nn.Embedding(10, 16)
+        self.head = torch.nn.Linear(16, 10, bias=False)
+        self.head.weight = self.embed.weight
+        self.register_buffer("rope", torch.arange(32, dtype=torch.float32).div(7).sin(), persistent=False)
+        self.register_buffer("positions", torch.arange(4))
+        self.register_buffer("scale", torch.full((16,), 1 / 3))
+        self.rotary = Rotary()
+
+
+class Rotary(torch.nn.Module):
+    """Keeps its table float32 whatever the cast, by its own ``_apply`` (as ``mizuoto.runtime.lm.qwen.Rotary``)."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.register_buffer("inv_freq", torch.arange(8, dtype=torch.float32).div(3).exp(), persistent=False)
+
+    def _apply(self, fn, recurse=True):
+        super()._apply(fn, recurse)
+        if self.inv_freq.dtype != torch.float32:
+            self.inv_freq = torch.arange(8, dtype=torch.float32).div(3).exp()
+        return self
+
+
+def test_cast_before_loading_gives_what_module_to_gives():
+    g = torch.Generator().manual_seed(1)
+    sd = {
+        "proj.weight": torch.randn(16, 16, generator=g),
+        "proj.bias": torch.randn(16, generator=g),
+        "embed.weight": torch.randn(10, 16, generator=g),
+        "scale": torch.randn(16, generator=g),
+    }
+    expected, got = Built(), Built()
+    expected.to(dtype=torch.bfloat16)
+    loading.load_into(expected, sd, ignore=["norm.*", "head.weight", "positions"])
+    weight = got.proj.weight
+    assert loading.cast(got, torch.bfloat16, sd) is got
+    loading.load_into(got, sd, ignore=["norm.*", "head.weight", "positions"])
+    assert got.proj.weight is weight and weight.requires_grad and got.head.weight is got.embed.weight
+    want, have = expected.state_dict(keep_vars=True), got.state_dict(keep_vars=True)
+    assert want.keys() == have.keys()
+    for k in want:
+        assert want[k].dtype == have[k].dtype and torch.equal(want[k], have[k]), k
+    assert got.rope.dtype == torch.bfloat16 and torch.equal(got.rope, expected.rope)  # computed when built: rounded as before
+    assert got.positions.dtype == torch.int64
+    assert got.rotary.inv_freq.dtype == torch.float32 and torch.equal(got.rotary.inv_freq, expected.rotary.inv_freq)  # its _apply decides
+
+
+def test_cast_leaves_what_the_checkpoint_fills_unwritten(monkeypatch):
+    calls: list[tuple] = []
+    real = torch.Tensor.to
+
+    def spy(self, *args, **kwargs):
+        calls.append(tuple(self.shape))
+        return real(self, *args, **kwargs)
+
+    built = Built()
+    monkeypatch.setattr(torch.Tensor, "to", spy)
+    loading.cast(built, torch.bfloat16, {"proj.weight": torch.zeros(16, 16), "embed.weight": torch.zeros(10, 16), "proj.bias": torch.zeros(3)})
+    monkeypatch.undo()
+    assert (16, 16) not in calls and (10, 16) not in calls  # filled by the checkpoint: new memory, nothing copied
+    assert (16,) in calls  # proj.bias's shape differs from the checkpoint's: cast as Module.to casts it
+    assert built.proj.weight.dtype == built.embed.weight.dtype == torch.bfloat16

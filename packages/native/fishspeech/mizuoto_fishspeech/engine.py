@@ -124,7 +124,7 @@ class LoadedFishSpeech(LoadedEngine):
         from mizuoto.nn.dsp.resample import Resample
         from mizuoto.runtime import ops
         from mizuoto.runtime.handle import ModelHandle
-        from mizuoto.runtime.loading import load_into, load_state_dict, unwrap
+        from mizuoto.runtime.loading import cast, load_into, load_state_dict, unwrap
         from mizuoto.text.tokenize.bpe import load_bpe
         from mizuoto_fishspeech.codec import IGNORED, FishCodec, codec_state
         from mizuoto_fishspeech.model import DualARTransformer, ModelArgs, remap_keys
@@ -140,8 +140,9 @@ class LoadedFishSpeech(LoadedEngine):
         config.semantic_begin_id, config.semantic_end_id = begin, end
 
         ctx.progress("loading:language model", None)
-        model = DualARTransformer(config, ops.default).to(dtype=self.dtype)
+        model = DualARTransformer(config, ops.default)
         state = remap_keys(_weights(folder))
+        cast(model, self.dtype, state)  # before loading: the checkpoint is copied (or kept) straight in the run dtype
         load_into(model, state, what="Fish Speech language model")
         del state
         self.model = model.eval()
@@ -149,8 +150,12 @@ class LoadedFishSpeech(LoadedEngine):
         ctx.check_cancel()
         ctx.progress("loading:codec", None)
         codec = FishCodec(codec_config(folder), ops.default)
-        load_into(codec, codec_state(unwrap(load_state_dict(folder / "codec.pth"), "state_dict")), ignore=IGNORED, what="Fish Speech codec")
-        self.codec = codec.to(dtype=self.dtype).eval()
+        state = codec_state(unwrap(load_state_dict(folder / "codec.pth"), "state_dict"))
+        # cast before loading, without a float32 copy: the weight norm's g and v are rounded as a cast after would
+        cast(codec, self.dtype, state)
+        load_into(codec, state, ignore=IGNORED, what="Fish Speech codec")
+        del state
+        self.codec = codec.eval()
         self.resamplers: dict[int, Any] = {}
         self._resample_cls = Resample
         # the slow model runs once per frame, its fast transformer 10 times per frame; the codec encodes references and

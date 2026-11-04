@@ -165,7 +165,7 @@ class LoadedVoxCpm(LoadedEngine):
         from mizuoto.engines.voxcpm.vae import AudioVAE
         from mizuoto.runtime.compile import compile_module
         from mizuoto.runtime.handle import ModelHandle
-        from mizuoto.runtime.loading import fold_weight_norm, load_into, load_state_dict, unwrap
+        from mizuoto.runtime.loading import cast, fold_weight_norm, load_into, load_state_dict, unwrap
 
         folder = spec.model_dir
         assert folder is not None
@@ -184,8 +184,10 @@ class LoadedVoxCpm(LoadedEngine):
         lora = read_lora(folder)
         if lora is not None:  # a LoRA fine-tune: the adapters go in before the cast, as upstream builds them
             apply_lora(model, lora[0])
-        model = model.to(self.dtype)  # upstream casts before loading: the RoPE tables are rounded with it
-        load_into(model, unwrap(load_state_dict(weights), "state_dict"), ignore=["*.lora_A", "*.lora_B"] if lora else (), what="VoxCPM model")
+        state = unwrap(load_state_dict(weights), "state_dict")
+        cast(model, self.dtype, state)  # upstream casts before loading: the RoPE tables are rounded with it
+        load_into(model, state, ignore=["*.lora_A", "*.lora_B"] if lora else (), what="VoxCPM model")
+        del state
         if lora is not None:
             load_lora_weights(model, lora[1])
         self.lora = lora[0] if lora else None

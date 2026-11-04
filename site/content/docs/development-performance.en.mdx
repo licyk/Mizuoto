@@ -507,7 +507,9 @@ GPU memory is within 10 % of 0.1 or below it (CosyVoice 2 +8 %, GPT-SoVITS and I
 | VoxCPM 2 | 2.6–3.7 → 2.7–2.8 | 4,811 → 1,630 | 5,410 → 4,757 | 5,992 → 6,005 |
 | Fish S2 Pro | 10.0–17.2 → 4.4–5.4 | 3,770 → 1,546 | 10,542 → 9,071 | 10,923 → 10,877 |
 
-Warm requests, reloads (0.25–3.6 s) and GPU memory are unchanged. With the default host copies the RAM a model holds is its page-locked host copy either way (page-locking copies the file's pages). The peaks left with host copies off are the casts before loading, which write the module's memory before the checkpoint's tensors replace it (Fish S2 Pro: 9 GB). A process with nothing loaded holds 0.43 GB.
+Warm requests, reloads (0.25–3.6 s) and GPU memory are unchanged. With the default host copies the RAM a model holds is its page-locked host copy either way (page-locking copies the file's pages). The peaks left with host copies off were the casts before loading, which wrote the module's memory before the checkpoint's tensors replaced it (Fish S2 Pro: 9 GB; removed below). A process with nothing loaded holds 0.43 GB.
+
+**Casting without copying** (`loading.cast`, the next change): the casts before loading no longer write the model once in RAM. Host copies off, the peak RAM (and the RAM held, now the same) against 0.2.26: Fish S2 Pro 9,071 → 1,507 MB, VoxCPM 2 4,757 → 1,524, Qwen3-TTS 3,952 → 1,637 MB; loads fall again (Fish S2 Pro 4.4–5.4 → 2.1 s with the defaults, 1.4 s with host copies off; VoxCPM 2 2.7 → 1.7 s; Qwen3-TTS 1.9–2.4 → 1.4 s). With the defaults RAM is within 4 % of before. Outputs identical. A first version cast each parameter and buffer itself and skipped modules' own `_apply`: `Rotary`'s `inv_freq`, which its `_apply` keeps float32, was rounded to bfloat16 and Qwen3-TTS's and OmniVoice's audio changed; it now casts through `_apply`, as `Module.to` does (the five engines' tensors, loaded in bfloat16 on the CPU both ways, are identical).
 
 Found on the way:
 

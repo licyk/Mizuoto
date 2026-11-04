@@ -5,6 +5,7 @@
 - ``fold_weight_norm``: weight norm in both of torch's formats, folded into plain weights.
 - ``load_into``: strict by default. Every missing or unexpected key is an error naming the key,
   unless the engine lists it as ignorable.
+- ``cast``: ``Module.to(dtype)`` for a module about to be loaded, without copying the values the checkpoint replaces.
 
 **Weights left in the checkpoint's mapping.** Safetensors files and pickles are read memory-mapped, copy-on-write, so
 a checkpoint's tensors are pages of the file. While a model loads through the runtime for a device other than the CPU
@@ -106,6 +107,33 @@ class Placement:
                 moved += 1
         self.adopted.clear()
         return moved
+
+
+def cast(module: nn.Module, dtype: torch.dtype, sd: Mapping[str, Any]) -> nn.Module:
+    """``module.to(dtype=dtype)`` before ``sd`` is loaded into it, without copying what ``sd`` will replace.
+
+        Engines cast a model to the dtype it runs in before loading it, so the checkpoint is copied straight into that dtype
+        (the same values as loading in float32 and casting after). ``Module.to`` copies every floating-point parameter and
+        buffer, unwritten ones too, so it wrote a whole copy of the model in RAM that the checkpoint then replaced, a load's
+        peak when its weights stay in the checkpoint's file (Fish S2 Pro: 9 GB). Here a tensor whose key ``sd`` holds with
+        its shape gets new, unwritten memory of ``dtype``; every other one is cast as ``Module.to`` casts it (values computed
+        when the module was built, such as rotary tables, are rounded as before) and a module's own ``_apply`` still decides,
+    as under ``Module.to``."""
+    covered = {id(t) for key, t in [*module.named_parameters(remove_duplicate=False), *module.named_buffers(remove_duplicate=False)] if _fills(sd.get(key), t)}
+
+    def convert(t: torch.Tensor) -> torch.Tensor:  # Module.to's conversion, given each Parameter and buffer itself
+        if not (t.is_floating_point() or t.is_complex()) or t.dtype == dtype:
+            return t
+        return torch.empty_like(t, dtype=dtype) if id(t) in covered else t.to(dtype)
+
+    # through _apply, as Module.to: a module's own _apply still decides (Rotary keeps inv_freq float32, pin_to_cpu
+    # modules stay as they are)
+    module._apply(convert)
+    return module
+
+
+def _fills(src: Any, t: torch.Tensor) -> bool:
+    return isinstance(src, torch.Tensor) and src.shape == t.shape
 
 
 def trim_heap() -> None:

@@ -225,7 +225,7 @@ class LoadedOmniVoice(LoadedEngine):
         from mizuoto.engines.omnivoice.model import OmniVoiceModel
         from mizuoto.runtime import ops
         from mizuoto.runtime.handle import ModelHandle
-        from mizuoto.runtime.loading import load_into, load_state_dict
+        from mizuoto.runtime.loading import cast, load_into, load_state_dict
         from mizuoto.text.tokenize.bpe import load_bpe
 
         folder = spec.model_dir
@@ -235,10 +235,12 @@ class LoadedOmniVoice(LoadedEngine):
         config = json.loads((folder / "config.json").read_text(encoding="utf-8"))
         ctx.progress("loading:weights", None)
         model = OmniVoiceModel(config, ops.default)
-        # Cast before loading (the parameters are still unwritten): the same values as loading in float32 and casting
-        # after, without a float32 copy of the weights.
-        model.to(dtype=self.dtype)
-        load_into(model, load_state_dict(folder / "model.safetensors"), what="OmniVoice model")
+        # Cast before loading: the same values as loading in float32 and casting after, without a float32 copy of the
+        # weights (cast: nor a copy of the unwritten parameters the checkpoint replaces).
+        state = load_state_dict(folder / "model.safetensors")
+        cast(model, self.dtype, state)
+        load_into(model, state, what="OmniVoice model")
+        del state
         model.eval()
         self.model = model
 

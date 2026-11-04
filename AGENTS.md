@@ -134,7 +134,7 @@ Details: `development-runtime`, `development-memory`, `development-acceleration`
   One call at a time per (engine, device) through the job resource `engine:<engine>:<device>`.
 - **Loading runs outside inference mode**, and parameters stay as `nn.Module` makes them (no `requires_grad_(False)`):
   on the CPU, `F.linear` over a strided input takes another kernel when the weight requires grad or is an inference
-  tensor, which breaks bit-exactness. Load checkpoints with `runtime/loading.py` (`load_state_dict`, `load_into`):
+  tensor, which breaks bit-exactness. Load checkpoints with `runtime/loading.py` (`load_state_dict`, `cast` before loading, never `.to(dtype)` there, `load_into`):
   while a model loads for a GPU, weights that need no cast stay pages of the checkpoint's file (copy-on-write) instead
   of a second copy in RAM, so writing into a parameter is fine but a module must not assume it owns its parameters'
   first memory; weights the CPU computes with are always copied. Host code
