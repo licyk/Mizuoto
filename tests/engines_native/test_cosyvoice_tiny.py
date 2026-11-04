@@ -438,3 +438,60 @@ def test_a_failed_capture_falls_back_to_the_same_audio(model_dir, reference, mon
     got = run(True)
     assert "CUDA graphs failed" in caplog.text
     assert want.shape == got.shape and (want == got).all()
+
+
+def _load(model_dir, device="cpu", graphs=None, **options):
+    from mizuoto.engines.cosyvoice import CosyVoiceEngine
+    from mizuoto.runtime.runtime import RuntimeOptions
+
+    devices = DeviceService()
+    runtime = Runtime(devices, ModelManager(devices), RuntimeOptions(cuda_graphs=graphs)) if graphs is not None else Runtime(devices, ModelManager(devices))
+    variant = CosyVoiceEngine().detect_variant(model_dir) or ""
+    return CosyVoiceEngine().load(LoadSpec("cosyvoice/tiny", model_dir, variant, device, options=options), runtime, RequestContext("load"))
+
+
+def test_fused_projections_speak_stream_and_say_so(model_dir, loaded, reference, monkeypatch):
+    """Fast mode (load option fused_projections, CosyVoice 2 and 3): the Qwen2 decoder's q/k/v and gate/up as one
+    product each; placed and streamed, the same audio."""
+    from tests.engines_native.streaming import check_streamed
+
+    fused = _load(model_dir, fused_projections=True)
+    layer = fused.llm.llm.model.model.layers[0]
+    assert layer.self_attn.qkv_proj is not None and layer.mlp.gate_up_proj is not None
+    clip = VoiceSpec(references=[Reference(audio_path=str(reference), transcript="a reference")])
+    chunks, ctx = speak(fused, clip)
+    assert joined(chunks).size and ctx.applied["fused_projections"] is True
+    assert "fused_projections" not in speak(loaded, clip)[1].applied
+
+    def run(manager):
+        ctx = RequestContext("r", seed=3)
+        ctx.manager = manager
+        return joined(speak(fused, clip, ctx=ctx)[0])
+
+    assert check_streamed(fused, run, monkeypatch)[0] > 0
+
+
+def test_cosyvoice_1_has_no_fused_projections(reference, tmp_path):
+    from tests.engines_native.test_cosyvoice_train_tiny import _tiny
+
+    (tmp_path / "v1").mkdir()
+    model = _load(_tiny(tmp_path / "v1", 1), fused_projections=True)
+    assert model.fused_projections is False
+    clip = VoiceSpec(references=[Reference(audio_path=str(reference), transcript="a reference")])
+    assert "fused_projections" not in speak(model, clip)[1].applied
+
+
+@pytest.mark.skipif(not torch.cuda.is_available() or torch.version.hip is not None, reason="CUDA graphs need an NVIDIA GPU")
+def test_fused_projections_with_cuda_graphs_decode_as_their_eager_path_on_a_gpu(model_dir, reference):
+    clip = VoiceSpec(references=[Reference(audio_path=str(reference), transcript="a reference")])
+
+    def run(graphs: bool):
+        model = _load(model_dir, "cuda", graphs, fused_projections=True)
+        for h in model.handles:
+            h.load()
+        chunks, ctx = speak(model, clip, ctx=RequestContext("r", seed=3, device="cuda"))
+        return joined(chunks), ctx.applied
+
+    (eager, _), (graphed, applied) = run(False), run(True)
+    assert applied["fused_projections"] and applied["cuda_graphs"]
+    assert eager.shape == graphed.shape and (eager == graphed).all()

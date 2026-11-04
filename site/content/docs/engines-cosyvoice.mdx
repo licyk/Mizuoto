@@ -18,7 +18,7 @@ icon: Radio
 
 变体由目录中的 yaml 决定（`cosyvoice.yaml`、`cosyvoice2.yaml`、`cosyvoice3.yaml`）；带 `spk2info.pt` 的 CosyVoice 1 目录是 SFT 或 Instruct。目录中有 yaml、`llm.pt`、`flow.pt`、`hift.pt`、`campplus.onnx`、`speech_tokenizer_v1.onnx` / `v2` / `v3`、`spk2info.pt`，v2/v3 还有 `CosyVoice-BlankEN` 的配置和分词器（不含其权重，`llm.pt` 会替换它们）。共享资源 `cosyvoice/wetext` 存放文本规范化用的 FST。ONNX 模型只转换一次，缓存为 `<model>/.mizuoto/converted-<key>.safetensors`（ONNX 文件旁的 `<name>.safetensors` 优先）。
 
-能力：预置说话人、指令、克隆与跨语种克隆、音色转换、流式输出，v2/v3 还有流式文本输入。精度：fp32；加载选项 `fp16` 让语言模型和 flow 在 CUDA autocast 下运行，与上游的 `fp16` 相同。
+能力：预置说话人、指令、克隆与跨语种克隆、音色转换、流式输出，v2/v3 还有流式文本输入。精度：fp32；加载选项 `fp16` 让语言模型和 flow 在 CUDA autocast 下运行，与上游的 `fp16` 相同。快速模式（加载选项 `fused_projections`，CosyVoice 2 和 3）：Qwen2 语言模型的 q/k/v 与 gate/up 投影各合并为一次乘法（`QwenDecoder.fuse`，与 Qwen3-TTS 的相同），输出中会注明；在 CPU 上结果相同，在 RTX 3060 上用 fp32 时相同且快 1.1%，用 `fp16` 时快 2.4–3.6%，音频会改变。
 
 ## 工作原理
 

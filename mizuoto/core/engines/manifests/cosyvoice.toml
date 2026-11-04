@@ -115,6 +115,12 @@ type = "bool"
 default = false
 help = "Half precision on the GPU: faster, slightly different."
 
+[load_options.fused_projections]
+type = "bool"
+default = false
+variants = ["v2", "v3"]
+help = "Fast mode (CosyVoice 2 and 3): each layer's q/k/v and gate/up projections in the language model as one product each (as Qwen3-TTS's). 1–4 % faster on a GPU (most with fp16); the audio may no longer be identical to the original implementation's (the same model, slightly different rounding); outputs list it. Applies when the model next loads."
+
 [[assets]]
 id = "cosyvoice/wetext"
 title = "Text normalisation grammars"

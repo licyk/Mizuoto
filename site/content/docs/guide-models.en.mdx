@@ -59,7 +59,7 @@ When an engine has load options, its card has **Options**:
 
 | Engine | Options |
 | --- | --- |
-| CosyVoice | `fp16`: half precision on the GPU, faster and slightly different |
+| CosyVoice | `fp16`: half precision on the GPU, faster and slightly different; `fused_projections` (2 and 3): a fast mode, 1–4 % faster on a GPU, maybe no longer bit-identical |
 | IndexTTS 2 / 2.5 | `use_qwen_emo` (the emotion model for described emotions, about 1.2 GB), `use_torch_compile` |
 | F5-TTS | `ode_method` (`euler` or `midpoint`) |
 | Qwen3-TTS | `fused_projections`: a fast mode, a few percent faster on a GPU, no longer bit-identical |

@@ -18,7 +18,7 @@ Every engine gives its upstream's output sample for sample on the CPU (see [Engi
 | `fast`, a fused SDPA kernel, FlashAttention, xFormers, SageAttention | `compute.attention`, `engines.<id>.attention`, `training.attention` | different (fp16/bf16 kernels; SageAttention quantises) |
 | Process-wide GPU switches | `compute.fast` (none) | different |
 | `torch.compile` | `compute.compile` (off) | slightly different on most engines (below) |
-| Qwen3-TTS's fused projections | load option `fused_projections` (off) | identical on the CPU in the parity cases; different on CUDA |
+| Fused projections (Qwen3-TTS, CosyVoice 2/3) | load option `fused_projections` (off) | identical on the CPU in the parity cases; different on CUDA (CosyVoice in fp32: identical on an RTX 3060) |
 | VoxCPM's attention span | load option `attention_span` (off) | identical on the CPU; on CUDA another take of the request ([VoxCPM](/docs/engines-voxcpm#memory-and-speed)) |
 | OmniVoice's packed guidance | request option `packed_guidance` (off) | identical on the CPU in the parity cases; on CUDA another take of the request ([OmniVoice](/docs/engines-omnivoice#memory-and-speed)) |
 | Static KV cache | `compute.kv_cache = static` | identical on the CPU; see [Memory](/docs/development-memory#static-kv-cache-and-the-cuda-allocator) |
@@ -227,7 +227,7 @@ The waits were removed with exact equivalents of upstream's idioms (masked assig
 - Suppression and EOS masks are built once per device; `repetition_penalty_seen` applies the penalty over a mask of the drawn ids, so shapes do not grow.
 - The shared Qwen decoder, without autograd, norms and rotates q and k together on the CPU (on a GPU apart, as transformers does, unless the projections are fused: CUDA sizes a reduction by its tensor, so the joined norm differed in the last bit now and then) and uses `F.rms_norm` where a self-test on the device shows the same bits as the float32-upcast norm (`_fused_norm_exact`: one kernel instead of eight on CUDA in bf16/fp16 with recent torch). `mask_for(padded=…)` skips its device check when the caller knows there is no padding.
 
-**Fused projections** (`engines.qwen3tts.load_options.fused_projections`, off) stack each layer's q/k/v and gate/up weights into one linear layer each at load (`QwenDecoder.fuse`; real `ops.Linear`s, so they still stream). Inference only. cuBLAS picks other kernels for the wider matrices, so the bits differ on CUDA; outputs list `fused_projections`.
+**Fused projections** (`engines.qwen3tts.load_options.fused_projections`, off) stack each layer's q/k/v and gate/up weights into one linear layer each at load (`QwenDecoder.fuse`; real `ops.Linear`s, so they still stream). Inference only. cuBLAS picks other kernels for the wider matrices, so the bits differ on CUDA; outputs list `fused_projections`. CosyVoice 2 and 3 offer the same for their Qwen2 language model (`engines.cosyvoice.load_options.fused_projections`): 1.1 % faster a request in fp32 on an RTX 3060, where the audio stayed identical, 2.4–3.6 % with `fp16`, where it changes. OmniVoice's decoder was fused too and gained nothing (it runs over the whole sequence every step: large products the fusion does not speed up), so it is not offered ([Performance](/docs/development-performance#fused-projections-for-cosyvoice-and-omnivoice-g11)).
 
 ## CPU settings
 

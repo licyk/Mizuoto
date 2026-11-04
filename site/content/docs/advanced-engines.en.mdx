@@ -106,7 +106,7 @@ Alibaba Tongyi's LLM + flow-matching TTS. Best for: low-latency token-level stre
 - **Streaming**: v2/v3 stream token by token; streamed text input needs the reference clip's transcript (zero-shot cloning or instruct2).
 - **Training** (GPU or CPU): **Fine-tune the language model** (`llm`) and **Fine-tune the LLM and the flow** (`llm_flow`), from v1_base, v2 or v3, following upstream's LibriTTS recipe; at least 60 s of data; exported as a new model. The LLM alone makes prosody and pronunciation follow the dataset; with the flow the timbre follows too.
 - **Shared files**: `cosyvoice/wetext` (13 MB, the text normalisation grammars that write out numbers, dates and units), downloaded with the first model.
-- **Load option**: `fp16` (half precision on the GPU: faster, slightly different).
+- **Load options**: `fp16` (half precision on the GPU: faster, slightly different); `fused_projections` (CosyVoice 2 and 3, off): a fast mode, the language model's q/k/v and gate/up projections one product each, 1–4 % faster on a GPU, where the audio may then no longer be bit-identical (outputs list `fused_projections`).
 
 ## F5-TTS
 

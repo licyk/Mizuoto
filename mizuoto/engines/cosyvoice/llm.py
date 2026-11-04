@@ -162,6 +162,10 @@ class QwenLM(nn.Module):
     def ignorable() -> list[str]:
         return ["llm.model.lm_head.weight"]
 
+    def fuse(self) -> None:
+        """The Qwen2 decoder's q/k/v and gate/up projections as one product each (``QwenDecoder.fuse``; fast mode)."""
+        self.llm.model.model.fuse()
+
     def _special(self, index: int) -> torch.Tensor:
         table = self.speech_embedding if self.version == 3 else self.llm_embedding
         return table.weight[index].reshape(1, 1, -1)

@@ -18,7 +18,7 @@ icon: Zap
 | `fast`、SDPA 的某个融合内核、FlashAttention、xFormers、SageAttention | `compute.attention`、`engines.<id>.attention`、`training.attention` | 不同（fp16/bf16 内核；SageAttention 会量化） |
 | 进程级 GPU 开关 | `compute.fast`（无） | 不同 |
 | `torch.compile` | `compute.compile`（关） | 多数引擎略有不同（见下文） |
-| Qwen3-TTS 的合并投影 | 加载选项 `fused_projections`（关） | 在 CPU 上的一致性用例中相同；在 CUDA 上不同 |
+| 合并投影（Qwen3-TTS、CosyVoice 2/3） | 加载选项 `fused_projections`（关） | 在 CPU 上的一致性用例中相同；在 CUDA 上不同（CosyVoice 用 fp32 时：在 RTX 3060 上相同） |
 | VoxCPM 的注意力范围 | 加载选项 `attention_span`（关） | 在 CPU 上相同；在 CUDA 上是同一请求的另一次生成（[VoxCPM](/docs/engines-voxcpm#显存与速度)） |
 | OmniVoice 的合并引导 | 请求选项 `packed_guidance`（关） | 在 CPU 上的一致性用例中相同；在 CUDA 上是同一请求的另一次生成（[OmniVoice](/docs/engines-omnivoice#显存与速度)） |
 | 静态 KV 缓存 | `compute.kv_cache = static` | 在 CPU 上相同；见[显存与内存](/docs/development-memory#静态-kv-缓存与-cuda-分配器) |
@@ -227,7 +227,7 @@ GPU 上的自回归模型每一步要启动几千个小内核（Qwen3-TTS：每 
 - 屏蔽掩码和 EOS 掩码每个设备只构造一次；`repetition_penalty_seen` 在已抽取 id 的掩码上施加惩罚，形状不再增长。
 - 共用的 Qwen 解码器在不需要 autograd 时，在 CPU 上把 q 和 k 一起归一化、一起旋转（在 GPU 上与 transformers 一样分开进行，除非投影已融合：CUDA 按张量大小安排归约，拼接后的归一化偶尔在最后一位不同），并在设备上的自检表明与 float32 上转的归一化逐位相同时使用 `F.rms_norm`（`_fused_norm_exact`：在较新 torch 的 CUDA 上以 bf16/fp16 计算时，一个内核代替八个）。调用方知道没有填充时，`mask_for(padded=…)` 跳过它的设备检查。
 
-**合并投影**（`engines.qwen3tts.load_options.fused_projections`，关）在加载时把每层的 q/k/v 以及 gate/up 权重分别堆叠成一个线性层（`QwenDecoder.fuse`；是真正的 `ops.Linear`，仍可流式加载）。仅用于推理。cuBLAS 对更宽的矩阵会选用别的内核，所以在 CUDA 上结果不逐位相同；输出会列出 `fused_projections`。
+**合并投影**（`engines.qwen3tts.load_options.fused_projections`，关）在加载时把每层的 q/k/v 以及 gate/up 权重分别堆叠成一个线性层（`QwenDecoder.fuse`；是真正的 `ops.Linear`，仍可流式加载）。仅用于推理。cuBLAS 对更宽的矩阵会选用别的内核，所以在 CUDA 上结果不逐位相同；输出会列出 `fused_projections`。CosyVoice 2 和 3 为它们的 Qwen2 语言模型提供同样的选项（`engines.cosyvoice.load_options.fused_projections`）：在 RTX 3060 上用 fp32 时每个请求快 1.1%，音频保持一致；用 `fp16` 时快 2.4–3.6%，音频会改变。OmniVoice 的解码器也试过合并，没有任何收益（它每一步都在整个序列上运行：大的乘法，合并不能加速），所以不提供（[性能](/docs/development-performance#cosyvoice-和-omnivoice-的合并投影g11)）。
 
 ## CPU 设置
 

@@ -518,6 +518,20 @@ Found on the way:
 - **torch imported before the CPU settings.** A first version imported `runtime/loading.py` (torch) in `LocalEngine.load` before the runtime applied `compute.cpu_allocator` and thread placement: every CPU operator ran 40 % slower (F5-TTS 42.8 → 60 s, attention included). A test now loads a model in a fresh process and checks the order.
 - **Alignment.** float32 `F.linear` on one row gives other last bits for a weight 8 bytes off a 16-byte boundary on this CPU (bf16, fp16 and two rows or more: identical at every offset).
 
+## Fused projections for CosyVoice and OmniVoice (G11)
+
+2026-11-04, RTX 3060 (torch 2.8 + CUDA 12.8), G1's long cases (about 30 s of speech), warm requests (two per process), two rounds each way, alternated. `QwenDecoder.fuse` (each layer's q/k/v and gate/up as one product, as Qwen3-TTS's `fused_projections`) on the language model:
+
+| Model | Exact | Fused | Audio |
+| --- | --- | --- | --- |
+| CosyVoice 2, fp32 (default) | 10.42–10.45 s | 10.31–10.32 s (−1.1 %) | identical |
+| CosyVoice 3, fp32 | 12.17–12.19 s | 12.04–12.06 s (−1.1 %) | identical |
+| CosyVoice 2, `fp16` | 19.76–19.85 s | 19.29–19.33 s (−2.4 %) | different |
+| CosyVoice 3, `fp16` | 15.49–15.52 s | 14.93–14.96 s (−3.6 %) | different |
+| OmniVoice (bf16) | 6.59–6.63 s | 6.63–6.67 s (+0.6 %) | different |
+
+CosyVoice 2 and 3 offer it (`engines.cosyvoice.load_options.fused_projections`, off; identical on the CPU for both parity cases). OmniVoice's decoder runs over the whole sequence at every step, products large enough that fusing three into one saves nothing: not offered. Under `fp16` CosyVoice 2 was slower than in fp32 here (19.8 against 10.4 s), and in each process the first request's audio differed from the next ones' (the same in every process): both recorded in the backlog.
+
 ## Memory estimates calibrated
 
 Measured on the RTX 3090s (2026-10-18), the harness now recording each phase's worst single call (work against its own estimate; a phase's largest work and largest estimate can come from different calls, such as a reference's encoding and a decoding).

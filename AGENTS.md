@@ -159,7 +159,7 @@ Details: `development-runtime`, `development-memory`, `development-acceleration`
   graphs copy its weights; only Qwen3-TTS, where it was measured faster) and dropped when its weights move. Capture and replay them under
   `torch.cuda.device(graphs.device)` (a replay runs on the current device's stream: a model on `cuda:1` faults
   otherwise); none are captured under cudaMallocAsync (`graphs.usable`). Opt-ins that change bits are labelled in
-  the output: `compute.compile`, non-`auto` attention backends, Qwen3-TTS's `fused_projections`, OmniVoice's
+  the output: `compute.compile`, non-`auto` attention backends, `fused_projections` (Qwen3-TTS, CosyVoice 2/3), OmniVoice's
   `packed_guidance`, VoxCPM's `attention_span`, `compute.fast`.
 - Devices: `cpu`, `cuda:N` (NVIDIA, and AMD under ROCm), `xpu:N`, `mps`. The host probes them without importing
   torch. CosyVoice 3's float64 F0 predictor stays on the CPU where the device lacks float64 (MPS, Intel Arc).

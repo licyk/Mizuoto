@@ -168,6 +168,11 @@ class LoadedCosyVoice(LoadedEngine):
         llm_cfg = config["llm"]
         self.llm: Any = TransformerLM(llm_cfg, ops.default) if v == 1 else QwenLM(v, folder / "CosyVoice-BlankEN", int(llm_cfg.get("speech_token_size", 6561)), ops.default)
         load_into(self.llm, checkpoint("llm.pt"), ignore=self.llm.ignorable(), what="CosyVoice language model")
+        # Fast mode (load option fused_projections, CosyVoice 2 and 3's Qwen2): each layer's q/k/v and gate/up as one
+        # product each; not bit-identical on a GPU, where the wider products take other kernels.
+        self.fused_projections = v > 1 and bool(spec.options.get("fused_projections"))
+        if self.fused_projections:
+            self.llm.fuse()
         self.llm.eval()
 
         ctx.check_cancel()
@@ -309,11 +314,15 @@ class LoadedCosyVoice(LoadedEngine):
 
         positions = 300 + 21 * max(text_tokens, 1)
         lm = self.llm.llm
-        keys = [m for n, m in lm.named_modules() if n.endswith(("k_proj", "linear_k"))]
         element = next(lm.parameters()).element_size()
-        width, hidden = int(keys[0].out_features), int(keys[0].in_features)
+        if self.version > 1:  # the Qwen2 decoder's own sizes (fused projections have no k_proj)
+            c = lm.model.model.config
+            width, hidden, layers = c.num_kv_heads * c.head_dim, c.hidden_size, c.num_layers
+        else:
+            keys = [m for n, m in lm.named_modules() if n.endswith("linear_k")]
+            width, hidden, layers = int(keys[0].out_features), int(keys[0].in_features), len(keys)
         repeated = 2 * hidden * positions * element
-        return peak_bytes(2 * width * element, len(keys), positions, getattr(lm, "kv_cache", "dynamic")) + repeated + 512 * 2**20
+        return peak_bytes(2 * width * element, layers, positions, getattr(lm, "kv_cache", "dynamic")) + repeated + 512 * 2**20
 
     def _flow_memory(self, tokens: int) -> int:
         """The flow's activations for ``tokens`` speech tokens (conditional and unconditional together) and HiFT's."""
@@ -678,6 +687,8 @@ class LoadedCosyVoice(LoadedEngine):
         normalize = task.params.get("text_normalization")
         normalize = True if normalize is None else bool(normalize)
         ctx.applied.update({"speed": speed, "text_frontend": normalize, "stream": stream})
+        if self.fused_projections:
+            ctx.applied["fused_projections"] = True
         if task.style.instruct:
             ctx.applied["instruct"] = task.style.instruct
         voice = task.voice
