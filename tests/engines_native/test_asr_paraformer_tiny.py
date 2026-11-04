@@ -150,7 +150,10 @@ def _mvn(path: Path, dim: int, seed: int) -> None:
     g = np.random.default_rng(seed)
     shift = " ".join(f"{v:.6f}" for v in -8 - g.random(dim))
     scale = " ".join(f"{v:.6f}" for v in 0.2 + 0.1 * g.random(dim))
-    path.write_text(f"<Nnet>\n<Splice> {dim} {dim}\n[ 0 ]\n<AddShift> {dim} {dim}\n<LearnRateCoef> 0 [ {shift} ]\n<Rescale> {dim} {dim}\n<LearnRateCoef> 0 [ {scale} ]\n</Nnet>\n")
+    path.write_text(
+        f"<Nnet>\n<Splice> {dim} {dim}\n[ 0 ]\n<AddShift> {dim} {dim}\n<LearnRateCoef> 0 [ {shift} ]\n<Rescale> {dim} {dim}\n<LearnRateCoef> 0 [ {scale} ]\n</Nnet>\n",
+        encoding="utf-8",
+    )
 
 
 @pytest.fixture(scope="module")
@@ -163,13 +166,13 @@ def model_dir(tmp_path_factory) -> Path:
     (root / "vad").mkdir()
     (root / "punc").mkdir()
     tokens = ["<blank>", "<s>", "</s>", *WORDS, *HAN, "<unk>"]
-    (root / "tokens.json").write_text(json.dumps(tokens, ensure_ascii=False))
-    (root / "config.yaml").write_text(ASR_CONFIG)
+    (root / "tokens.json").write_text(json.dumps(tokens, ensure_ascii=False), encoding="utf-8")
+    (root / "config.yaml").write_text(ASR_CONFIG, encoding="utf-8")
     _mvn(root / "am.mvn", 560, 1)
     asr = ops.init_random(Paraformer(load_config(root), len(tokens)), torch.Generator().manual_seed(1), scale=0.2)
     torch.save(asr.state_dict(), root / "model.pt")
 
-    (root / "vad" / "config.yaml").write_text(VAD_CONFIG)
+    (root / "vad" / "config.yaml").write_text(VAD_CONFIG, encoding="utf-8")
     _mvn(root / "vad" / "am.mvn", 400, 2)
     detector = vad.Vad(load_config(root / "vad"))
     ops.init_random(detector, torch.Generator().manual_seed(2))
@@ -177,8 +180,8 @@ def model_dir(tmp_path_factory) -> Path:
         detector.encoder.out_linear2.linear.bias[0] = -10.0
     torch.save(detector.state_dict(), root / "vad" / "model.pt")
 
-    (root / "punc" / "config.yaml").write_text(PUNC_CONFIG)
-    (root / "punc" / "tokens.json").write_text(json.dumps(["<blank>", "<s>", "</s>", *WORDS, *HAN, "<unk>"], ensure_ascii=False))
+    (root / "punc" / "config.yaml").write_text(PUNC_CONFIG, encoding="utf-8")
+    (root / "punc" / "tokens.json").write_text(json.dumps(["<blank>", "<s>", "</s>", *WORDS, *HAN, "<unk>"], ensure_ascii=False), encoding="utf-8")
     model, _ = punc.build(root / "punc")
     ops.init_random(model, torch.Generator().manual_seed(3), scale=0.5)
     torch.save(model.state_dict(), root / "punc" / "model.pt")
