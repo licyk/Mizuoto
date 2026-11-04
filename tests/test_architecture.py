@@ -285,6 +285,28 @@ def test_engine_contract_import_is_light() -> None:
     assert _loaded(code) == "False"
 
 
+def test_loading_a_model_applies_the_cpu_settings_before_torch_is_imported() -> None:
+    """OpenMP and torch read the allocator and thread placement (``core/compute/cpu.py``) when torch is imported: a
+    load that imported torch first ran every CPU operator 40 % slower (unbound threads)."""
+    code = """
+import sys, tempfile
+from pathlib import Path
+from mizuoto.core.compute import cpu
+seen = []
+real = cpu.apply
+def apply(*args, **kwargs):
+    seen.append("torch" in sys.modules)
+    return real(*args, **kwargs)
+cpu.apply = apply
+from mizuoto.core.context import build_services
+from mizuoto.core.inference.engine import ModelRef
+s = build_services(data_dir=Path(tempfile.mkdtemp()), environ={})
+s.runtime.loaded(ModelRef("dummy/default", "dummy", "default"), "cpu")
+print(seen)
+"""
+    assert _loaded(code).splitlines()[-1] == "[False]"
+
+
 def test_cli_import_is_light() -> None:
     assert _loaded("import sys, mizuoto.cli.app; print('torch' in sys.modules, 'fastapi' in sys.modules)") == "False False"
 

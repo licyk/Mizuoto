@@ -492,6 +492,30 @@ First audio is never later than 0.1's; where 0.1 returned whole clips (Qwen3-TTS
 
 GPU memory is within 10 % of 0.1 or below it (CosyVoice 2 +8 %, GPT-SoVITS and IndexTTS a quarter less). RAM is higher where 0.1 loaded straight onto the GPU (transformers' `device_map`, Qwen3-TTS): Mizuoto builds every model in RAM for the model manager to place, and by default keeps it there as a host copy, so offloading costs no transfer ([memory](/docs/development-memory#host-copies-and-ram)); without host copies the peak is that staging. 0.1's optional accelerators (vLLM, TensorRT) are installed in none of its environments here and were not compared.
 
+## Loading without a RAM copy (G10)
+
+2026-11-04, weights left in the checkpoint's file while a model loads for a GPU ([memory](/docs/development-memory#host-copies-and-ram)). One model per process, one case per engine, every load from a warm page cache; RAM sampled every 0.1 s (anonymous memory, the process's own; file-backed pages are page cache), reload = a run after moving the model to RAM against a warm run. GPU: RTX 3060 12 GB (31 GB RAM, torch 2.8 + CUDA 12.8), two rounds before and three after; CPU: Ryzen 9 5900X, 12 threads. Every output is identical to before's.
+
+| Model | Load s, before → after | RAM held once loaded, host copies off, MB | Peak RAM, host copies off, MB | RAM held, defaults, MB |
+| --- | --- | --- | --- | --- |
+| Qwen3-TTS 1.7B | 2.4–5.0 → 1.9–2.4 | 3,732 → 1,462 | 4,284 → 3,952 | 5,225 → 5,349 |
+| F5-TTS | 1.2 → 1.2 | 1,470 → 1,454 | 1,478 → 1,454 | 1,929 → 1,974 |
+| OmniVoice | 1.7–1.9 → 1.6–1.8 | 2,068 → 1,897 | 2,364 → 2,023 | 3,134 → 3,138 |
+| CosyVoice 2 | 3.4–5.8 → 3.9–4.3 | 2,917 → 2,804 | 3,424 → 3,302 | 4,156 → 4,162 |
+| GPT-SoVITS v2 | 1.6–1.7 → 1.7 | 3,463 → 3,413 | 3,504 → 3,453 | 3,785 → 3,688 |
+| IndexTTS 2 | 6.2–11.5 → 4.3–4.8 | 6,912 → 2,939 | 8,669 → 3,633 | 8,500 → 8,300 |
+| VoxCPM 2 | 2.6–3.7 → 2.7–2.8 | 4,811 → 1,630 | 5,410 → 4,757 | 5,992 → 6,005 |
+| Fish S2 Pro | 10.0–17.2 → 4.4–5.4 | 3,770 → 1,546 | 10,542 → 9,071 | 10,923 → 10,877 |
+
+Warm requests, reloads (0.25–3.6 s) and GPU memory are unchanged. With the default host copies the RAM a model holds is its page-locked host copy either way (page-locking copies the file's pages). The peaks left with host copies off are the casts before loading, which write the module's memory before the checkpoint's tensors replace it (Fish S2 Pro: 9 GB). A process with nothing loaded holds 0.43 GB.
+
+Found on the way:
+
+- **glibc kept the freed memory.** Without `trim_heap` the cast's freed allocations (each under glibc's 32 MB mmap threshold) stayed resident: with host copies kept, Qwen3-TTS held 7.2 GB instead of 5.2, VoxCPM 2 9.0 instead of 6.0. Before this change, with host copies off, the same retention held 2–3 GB.
+- **CPU weights left in the file were slower.** IndexTTS 2 on the CPU, its 64-byte-aligned pickles left in the file, decoded in 48.8–49.1 s against 43.0–43.3 back to back (identical audio); a large matrix product over the same file pages was not slower. Weights the CPU computes with are now always copied.
+- **torch imported before the CPU settings.** A first version imported `runtime/loading.py` (torch) in `LocalEngine.load` before the runtime applied `compute.cpu_allocator` and thread placement: every CPU operator ran 40 % slower (F5-TTS 42.8 → 60 s, attention included). A test now loads a model in a fresh process and checks the order.
+- **Alignment.** float32 `F.linear` on one row gives other last bits for a weight 8 bytes off a 16-byte boundary on this CPU (bf16, fp16 and two rows or more: identical at every offset).
+
 ## Memory estimates calibrated
 
 Measured on the RTX 3090s (2026-10-18), the harness now recording each phase's worst single call (work against its own estimate; a phase's largest work and largest estimate can come from different calls, such as a reference's encoding and a decoding).

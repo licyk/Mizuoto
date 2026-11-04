@@ -175,12 +175,18 @@ class LocalEngine:
             self.make_room(model_id)
         merged = {**(options or {}), **(self.model_options(model_id) if self.model_options is not None else {})}
         spec = LoadSpec(model_id, Path(model_dir) if model_dir else None, variant, self.device, dtype, merged)
-        runtime = self._inference.runtime
+        runtime = self._inference.runtime  # applies the CPU settings, which must precede torch's import
+        from mizuoto.runtime.loading import placing, trim_heap
+
         impl = self._impl
         assert impl is not None
         # Outside inference mode: see the module's docstring.
-        with self._request(request or EngineRequest(), None, model_id) as ctx, ctx.bind():
+        with self._request(request or EngineRequest(), None, model_id) as ctx, ctx.bind(), placing(self.device) as placement:
             engine = impl.load(spec, runtime, ctx)
+            # Weights left unaligned in their checkpoint's mapping compute on the device's copies; any no handle there
+            # holds would compute on the CPU, so they are copied aligned now (mizuoto.runtime.loading).
+            placement.settle(engine.handles)
+            trim_heap()  # the module allocations the checkpoint's tensors replaced, which glibc would keep
             runtime.manager.register(self._owner(model_id), engine.handles, mode=self.vram_mode(), pinned=self.pinned(model_id))
             loaded = _Loaded(engine, asdict(engine.describe()))
         loaded.attention, strict = self.attention()

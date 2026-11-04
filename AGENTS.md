@@ -134,7 +134,12 @@ Details: `development-runtime`, `development-memory`, `development-acceleration`
   One call at a time per (engine, device) through the job resource `engine:<engine>:<device>`.
 - **Loading runs outside inference mode**, and parameters stay as `nn.Module` makes them (no `requires_grad_(False)`):
   on the CPU, `F.linear` over a strided input takes another kernel when the weight requires grad or is an inference
-  tensor, which breaks bit-exactness.
+  tensor, which breaks bit-exactness. Load checkpoints with `runtime/loading.py` (`load_state_dict`, `load_into`):
+  while a model loads for a GPU, weights that need no cast stay pages of the checkpoint's file (copy-on-write) instead
+  of a second copy in RAM, so writing into a parameter is fine but a module must not assume it owns its parameters'
+  first memory; weights the CPU computes with are always copied. Host code
+  imports torch only after `InferenceService.runtime` has applied the CPU settings (`core/compute/cpu.py`: OpenMP
+  binds its threads when torch loads; a load that imported torch first ran every CPU operator 40 % slower).
 - **Memory** (ComfyUI-style): engines place components per phase (`ctx.use` / `ctx.run`) with a working-memory
   estimate sized by the request (not its worst case); the manager loads whole when free memory covers missing weights
   + working memory + `compute.vram_reserve_mb`, else other components give up memory and the request's own load
@@ -181,7 +186,9 @@ Details: `development-runtime`, `development-memory`, `development-acceleration`
   Snake runs eagerly. Do not add more. A scripted function also applies autocast its own way: under autocast
   upstream's TorchScript Snake computes in float32 throughout, where the same code run eagerly keeps the low precision,
   so Fish Speech's eager Snake does what the script does (compare a port with the script, fuser off).
-- Compare CPU runs with the same thread count: CPU kernels split their sums by it.
+- Compare CPU runs with the same thread count: CPU kernels split their sums by it. They can also depend on alignment
+  (float32 `F.linear` on one row gives other bits for a weight 8 bytes off a 16-byte boundary): a weight computing on
+  the CPU must be 64-byte aligned, as torch allocates; `load_into` copies them (`development-memory`).
 
 ## 6. Feature areas: where to look
 
