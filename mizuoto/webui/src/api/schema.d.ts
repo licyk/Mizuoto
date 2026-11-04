@@ -5259,6 +5259,11 @@ export interface components {
              */
             asr_model: string;
             /**
+             * Asr Model Zh
+             * @default
+             */
+            asr_model_zh: string;
+            /**
              * Asr Beams
              * @default 5
              */

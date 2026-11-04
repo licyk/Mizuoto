@@ -276,3 +276,17 @@ def test_voice_weights(services, tmp_path):
     pth = tmp_path / "x.pth"
     pth.write_bytes(b"05" + b"\0" * 100)
     assert sovits_version(pth) == "v2Pro"
+
+
+def test_chinese_clips_go_to_the_chinese_recogniser_once_it_is_downloaded(services, monkeypatch):
+    """``tts.asr_model_zh``: the recogniser for clips whose language is Chinese, when set and downloaded; every other
+    language, and Chinese while it is missing, keep ``tts.asr_model``."""
+    asr = services.asr
+    whisper = asr.default_model()
+    assert asr.model_for("zh") == whisper  # not set
+    services.settings.update({"tts": {"asr_model_zh": "asr/paraformer-zh"}})
+    assert asr.model_for("zh") == whisper  # not downloaded
+    real = asr.unavailable_reason
+    monkeypatch.setattr(asr, "unavailable_reason", lambda model=None: None if model == "asr/paraformer-zh" else real(model))
+    assert asr.model_for("zh") == asr.model_for("cmn") == "asr/paraformer-zh"
+    assert asr.model_for("en") == asr.model_for(None) == asr.model_for("auto") == whisper

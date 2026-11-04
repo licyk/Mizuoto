@@ -205,6 +205,7 @@ See [Model downloads and mirrors](/docs/advanced-downloads).
 | `tts.normalize` | `peak` | Levelling: `none`, `peak` or `loudness` | **Speech** › **Levelling** |
 | `tts.auto_transcribe` | `true` | Transcribe a reference clip without a transcript (needs the speech recognition model `tts.asr_model` downloaded) | **Speech** › **Transcribe reference clips without a transcript** |
 | `tts.asr_model` | `asr/whisper-large-v3-turbo` | The speech recognition model | **Speech** › **Speech recognition model** |
+| `tts.asr_model_zh` | empty | The recogniser for clips whose language is Chinese, used once it is downloaded (`asr/paraformer-zh`: Paraformer with punctuation, as GPT-SoVITS transcribes Chinese); empty: `tts.asr_model` for every language | **Speech** › **Speech recognition for Chinese clips** |
 | `tts.asr_beams` | `5` | Beam search width for transcripts (2–10); 5 is what 0.1 used. More can be slightly more accurate and is slower. Transcripts are cached per width, so a change transcribes a clip again | **Speech** › **Speech recognition beams** |
 | `tts.reference_policy` | `trim` | A reference clip outside the model's length window: `trim` cuts it at its quietest point before the limit (its transcript no longer matches and is dropped), `reject` refuses it | **Speech** › **A reference clip too long for a model** |
 | `tts.max_text_chars` | `20000` | The most characters in one request (at least 100) | — |

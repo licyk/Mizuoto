@@ -30,7 +30,7 @@ Web UI 中，**模型** › **引擎** 列出每个引擎的可用状态、设�
 | VoxCPM（`voxcpm`） | VoxCPM2、1.5、0.5B | 48 / 44.1 / 16 kHz | 30 种（1.5 和 0.5B：zh、en） | 有无文本均可克隆、按描述设计音色、指令 | 全量、LoRA | Apache-2.0 |
 | Fish Speech（`fishspeech`） | S2 Pro、Drama 3 | 44.1 kHz | 约 50 种（Drama 3：80 多种） | 表现力强的克隆、多段参考、对话；Drama 3：按指示表演、自带音色 | LoRA（S2 Pro） | Fish Audio Research License；Drama 3：Fish Audio Community License（需接受） |
 | IndexTTS（`indextts`） | IndexTTS-1.5、2、2.5 | 24 / 22.05 kHz | 中、英（2.5 加日、西） | 无文本克隆、情感控制 | 无 | bilibili Model Use License（需接受） |
-| 语音识别（`asr`） | Whisper large-v3-turbo | 16 kHz | 约 100 种 | 为参考音频和数据集生成文本 | 无 | MIT |
+| 语音识别（`asr`） | Whisper large-v3-turbo；Paraformer-large（中文） | 16 kHz | 约 100 种；中文 | 为参考音频和数据集生成文本 | 无 | MIT；Apache-2.0 |
 
 能力名称与界面一致，例如 **克隆音色**、**无文本克隆**、**预置说话人**、**按描述设计**、**按属性设计**、**自带音色**、**指令**、**流式输出**、**流式文本输入**、**批量**、**长文本**。下文"参考音频"一栏给出每段参考音频允许的时长范围；超出时按 `tts.reference_policy` 拒绝或裁剪（见 [配置](/docs/cli-config)）。
 
@@ -223,14 +223,19 @@ Fish Audio S2 Pro：双自回归模型，约一千万小时、五十种左右语
 
 ## 语音识别（asr）
 
-Mizuoto 自己使用的内部引擎：Whisper large-v3-turbo，由 Mizuoto 自己实现，约 100 种语言，为没有文本的参考音频、音色和数据集生成文本。它不出现在合成的模型列表里，也不出现在 `GET /v1/models` 中。
+Mizuoto 自己使用的内部引擎，由 Mizuoto 自己实现，为没有文本的参考音频、音色和数据集生成文本：Whisper large-v3-turbo 支持约 100 种语言；中文还可以用 FunASR 的 Paraformer-large，带语音活动检测和标点，也就是 GPT-SoVITS 识别中文所用的模型（普通话夹带英文单词，带标点）。它不出现在合成的模型列表里，也不出现在 `GET /v1/models` 中。
 
 | 模型 | 大小 | 显存 | 推荐 |
 | --- | --- | --- | --- |
 | `asr/whisper-large-v3-turbo` | 1.5 GB | 2 GB | 是 |
+| `asr/paraformer-zh` | 1.2 GB | 1.2 GB | 用于中文 |
+
+要让中文音频用 Paraformer、其他语言用 Whisper，下载它并设置 `tts.asr_model_zh`（**设置** › **语音** › **中文音频的语音识别模型**）：
 
 ```bash
 mizuoto model download asr/whisper-large-v3-turbo
+mizuoto model download asr/paraformer-zh
+mizuoto config set tts.asr_model_zh asr/paraformer-zh
 mizuoto asr clip.wav --lang zh
 ```
 

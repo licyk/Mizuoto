@@ -1,6 +1,6 @@
 ---
-title: "Speech recognition (Whisper)"
-description: "The internal speech recognition engine: Whisper large-v3-turbo implemented in Mizuoto, reproducing the transformers pipeline Mizuoto 0.1 used, with its 5-beam search, overlapping windows, seek loop and merge; its memory notes and parity results."
+title: "Speech recognition (Whisper, Paraformer)"
+description: "The internal speech recognition engine: Whisper large-v3-turbo, reproducing the transformers pipeline Mizuoto 0.1 used, and for Chinese FunASR's Paraformer-large with FSMN-VAD and CT-Transformer punctuation, as GPT-SoVITS transcribes; their memory notes and parity results."
 icon: Captions
 ---
 
@@ -55,7 +55,37 @@ One phase per transcription: the whole model, the decoder marked `hot` (it runs 
 
 Through the stack, `scripts/parity/cases/asr.jsonl` (seven clips, 4–120 s, English, Chinese and mixed, language detected or given) gives 0.1's transcripts exactly on the CPU in fp32 and on a GPU (an RTX 3090, 2026-10-19): language, text and every segment's timestamps.
 
+## Paraformer (Chinese)
+
+The `paraformer` variant (catalogue model `asr/paraformer-zh`, weights Apache-2.0) is FunASR's `AutoModel(model=paraformer-large, vad_model=fsmn-vad, punc_model=ct-punc).generate(input=path)`, the "达摩 ASR" GPT-SoVITS's `tools/asr/funasr_asr.py` uses for Chinese: Mandarin with English words, punctuated, numbers in characters. Code: `mizuoto/engines/asr/paraformer`, ported from FunASR 1.4.21 (MIT). `tts.asr_model_zh = "asr/paraformer-zh"` makes it the recogniser for clips whose language is Chinese once it is downloaded (`AsrService.model_for`); Whisper keeps every other language.
+
+**Files.** The model's folder is the recogniser's ModelScope repository (`model.pt`, `config.yaml`, `am.mvn`, `tokens.json`), with the VAD's in `vad/` and the punctuation model's in `punc/`, each pinned to its commit; all three are on the `mizuoto-model` mirror. `AsrEngine` tells the variants apart by the folder (`config.yaml` naming `Paraformer`, `vad/` and `punc/` beside it).
+
+| Module | What it is |
+| --- | --- |
+| `paraformer/engine.py` | `inference_with_vad` as it runs on the CPU: reading, resampling, VAD, a segment at a time, joining, punctuation |
+| `paraformer/model.py` | `WavFrontend` (Kaldi fbank, LFR 7/6, CMVN), `SANMEncoder` (50 layers), `CifPredictorV2`, `ParaformerSANMDecoder`, greedy decoding |
+| `paraformer/sanm.py` | SAN-M layers (attention with an FSMN memory block), shared by the recogniser and the punctuation model |
+| `paraformer/vad.py` | FSMN-VAD: `WavFrontendOnline`, the FSMN, and the streaming state machine as file inference drives it |
+| `paraformer/punc.py` | CT-Transformer: word splitting, mini-sentences with their carry-over, the punctuation rules |
+| `paraformer/text.py` | `sentence_postprocess` (tokens to text, English words, abbreviations) and `_join_vad_texts` |
+
+**What reproduces upstream.**
+- The clip read as `torchaudio.load` reads it and resampled by `torchaudio.transforms.Resample` (`nn/dsp/resample.Resample`).
+- FSMN-VAD's segments as FunASR 1.4.21 makes them: 60 s chunks with the frontend's held-back samples, the LFR context, the FSMN's memory and the state machine carried across them, and the dynamic silence schedule that replaces the config's end silence (2 s, then 0.2 s after a chunk boundary inside speech) and speech threshold (0.5); speech longer than 60 s cut there.
+- Each segment recognised alone, shortest first, as FunASR does on a CPU (`batch_size = 0`); its features with `dither` 1.0 (Paraformer's frontend default).
+- The randomness: upstream draws the dither from torch's global generator, and its layer stacks (`MultiSequential`) draw one uniform number per layer at every forward for a layer drop that does nothing at inference. Both move the generator the next segment's dither draws from; the port draws both from one generator in the same order.
+- Text: special tokens dropped, English sub-words joined, runs of single letters made one upper-case word; the segments' texts joined without a space between Chinese characters; CT-Transformer over 20-word mini-sentences, carrying the words after each mini-sentence's last stop into the next, and its rules (a space before an ASCII word at a mini-sentence's start, capitalisation after a full stop, a final `。` added).
+
+**Deviations.**
+- **The dither's generator is seeded 0 for each transcription.** Upstream's global generator stands wherever its process left it (FunASR seeds it once while building the models, which then draw from it), so upstream transcribes the same clip differently from call to call. Here a transcript is upstream's when its generator stands at seed 0 before `generate`, and the same every time (transcripts are cached by the audio).
+- **On a GPU a segment at a time too.** Upstream batches segments of up to 300 s on a GPU, padded, which changes its results; here the GPU runs the CPU's order. Results on a GPU are not bit-identical to the CPU's (on an RTX 3060, 14 of 16 clips identical, two noisy synthetic ones a few characters apart).
+
+**Memory.** Three handles, one phase each: the VAD (2 MB) over the clip, the recogniser (880 MB) per segment, the punctuation model (290 MB, mostly its 272,727-word embedding) over the text; float32 on every device. On an RTX 3060 a transcription peaked at 1.1 GB of torch allocations (the catalogue's `vram_mb`, 1,200).
+
+**Parity.** Against FunASR 1.4.21 on the CPU in fp32 (8 threads), on 16 clips (12 of 3–7 s from eight engines, four of 60–124 s, two of them mixed Chinese and English): every transcript and VAD segment identical, and at module level the features, encoder, predictor, decoder, the VAD's scores per chunk (also 11 edge cases: silence, noise, clips under 0.5 s, exact and near multiples of 60 s) and the punctuation model's logits (32 texts, mini-sentence carry-over included) bit-identical; the text post-processing on 14,000 fuzzed token lists. The workspace is `experiment/paraformer`.
+
 ## Limitations
 
-- One model in the catalogue; speech recognition is used inside Mizuoto, not offered as a synthesis model or through `GET /v1/models`.
+- Speech recognition is used inside Mizuoto, not offered as a synthesis model or through `GET /v1/models`.
 - The out-of-memory fallback can change a transcript in rare ties.

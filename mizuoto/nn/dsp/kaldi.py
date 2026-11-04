@@ -3,7 +3,8 @@
 Copied from torchaudio 2.8.0 torchaudio/compliance/kaldi.py (identical in 2.3.1), which is
 BSD-2-Clause (Copyright (c) 2017 Facebook Inc. (Soumith Chintala)), so that fbank is bit-exact with
 the upstream engines that call torchaudio's: CAM++ (CosyVoice, IndexTTS) and ERes2Net (GPT-SoVITS).
-Only mfcc and its helpers are left out.
+Only mfcc and its helpers are left out. One addition: ``generator`` (fbank, spectrogram), which ``dither`` draws its
+noise from (required with dither: torchaudio draws from torch's global generator, which native code never uses).
 """
 
 import math
@@ -160,6 +161,7 @@ def _get_window(
     dither: float,
     remove_dc_offset: bool,
     preemphasis_coefficient: float,
+    generator: torch.Generator | None = None,
 ) -> tuple[Tensor, Tensor]:
     r"""Gets a window and its log energy
 
@@ -173,7 +175,10 @@ def _get_window(
     strided_input = _get_strided(waveform, window_size, window_shift, snip_edges)
 
     if dither != 0.0:
-        rand_gauss = torch.randn(strided_input.shape, device=device, dtype=dtype)
+        # Mizuoto: from the caller's generator (torchaudio draws from torch's global one; native code never does)
+        if generator is None:
+            raise ValueError("dither needs a generator")
+        rand_gauss = torch.randn(strided_input.shape, device=device, dtype=dtype, generator=generator)
         strided_input = strided_input + rand_gauss * dither
 
     if remove_dc_offset:
@@ -233,6 +238,7 @@ def spectrogram(
     snip_edges: bool = True,
     subtract_mean: bool = False,
     window_type: str = POVEY,
+    generator: torch.Generator | None = None,
 ) -> Tensor:
     r"""Create a spectrogram from a raw audio signal. This matches the input/output of Kaldi's
     compute-spectrogram-feats.
@@ -292,6 +298,7 @@ def spectrogram(
         dither,
         remove_dc_offset,
         preemphasis_coefficient,
+        generator,
     )
 
     # size (m, padded_window_size // 2 + 1, 2)
@@ -522,6 +529,7 @@ def fbank(
     vtln_low: float = 100.0,
     vtln_warp: float = 1.0,
     window_type: str = POVEY,
+    generator: torch.Generator | None = None,
 ) -> Tensor:
     r"""Create a fbank from a raw audio signal. This matches the input/output of Kaldi's
     compute-fbank-feats.
@@ -594,6 +602,7 @@ def fbank(
         dither,
         remove_dc_offset,
         preemphasis_coefficient,
+        generator,
     )
 
     # size (m, padded_window_size // 2 + 1)

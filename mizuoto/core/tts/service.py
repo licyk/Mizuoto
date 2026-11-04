@@ -540,7 +540,7 @@ class TtsService:
             asr = self._asr
             if self._settings.settings.tts.auto_transcribe and asr is not None and asr.available():
                 for ref, planned in missing:
-                    hit = asr.cached(ref.sha256 or "")
+                    hit = asr.cached(ref.sha256 or "", asr.model_for(planned.language))
                     if hit is not None:
                         ref.transcript = planned.transcript = hit.text
                     else:

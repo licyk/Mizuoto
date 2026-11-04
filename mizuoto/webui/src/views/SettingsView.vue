@@ -95,6 +95,10 @@ const normalizeOptions = computed(() => ['peak', 'loudness', 'none'].map((v) => 
 const policyOptions = computed(() => ['trim', 'reject'].map((v) => ({ value: v, label: t(`settings.referencePolicies.${v}`) })));
 const modelOptions = computed(() => [{ value: '', label: t('common.none') }, ...(models.data.value ?? []).map((m) => ({ value: m.id, label: m.title }))]);
 const asrOptions = computed(() => (models.data.value ?? []).filter((m) => m.engine === 'asr').map((m) => ({ value: m.id, label: m.title })));
+const asrZhOptions = computed(() => [
+  { value: '', label: t('settings.asrModelZhSame') },
+  ...(models.data.value ?? []).filter((m) => m.engine === 'asr' && (m.languages ?? []).includes('zh')).map((m) => ({ value: m.id, label: m.title })),
+]);
 // Training
 const trainDeviceOptions = computed(() => [
   { value: '', label: t('settings.trainDeviceEngine') },
@@ -228,6 +232,14 @@ const previewShown = ref(true);
             </div>
             <Switch :model-value="s.tts.auto_transcribe" :label="t('settings.autoTranscribe')" @update:model-value="patch({ tts: { auto_transcribe: $event } })" />
             <SelectField v-if="asrOptions.length" :model-value="s.tts.asr_model" :label="t('settings.asrModel')" :options="asrOptions" @update:model-value="patch({ tts: { asr_model: $event } })" />
+            <SelectField
+              v-if="asrZhOptions.length > 1"
+              :model-value="s.tts.asr_model_zh"
+              :label="t('settings.asrModelZh')"
+              :supporting-text="t('settings.asrModelZhHint')"
+              :options="asrZhOptions"
+              @update:model-value="patch({ tts: { asr_model_zh: $event ?? '' } })"
+            />
             <TextField
               type="number"
               :min="2"

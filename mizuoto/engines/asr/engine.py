@@ -42,6 +42,10 @@ PIPELINE_BEAMS = 5
 
 
 def detect(model_dir: Path) -> str | None:
+    from mizuoto.engines.asr.paraformer.engine import detect as is_paraformer
+
+    if is_paraformer(model_dir):
+        return "paraformer"
     try:
         config = json.loads((model_dir / "config.json").read_text(encoding="utf-8"))
     except (OSError, ValueError):
@@ -73,8 +77,13 @@ class AsrEngine(Engine):
         return detect(model_dir)
 
     def load(self, spec: LoadSpec, runtime: Runtime, ctx: RequestContext) -> LoadedEngine:
-        if spec.model_dir is None or detect(spec.model_dir) != "whisper":
-            raise EngineError(f"{spec.model_id} is not a Whisper model", code=codes.INVALID_INPUT)
+        variant = detect(spec.model_dir) if spec.model_dir is not None else None
+        if variant == "paraformer":
+            from mizuoto.engines.asr.paraformer.engine import LoadedParaformer
+
+            return LoadedParaformer(spec, ctx)
+        if variant != "whisper":
+            raise EngineError(f"{spec.model_id} is neither a Whisper nor a Paraformer model", code=codes.INVALID_INPUT)
         return LoadedAsr(spec, ctx)
 
 

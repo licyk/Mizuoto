@@ -166,7 +166,9 @@ def test_catalogue_models_have_files_manifests():
             for files in [f for f in [model.files, *model.extra] if f is not None]:
                 assert files.manifest, f"{model.id} has no files manifest"
                 data = json.loads((MANIFESTS_DIR / "files" / files.manifest).read_text())
-                assert data["repo"] == files.hf and len(data["revision"]) == 40 and data["files"]
+                assert data["repo"] == (files.hf or files.modelscope) and len(data["revision"]) == 40 and data["files"]
+                if not files.hf:  # ModelScope only (Paraformer's): pinned to the commit the catalogue names
+                    assert data["revision"] == files.modelscope_revision
                 assert all(f["size"] >= 0 and len(f["sha256"]) == 64 for f in data["files"])
 
 

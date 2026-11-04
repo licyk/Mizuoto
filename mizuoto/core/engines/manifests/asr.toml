@@ -21,6 +21,17 @@ title = "Whisper"
 sample_rate = 16000
 capabilities = []
 
+[variants.paraformer]
+title = "Paraformer"
+sample_rate = 16000
+capabilities = []
+languages = ["zh"]
+
+[variants.paraformer.licence]
+id = "apache-2.0"
+name = "Apache License 2.0 (Paraformer, FSMN-VAD and CT-Transformer weights)"
+url = "https://modelscope.cn/models/iic/speech_paraformer-large_asr_nat-zh-cn-16k-common-vocab8404-pytorch"
+
 [options.beam_size]
 type = "int"
 default = 1
@@ -36,3 +47,17 @@ description = "OpenAI's distilled large-v3: near large-v3 accuracy at several ti
 vram_mb = 2000
 recommended = true
 files = { hf = "openai/whisper-large-v3-turbo", manifest = "asr-whisper-large-v3-turbo.files.json" }
+
+[[models]]
+id = "asr/paraformer-zh"
+variant = "paraformer"
+title = "Paraformer-large (Chinese)"
+description = "Alibaba DAMO's Paraformer-large with FSMN-VAD and CT-Transformer punctuation (FunASR), the Chinese transcription GPT-SoVITS uses: Mandarin with English words, punctuated."
+vram_mb = 1200
+languages = ["zh"]
+files = { modelscope = "iic/speech_paraformer-large_asr_nat-zh-cn-16k-common-vocab8404-pytorch", modelscope_revision = "6059253cbfda9ea43d6c6f198d38854f09adb298", include = ["model.pt", "config.yaml", "am.mvn", "tokens.json"], manifest = "asr-paraformer-zh.files.json" }
+extra = [
+    { modelscope = "iic/speech_fsmn_vad_zh-cn-16k-common-pytorch", modelscope_revision = "f9a8b8274674755d925277e27063869038d41515", into = "vad", include = ["model.pt", "config.yaml", "am.mvn"], manifest = "asr-paraformer-zh-vad.files.json" },
+    { modelscope = "iic/punc_ct-transformer_zh-cn-common-vocab272727-pytorch", modelscope_revision = "d488ddd5985989501d57bce7f7a4d4dcfca779d0", into = "punc", include = ["model.pt", "config.yaml", "tokens.json"], manifest = "asr-paraformer-zh-punc.files.json" },
+]
+

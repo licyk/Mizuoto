@@ -34,7 +34,8 @@ command line sit over one core, and every engine runs natively in the same Pytho
   GPL-3.0-only. Repository: <https://github.com/licyk/Mizuoto>. Model mirror: `mizuoto-model` (Hugging Face
   `licyk/mizuoto-model`, ModelScope `licyks/mizuoto-model`).
 - One distribution, `mizuoto`: the core, API, CLI, web UI, the runtime and the engines `qwen3tts`, `f5tts`,
-  `omnivoice`, `cosyvoice`, `gptsovits`, `voxcpm`, `asr` (internal speech recognition) and `dummy` (no model; tests).
+  `omnivoice`, `cosyvoice`, `gptsovits`, `voxcpm`, `asr` (internal speech recognition: Whisper, and FunASR's Paraformer
+  for Chinese) and `dummy` (no model; tests).
   torch (≥ 2.8) is a dependency whose build (CUDA, ROCm, XPU, MPS, CPU) the user installs first.
 - The two licence-gated engines are separate distributions, because their licences cover the ports:
   `mizuoto-fishspeech` (`packages/native/fishspeech`) and `mizuoto-indextts` (`packages/native/indextts`). They

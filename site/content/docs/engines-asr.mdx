@@ -1,6 +1,6 @@
 ---
-title: "语音识别（Whisper）"
-description: "内部的语音识别引擎：由 Mizuoto 自己实现的 Whisper large-v3-turbo，复现 Mizuoto 0.1 所用的 transformers 流水线，包括 5 束的束搜索、重叠窗口、seek 循环与合并；以及显存说明和对照结果。"
+title: "语音识别（Whisper、Paraformer）"
+description: "内部的语音识别引擎：Whisper large-v3-turbo，复现 Mizuoto 0.1 所用的 transformers 流水线；以及识别中文所用的 FunASR Paraformer-large、FSMN-VAD 和 CT-Transformer 标点，与 GPT-SoVITS 的识别方式相同；两者的显存说明和对照结果。"
 icon: Captions
 ---
 
@@ -55,7 +55,37 @@ Mizuoto 自己的语音识别：Whisper large-v3-turbo（[openai/whisper](https:
 
 在完整链路中，`scripts/parity/cases/asr.jsonl`（七段 4–120 秒的音频，英文、中文和混合，自动识别或指定语言）在 CPU 上以 fp32 运行和在 GPU 上（RTX 3090，2026-10-19）运行，都给出与 0.1 完全相同的转写：语言、文本以及每个分段的时间戳。
 
+## Paraformer（中文）
+
+`paraformer` 变体（模型目录中的 `asr/paraformer-zh`，权重为 Apache-2.0）就是 FunASR 的 `AutoModel(model=paraformer-large, vad_model=fsmn-vad, punc_model=ct-punc).generate(input=path)`，也就是 GPT-SoVITS 的 `tools/asr/funasr_asr.py` 用于中文的“达摩 ASR”：普通话夹带英文单词，带标点，数字写成汉字。代码在 `mizuoto/engines/asr/paraformer`，移植自 FunASR 1.4.21（MIT）。设置 `tts.asr_model_zh = "asr/paraformer-zh"` 后，下载完成即用于语言为中文的音频（`AsrService.model_for`）；其他语言仍用 Whisper。
+
+**文件。** 模型文件夹就是识别模型的 ModelScope 仓库（`model.pt`、`config.yaml`、`am.mvn`、`tokens.json`），VAD 在 `vad/`，标点模型在 `punc/`，各自固定到其提交；三者都在 `mizuoto-model` 镜像上。`AsrEngine` 按文件夹区分变体（`config.yaml` 写明 `Paraformer`，旁边有 `vad/` 和 `punc/`）。
+
+| 模块 | 内容 |
+| --- | --- |
+| `paraformer/engine.py` | `inference_with_vad` 在 CPU 上的流程：读取、重采样、VAD、逐段识别、拼接、加标点 |
+| `paraformer/model.py` | `WavFrontend`（Kaldi fbank、LFR 7/6、CMVN）、`SANMEncoder`（50 层）、`CifPredictorV2`、`ParaformerSANMDecoder`、贪心解码 |
+| `paraformer/sanm.py` | SAN-M 层（带 FSMN 记忆块的注意力），识别模型和标点模型共用 |
+| `paraformer/vad.py` | FSMN-VAD：`WavFrontendOnline`、FSMN，以及文件推理驱动下的流式状态机 |
+| `paraformer/punc.py` | CT-Transformer：分词、带延续的小句、标点规则 |
+| `paraformer/text.py` | `sentence_postprocess`（词元转文本、英文单词、缩写）和 `_join_vad_texts` |
+
+**与上游一致之处。**
+- 音频按 `torchaudio.load` 的方式读取，用 `torchaudio.transforms.Resample` 重采样（`nn/dsp/resample.Resample`）。
+- FSMN-VAD 的分段与 FunASR 1.4.21 相同：按 60 秒分块，前端保留的样本、LFR 上下文、FSMN 的记忆和状态机都跨块延续；动态静音表取代配置中的结束静音（先 2 秒，在语音中跨过块边界后为 0.2 秒）和语音阈值（0.5）；超过 60 秒的语音在 60 秒处切开。
+- 每段单独识别，从短到长，与 FunASR 在 CPU 上的做法相同（`batch_size = 0`）；特征带 `dither` 1.0（Paraformer 前端的默认值）。
+- 随机数：上游的 dither 取自 torch 的全局生成器，而它的层堆叠（`MultiSequential`）每次前向都为每层抽取一个均匀随机数，用于推理时不起作用的层丢弃。两者都会推进下一段 dither 所用的生成器；移植版按同样的顺序从同一个生成器抽取两者。
+- 文本：去掉特殊词元，拼合英文子词，连续的单字母合成一个大写词；各段文本拼接时汉字之间不加空格；CT-Transformer 以 20 个词为一个小句，把每个小句最后一个句末标点之后的词带到下一个小句，并遵循它的规则（小句开头的 ASCII 词前加空格、句号后首字母大写、末尾补 `。`）。
+
+**有意的差异。**
+- **dither 的生成器每次转写都以 0 为种子。** 上游的全局生成器停在其进程上一次留下的位置（FunASR 只在构建模型时设一次种子，构建模型又会从中抽取），所以上游对同一段音频每次的识别结果都可能不同。这里的转写结果等于上游在 `generate` 前生成器处于种子 0 时的结果，且每次都相同（转写结果按音频缓存）。
+- **在 GPU 上同样逐段识别。** 上游在 GPU 上会把最长 300 秒的分段补齐后成批识别，这会改变结果；这里在 GPU 上沿用 CPU 的顺序。GPU 上的结果与 CPU 不逐位相同（在 RTX 3060 上，16 段音频中 14 段相同，两段嘈杂的合成音频相差几个字）。
+
+**显存。** 三个句柄，各占一个阶段：VAD（2 MB）处理整段音频，识别模型（880 MB）逐段运行，标点模型（290 MB，主要是 272,727 词的嵌入表）处理文本；在任何设备上都用 float32。在 RTX 3060 上一次转写的 torch 分配峰值为 1.1 GB（模型目录中的 `vram_mb` 为 1,200）。
+
+**对照结果。** 在 CPU 上以 fp32（8 线程）与 FunASR 1.4.21 对照 16 段音频（12 段 3–7 秒，来自八个引擎；4 段 60–124 秒，其中两段中英混合）：每份转写和每个 VAD 分段都相同；模块层面的特征、编码器、预测器、解码器、VAD 每块的得分（另有 11 个边界情况：静音、噪声、短于 0.5 秒的音频、恰为或接近 60 秒整数倍的音频）以及标点模型的 logits（32 段文本，包括小句延续）都逐位相同；文本后处理在 14,000 组随机词元上相同。工作区为 `experiment/paraformer`。
+
 ## 限制
 
-- 模型目录中只有一个模型；语音识别在 Mizuoto 内部使用，不作为合成模型提供，也不出现在 `GET /v1/models` 中。
+- 语音识别在 Mizuoto 内部使用，不作为合成模型提供，也不出现在 `GET /v1/models` 中。
 - 显存不足时的回退方式在罕见的并列情况下可能改变转写结果。

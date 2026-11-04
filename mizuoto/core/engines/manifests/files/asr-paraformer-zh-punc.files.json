@@ -1,0 +1,22 @@
+{
+ "repo": "iic/punc_ct-transformer_zh-cn-common-vocab272727-pytorch",
+ "revision": "d488ddd5985989501d57bce7f7a4d4dcfca779d0",
+ "files": [
+  {
+   "path": "config.yaml",
+   "size": 810,
+   "sha256": "a56ec10925b06fa976ad51af373396be2b13e1eb8dc62a5426b5adebaba7071d"
+  },
+  {
+   "path": "model.pt",
+   "size": 291979892,
+   "sha256": "a5818bb9d933805a916eebe41eb41648f7f9caad30b4bd59d56f3ca135421916"
+  },
+  {
+   "path": "tokens.json",
+   "size": 4207480,
+   "sha256": "c960ab87bccea4aa15cf49a59f71973c2c330b46668048cd8da253749ec71ee3"
+  }
+ ],
+ "into": "punc"
+}

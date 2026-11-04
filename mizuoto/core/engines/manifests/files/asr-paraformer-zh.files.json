@@ -1,0 +1,26 @@
+{
+ "repo": "iic/speech_paraformer-large_asr_nat-zh-cn-16k-common-vocab8404-pytorch",
+ "revision": "6059253cbfda9ea43d6c6f198d38854f09adb298",
+ "files": [
+  {
+   "path": "am.mvn",
+   "size": 11203,
+   "sha256": "29b3c740a2c0cfc6b308126d31d7f265fa2be74f3bb095cd2f143ea970896ae5"
+  },
+  {
+   "path": "config.yaml",
+   "size": 2509,
+   "sha256": "bfd424b9f61846aac63591e96fe24d66b35f4643bddcb4b9bb759db8f987ab79"
+  },
+  {
+   "path": "model.pt",
+   "size": 880502012,
+   "sha256": "5bba782a5e9196166233b9ab12ba04cadff9ef9212b4ff6153ed9290ff679025"
+  },
+  {
+   "path": "tokens.json",
+   "size": 93676,
+   "sha256": "2b20c2b12572d682afff84ce1c8d560f67b8b32a4c1f21567411d141ed352127"
+  }
+ ]
+}

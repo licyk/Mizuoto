@@ -30,7 +30,7 @@ How each engine is implemented, and how exactly it reproduces its upstream proje
 | VoxCPM (`voxcpm`) | VoxCPM2, 1.5, 0.5B | 48 / 44.1 / 16 kHz | 30 (1.5 and 0.5B: zh, en) | cloning with or without a transcript, voices from a description, instructions | full, LoRA | Apache-2.0 |
 | Fish Speech (`fishspeech`) | S2 Pro, Drama 3 | 44.1 kHz | about 50 (Drama 3: 80+) | expressive cloning, several clips, dialogue; Drama 3: directed performance, its own voice | LoRA (S2 Pro) | Fish Audio Research License; Drama 3: Fish Audio Community License (gated) |
 | IndexTTS (`indextts`) | IndexTTS-1.5, 2, 2.5 | 24 / 22.05 kHz | zh, en (2.5 adds ja, es) | cloning without a transcript, emotion control | none | bilibili Model Use License (gated) |
-| Speech recognition (`asr`) | Whisper large-v3-turbo | 16 kHz | about 100 | transcripts for reference clips and datasets | none | MIT |
+| Speech recognition (`asr`) | Whisper large-v3-turbo; Paraformer-large (Chinese) | 16 kHz | about 100; Chinese | transcripts for reference clips and datasets | none | MIT; Apache-2.0 |
 
 Capability names match the UI, such as **Clone a voice**, **Clone without a transcript**, **Preset speakers**, **Design from a description**, **Design from attributes**, **Its own voice**, **Instructions**, **Streaming**, **Streaming text**, **Batches** and **Long text**. "Reference clips" below gives the length window per clip; a clip outside it is refused or cut according to `tts.reference_policy` (see [Configuration](/docs/cli-config)).
 
@@ -223,14 +223,19 @@ bilibili's zero-shot TTS: clones from a clip without its transcript. Best for: e
 
 ## Speech recognition (asr)
 
-An internal engine Mizuoto uses itself: Whisper large-v3-turbo, implemented in Mizuoto, about 100 languages, transcribing reference clips, voices and datasets that have no text. It is not offered as a speech model and does not appear in `GET /v1/models`.
+An internal engine Mizuoto uses itself, implemented in Mizuoto, transcribing reference clips, voices and datasets that have no text: Whisper large-v3-turbo for about 100 languages, and for Chinese FunASR's Paraformer-large with voice activity detection and punctuation, the recogniser GPT-SoVITS uses for Chinese (Mandarin with English words, punctuated). It is not offered as a speech model and does not appear in `GET /v1/models`.
 
 | Model | Size | GPU memory | Recommended |
 | --- | --- | --- | --- |
 | `asr/whisper-large-v3-turbo` | 1.5 GB | 2 GB | yes |
+| `asr/paraformer-zh` | 1.2 GB | 1.2 GB | for Chinese |
+
+To transcribe Chinese clips with Paraformer and everything else with Whisper, download it and set `tts.asr_model_zh` (**Settings** › **Speech** › **Speech recognition for Chinese clips**):
 
 ```bash
 mizuoto model download asr/whisper-large-v3-turbo
+mizuoto model download asr/paraformer-zh
+mizuoto config set tts.asr_model_zh asr/paraformer-zh
 mizuoto asr clip.wav --lang zh
 ```
 

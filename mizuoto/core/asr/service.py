@@ -86,6 +86,14 @@ class AsrService:
     def available(self, model: str | None = None) -> bool:
         return self.unavailable_reason(model) is None
 
+    def model_for(self, language: str | None) -> str:
+        """The recogniser for a clip in ``language``: ``tts.asr_model_zh`` for Chinese when it is set and downloaded,
+        else ``tts.asr_model``."""
+        zh = self._settings.settings.tts.asr_model_zh
+        if zh and languages.normalize(language) == "zh" and self.unavailable_reason(zh) is None:
+            return zh
+        return self.default_model()
+
     def beams(self) -> int:
         return self._settings.settings.tts.asr_beams
 
@@ -97,8 +105,8 @@ class AsrService:
     def transcribe(self, audio: AudioFile | Path, language: str | None = None, model: str | None = None, ctx: JobContext | None = None) -> Transcript:
         """The transcript of a clip (cached). ``language`` None or ``auto``: Whisper decides."""
         record = audio if isinstance(audio, AudioFile) else self._audio.register_path(audio)
-        model = model or self.default_model()
         language = languages.normalize(language)
+        model = model or self.model_for(language)
         hit = self.cached(record.sha256, model)
         if hit is not None and (language in (None, "auto") or hit.language == language):
             return hit
