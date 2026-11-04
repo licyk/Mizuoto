@@ -206,6 +206,6 @@ id = "indextts/v2.5"
 variant = "v2_5"
 title = "IndexTTS-2.5"
 description = "IndexTTS-2 with Japanese and Spanish, and a speed."
-vram_mb = 9000
+vram_mb = 5200
 assets = ["indextts/w2v-bert", "indextts/campplus", "indextts/bigvgan"]
 files = { hf = "IndexTeam/IndexTTS-2.5", exclude = [".gitattributes", "*.md", "LICENSE*"], manifest = "indextts-2.5.files.json" }

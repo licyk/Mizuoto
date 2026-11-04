@@ -160,7 +160,7 @@ variant = "base"
 title = "Qwen3-TTS 0.6B Base"
 description = "The smaller cloning model."
 size_mb = 2510
-vram_mb = 4000
+vram_mb = 2700
 files = { hf = "Qwen/Qwen3-TTS-12Hz-0.6B-Base", modelscope = "Qwen/Qwen3-TTS-12Hz-0.6B-Base", manifest = "qwen3tts-0.6b-base.files.json" }
 
 [[models]]
@@ -179,7 +179,7 @@ variant = "custom_voice_lite"
 title = "Qwen3-TTS 0.6B CustomVoice"
 description = "Nine preset speakers, without instructions."
 size_mb = 2510
-vram_mb = 4000
+vram_mb = 2100
 files = { hf = "Qwen/Qwen3-TTS-12Hz-0.6B-CustomVoice", modelscope = "Qwen/Qwen3-TTS-12Hz-0.6B-CustomVoice", manifest = "qwen3tts-0.6b-custom-voice.files.json" }
 
 [[models]]

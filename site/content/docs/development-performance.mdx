@@ -552,18 +552,25 @@ CosyVoice 2 和 3 提供这个选项（`engines.cosyvoice.load_options.fused_pro
 | Fish S2 Pro | 11,873 | 10,154 | 22,000 → 10,200 |
 | IndexTTS 2 | 11,249 | 8,485 | 9,000 → 8,500 |
 | VoxCPM 2 | 6,621 | 5,522 | 6,500 → 5,600 |
+| IndexTTS 2.5 | 6,811 | 5,160 | 9,000 → 5,200 |
 | Qwen3-TTS 1.7B Base | 5,395 | 4,648 | 6,500 → 4,700 |
 | CosyVoice 3 | 4,971 | 4,510 | 6,000 → 4,600 |
 | CosyVoice 2 | 3,873 | 3,460 | 5,000 → 3,500 |
 | VoxCPM 1.5 | 4,289 | 2,838 | 3,000 → 2,900 |
+| Qwen3-TTS 0.6B Base | 3,325 | 2,656 | 4,000 → 2,700 |
 | IndexTTS 1.5 | 3,173 | 2,401 | 4,000 → 2,500 |
+| VoxCPM 0.5B | 2,749 | 2,111 | 2,500 → 2,200 |
 | OmniVoice | 2,537 | 2,107 | 5,000 → 2,200 |
+| Qwen3-TTS 0.6B CustomVoice （短用例） | 2,361 | 2,078 | 4,000 → 2,100 |
 | GPT-SoVITS v4 | 2,331 | 1,972 | 4,000 → 2,000 |
+| GPT-SoVITS v5 Turbo | 2,353 | 1,913 | 4,000 → 2,000 |
 | CosyVoice-300M-SFT （短用例） | 2,387 | 1,886 | 3,500 → 1,900 |
+| GPT-SoVITS v2ProPlus | 1,711 | 1,409 | 2,800 → 1,500 |
+| GPT-SoVITS v2Pro | 1,597 | 1,322 | 2,500 → 1,400 |
 | GPT-SoVITS v2 | 1,457 | 1,170 | 2,500 → 1,200 |
 | F5-TTS | 1,013 | 799 | 2,500 → 800 |
 
-Qwen3-TTS 1.7B CustomVoice 和 VoiceDesign 取 4,300（CustomVoice 的短用例：4,000），CosyVoice-300M 及其 instruct 版本取 SFT 的 1,900；这里没有测量的模型（Qwen3-TTS 0.6B、GPT-SoVITS v2Pro、v2ProPlus 和 v5、IndexTTS 2.5、VoxCPM 0.5B、Drama 3）保留原来的估算值。
+Qwen3-TTS 1.7B CustomVoice 和 VoiceDesign 取 4,300（CustomVoice 的短用例：4,000），CosyVoice-300M 及其 instruct 版本取 SFT 的 1,900；这里没有测量的 Drama 3 和 F5-TTS 较早的 Base、E2 Base 保留原来的估算值。0.6B 的 Qwen3-TTS 模型、GPT-SoVITS v2Pro、v2ProPlus 和 v5 Turbo、IndexTTS 2.5 和 VoxCPM 0.5B 是同一天用同样方法测量的（CustomVoice 模型只有短用例）。
 
 **集中传输：测过，不实现。** 让流式单元的权重从每个单元一个锁页缓冲区复制，而不是逐个张量复制（内存计划中的一项），能省下每次复制的固定开销。在同一块显卡上设 `vram_mode = none`（几乎所有权重都流式传输），Qwen3-TTS 的 talker 复制了 222 GB，共 32,543 次（每次 6.8 MB），速度 2.87 GB/s；OmniVoice 复制 26 GB，共 6,152 次，2.88 GB/s：这块显卡的链路（PCIe x4）一次复制 1 GB 是 2.85 GB/s，每次 1 MB 是 2.82 GB/s。在完整的 x16 链路（13.4 GB/s）上，一次 4–7 MB 的复制要 0.3–0.5 毫秒，相比之下每次复制几微秒的开销约为 1%。
 

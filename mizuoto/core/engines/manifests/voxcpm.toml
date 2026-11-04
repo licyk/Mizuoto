@@ -162,7 +162,7 @@ id = "voxcpm/0.5b"
 variant = "v1"
 title = "VoxCPM 0.5B"
 description = "The first VoxCPM: Chinese and English cloning at 16 kHz."
-vram_mb = 2500
+vram_mb = 2200
 files = { hf = "openbmb/VoxCPM-0.5B", modelscope = "OpenBMB/VoxCPM-0.5B", include = ["config.json", "pytorch_model.bin", "audiovae.pth", "tokenizer.json", "tokenizer_config.json"], manifest = "voxcpm-0.5b.files.json" }
 
 # -- training -------------------------------------------------------------------------

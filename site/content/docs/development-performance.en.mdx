@@ -552,18 +552,25 @@ Audio (three requests per process, each hashed): before, eager gave one audio ev
 | Fish S2 Pro | 11,873 | 10,154 | 22,000 → 10,200 |
 | IndexTTS 2 | 11,249 | 8,485 | 9,000 → 8,500 |
 | VoxCPM 2 | 6,621 | 5,522 | 6,500 → 5,600 |
+| IndexTTS 2.5 | 6,811 | 5,160 | 9,000 → 5,200 |
 | Qwen3-TTS 1.7B Base | 5,395 | 4,648 | 6,500 → 4,700 |
 | CosyVoice 3 | 4,971 | 4,510 | 6,000 → 4,600 |
 | CosyVoice 2 | 3,873 | 3,460 | 5,000 → 3,500 |
 | VoxCPM 1.5 | 4,289 | 2,838 | 3,000 → 2,900 |
+| Qwen3-TTS 0.6B Base | 3,325 | 2,656 | 4,000 → 2,700 |
 | IndexTTS 1.5 | 3,173 | 2,401 | 4,000 → 2,500 |
+| VoxCPM 0.5B | 2,749 | 2,111 | 2,500 → 2,200 |
 | OmniVoice | 2,537 | 2,107 | 5,000 → 2,200 |
+| Qwen3-TTS 0.6B CustomVoice (short case) | 2,361 | 2,078 | 4,000 → 2,100 |
 | GPT-SoVITS v4 | 2,331 | 1,972 | 4,000 → 2,000 |
+| GPT-SoVITS v5 Turbo | 2,353 | 1,913 | 4,000 → 2,000 |
 | CosyVoice-300M-SFT (short case) | 2,387 | 1,886 | 3,500 → 1,900 |
+| GPT-SoVITS v2ProPlus | 1,711 | 1,409 | 2,800 → 1,500 |
+| GPT-SoVITS v2Pro | 1,597 | 1,322 | 2,500 → 1,400 |
 | GPT-SoVITS v2 | 1,457 | 1,170 | 2,500 → 1,200 |
 | F5-TTS | 1,013 | 799 | 2,500 → 800 |
 
-Qwen3-TTS 1.7B CustomVoice and VoiceDesign take 4,300 (CustomVoice's short case: 4,000), CosyVoice-300M and its instruct variant SFT's 1,900; models not measured here (Qwen3-TTS 0.6B, GPT-SoVITS v2Pro, v2ProPlus and v5, IndexTTS 2.5, VoxCPM 0.5B, Drama 3) keep their estimates.
+Qwen3-TTS 1.7B CustomVoice and VoiceDesign take 4,300 (CustomVoice's short case: 4,000), CosyVoice-300M and its instruct variant SFT's 1,900; Drama 3 and F5-TTS's older Base and E2 Base, not measured here, keep their estimates. The 0.6B Qwen3-TTS models, GPT-SoVITS v2Pro, v2ProPlus and v5 Turbo, IndexTTS 2.5 and VoxCPM 0.5B were measured the same way the same day (the CustomVoice model has only a short case).
 
 **Gathered transfers, measured and not built.** Copying a streamed unit's weights from one page-locked buffer per unit instead of tensor by tensor (an item of the memory plan) would save each copy's fixed cost. With `vram_mode = none` (nearly every weight streamed) on the same card, Qwen3-TTS's talker copied 222 GB in 32,543 copies (6.8 MB each) at 2.87 GB/s and OmniVoice 26 GB in 6,152 at 2.88 GB/s: the card's link (PCIe x4) carries 2.85 GB/s in one 1 GB copy and 2.82 GB/s in 1 MB ones. On a full x16 link (13.4 GB/s) a 4–7 MB copy takes 0.3–0.5 ms, beside which the few microseconds a copy costs are about 1 %.
 

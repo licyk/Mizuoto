@@ -65,11 +65,11 @@ Web UI 中，**模型** › **引擎** 列出每个引擎的可用状态、设�
 
 | 模型 | 变体 | 大小 | 显存 | 推荐 |
 | --- | --- | --- | --- | --- |
-| `qwen3tts/1.7b-base` | Base（克隆） | 4.3 GB | 6.5 GB | 是 |
-| `qwen3tts/0.6b-base` | Base（克隆） | 2.4 GB | 4 GB | |
-| `qwen3tts/1.7b-custom-voice` | CustomVoice（预置说话人、指令） | 4.3 GB | 6.5 GB | 是 |
-| `qwen3tts/0.6b-custom-voice` | CustomVoice 0.6B（预置说话人） | 2.4 GB | 4 GB | |
-| `qwen3tts/1.7b-voice-design` | VoiceDesign（按描述设计） | 4.3 GB | 6.5 GB | 是 |
+| `qwen3tts/1.7b-base` | Base（克隆） | 4.3 GB | 4.7 GB | 是 |
+| `qwen3tts/0.6b-base` | Base（克隆） | 2.4 GB | 2.7 GB | |
+| `qwen3tts/1.7b-custom-voice` | CustomVoice（预置说话人、指令） | 4.3 GB | 4.3 GB | 是 |
+| `qwen3tts/0.6b-custom-voice` | CustomVoice 0.6B（预置说话人） | 2.4 GB | 2.1 GB | |
+| `qwen3tts/1.7b-voice-design` | VoiceDesign（按描述设计） | 4.3 GB | 4.3 GB | 是 |
 
 - **能力**：Base 有 **克隆音色**、**无文本克隆**；CustomVoice 有 **预置说话人**、**指令**（0.6B 没有指令：上游会静默忽略，所以 Mizuoto 不声明）；VoiceDesign 有 **按描述设计**。所有变体都支持 **流式输出**（逐帧，在 GPU 上约 0.3 秒后输出第一段音频）、**批量**（每批最多 8 条）和 **种子**。
 - **预置说话人**：aiden、dylan、eric、ono_anna、ryan、serena、sohee、uncle_fu、vivian。
@@ -85,11 +85,11 @@ Web UI 中，**模型** › **引擎** 列出每个引擎的可用状态、设�
 
 | 模型 | 变体 | 大小 | 显存 | 推荐 |
 | --- | --- | --- | --- | --- |
-| `cosyvoice/cosyvoice3-0.5b` | Fun-CosyVoice 3 | 4.2 GB | 6 GB | 是 |
-| `cosyvoice/cosyvoice2-0.5b` | CosyVoice 2 | 2.9 GB | 5 GB | 是 |
-| `cosyvoice/cosyvoice-300m` | CosyVoice 1（300M） | 2.2 GB | 3.5 GB | |
-| `cosyvoice/cosyvoice-300m-sft` | CosyVoice 1 SFT（预置说话人） | 2.2 GB | 3.5 GB | |
-| `cosyvoice/cosyvoice-300m-instruct` | CosyVoice 1 Instruct | 2.2 GB | 3.5 GB | |
+| `cosyvoice/cosyvoice3-0.5b` | Fun-CosyVoice 3 | 4.2 GB | 4.6 GB | 是 |
+| `cosyvoice/cosyvoice2-0.5b` | CosyVoice 2 | 2.9 GB | 3.5 GB | 是 |
+| `cosyvoice/cosyvoice-300m` | CosyVoice 1（300M） | 2.2 GB | 1.9 GB | |
+| `cosyvoice/cosyvoice-300m-sft` | CosyVoice 1 SFT（预置说话人） | 2.2 GB | 1.9 GB | |
+| `cosyvoice/cosyvoice-300m-instruct` | CosyVoice 1 Instruct | 2.2 GB | 1.9 GB | |
 
 | 变体 | 采样率 | 主要能力 |
 | --- | --- | --- |
@@ -114,7 +114,7 @@ Web UI 中，**模型** › **引擎** 列出每个引擎的可用状态、设�
 
 | 模型 | 变体 | 大小 | 显存 | 推荐 |
 | --- | --- | --- | --- | --- |
-| `f5tts/v1-base` | F5-TTS v1 Base | 1.3 GB | 2.5 GB | 是 |
+| `f5tts/v1-base` | F5-TTS v1 Base | 1.3 GB | 800 MB | 是 |
 | `f5tts/base` | F5-TTS Base | 1.3 GB | 2.5 GB | |
 | `f5tts/e2-base` | E2-TTS Base | 1.3 GB | 2.5 GB | |
 
@@ -131,11 +131,11 @@ Web UI 中，**模型** › **引擎** 列出每个引擎的可用状态、设�
 
 | 模型 | 变体 | 大小 | 显存 | 推荐 |
 | --- | --- | --- | --- | --- |
-| `gptsovits/v2-base` | v2 | 249 MB | 2.5 GB | |
-| `gptsovits/v2pro-base` | v2Pro | 303 MB | 2.5 GB | 是 |
-| `gptsovits/v2proplus-base` | v2ProPlus | 339 MB | 2.8 GB | |
-| `gptsovits/v4-base` | v4 | 937 MB | 4 GB | |
-| `gptsovits/v5turbo-base` | v5 Turbo | 934 MB | 4 GB | |
+| `gptsovits/v2-base` | v2 | 249 MB | 1.2 GB | |
+| `gptsovits/v2pro-base` | v2Pro | 303 MB | 1.4 GB | 是 |
+| `gptsovits/v2proplus-base` | v2ProPlus | 339 MB | 1.5 GB | |
+| `gptsovits/v4-base` | v4 | 937 MB | 2 GB | |
+| `gptsovits/v5turbo-base` | v5 Turbo | 934 MB | 2 GB | |
 
 - **能力**：**克隆音色**、**多段参考**（最多 4 段）、**训练音色**、**语速**、**批量**（最多 20 条）、**长文本**、**流式输出**、**种子**；v2、v2Pro、v2ProPlus 另有 **无文本克隆**。
 - **采样率**：v2 / v2Pro / v2ProPlus 为 32 kHz，v4 / v5 Turbo 为 48 kHz。
@@ -151,7 +151,7 @@ Web UI 中，**模型** › **引擎** 列出每个引擎的可用状态、设�
 
 | 模型 | 变体 | 大小 | 显存 | 推荐 |
 | --- | --- | --- | --- | --- |
-| `omnivoice/omnivoice` | OmniVoice | 3.1 GB | 5 GB | 是 |
+| `omnivoice/omnivoice` | OmniVoice | 3.1 GB | 2.2 GB | 是 |
 
 - **能力**：**克隆音色**、**按属性设计**、**自带音色**、**行内标签**、**发音控制**、**语速**、**时长**、**批量**（最多 8 条）、**长文本**、**种子**。克隆时 Mizuoto 总会提供文本（缺少时由语音识别补全），所以 OmniVoice 不会自己加载 Whisper。
 - **设计属性**：gender（male、female）、age（child … elderly）、pitch（very low pitch … very high pitch）、style（whisper）、accent（american accent 等 10 种）、dialect（河南话、四川话、东北话等 12 种）。不接受自由描述。
@@ -166,9 +166,9 @@ OpenBMB 的无离散分词语音合成：逐个“块”（patch）生成连续�
 
 | 模型 | 变体 | 大小 | 显存 | 推荐 |
 | --- | --- | --- | --- | --- |
-| `voxcpm/2` | VoxCPM2 | 5.0 GB | 6.5 GB | 是 |
-| `voxcpm/1.5` | VoxCPM 1.5 | 2.0 GB | 3 GB | |
-| `voxcpm/0.5b` | VoxCPM 0.5B | 1.6 GB | 2.5 GB | |
+| `voxcpm/2` | VoxCPM2 | 5.0 GB | 5.6 GB | 是 |
+| `voxcpm/1.5` | VoxCPM 1.5 | 2.0 GB | 2.9 GB | |
+| `voxcpm/0.5b` | VoxCPM 0.5B | 1.6 GB | 2.2 GB | |
 
 - **能力**：VoxCPM2：**克隆音色**、**无文本克隆**、**按描述设计**、**指令**、**自带音色**、**流式输出**（每 40 毫秒一块）、**种子**。VoxCPM 1.5 和 0.5B：**克隆音色**（需要参考文本，缺少时由语音识别补全）、**自带音色**、**流式输出**、**种子**。
 - **克隆**：有参考文本时，VoxCPM2 同时把参考音频作为独立的参考和待续写的开头（与上游演示相同；选项 **reference_prefix** 关闭后只续写）；没有文本时只作为参考。VoxCPM 1.5 和 0.5B 以续写方式克隆。
@@ -186,14 +186,14 @@ Fish Audio S2 Pro：双自回归模型，约一千万小时、五十种左右语
 
 | 模型 | 变体 | 大小 | 显存 | 推荐 |
 | --- | --- | --- | --- | --- |
-| `fishspeech/s2-pro` | S2 Pro | 10.5 GB | 22 GB | 是 |
+| `fishspeech/s2-pro` | S2 Pro | 10.5 GB | 10.2 GB | 是 |
 | `fishspeech/drama-3` | Drama 3 | 38.7 GB | 44 GB（显存少得多也能运行：专家从内存流式加载） | |
 
 - **能力**：**克隆音色**、**多段参考**（最多 4 段）、**行内标签**、**对话**、**流式输出**（按段）、**种子**；Drama 3 还有 **自带音色**（不需要参考音频）。采样率 44.1 kHz。
 - **参考音频**：2–30 秒。
 - **Drama 3** 接受写在文本中的自然语言指示（`[whispering]`、`[laughing]`、`[sighs]`、`<whisper>…</whisper>`），最多十六个说话人（`<|speaker:0|>`…`<|speaker:15|>`）；参考文本以某个说话人标签开头时，该段参考音频就是这个说话人的音色。长文本切成约 300 字节、每段最多三个说话人的片段（`single_chunk` 则一次生成全文）。参数默认与上游相同：temperature 0.7、top-p 0.7、top-k 30（`top_k`，仅 Drama 3）、每段最多 1024 帧。`sampler` 选项可选用 Fish Audio 的参考采样器（`reference_argmax`、`reference_ras`）及其 `epsilon_cutoff`。它需要约 45 GB 空闲内存：GPU 放不下时专家（32 GB，保持 FP8）留在内存中，每个 token 只复制它用到的专家（比能放下整个模型的 GPU 慢，但 24 GB 甚至更小的显卡也能运行）。在 CPU 上以 fp32 运行，每帧约两秒（一秒语音 21.5 帧）。上游只支持 48 GB 显存的 NVIDIA GPU；Drama 3 没有 LoRA 训练（上游没有）。
 - **许可**：S2 Pro 采用 Fish Audio Research License（不可商用），Drama 3 采用 Fish Audio Community License 1.0（年收入低于 50 万美元时才可商用，且不可提供托管的语音合成服务；请阅读全文）。该引擎需要同时接受两份许可：接受后记录为 `fish-audio-research+fish-audio-community@2026-03-07+1.0`，因此之前只接受了研究许可的需要重新接受。结果不能用于训练其他引擎，结果下方显示 "Built with Fish Audio"；每条结果按其模型的许可打标签。
-- **设备**：GPU 上用 bf16；CPU 上用 fp32（bf16 在 CPU 上是模拟的，慢得多）。S2 Pro 显存需求约 22 GB。
+- **设备**：GPU 上用 bf16；CPU 上用 fp32（bf16 在 CPU 上是模拟的，慢得多）。S2 Pro 显存需求约 10 GB。
 - **训练**（S2 Pro）：**Fine-tune with LoRA**（`lora`，GPU 或 CPU）：上游的 LoRA 流程（提取语义 token、打包、训练、合并），导出为新模型。上游提醒它学到的更多是说话风格而不是音色；需要 24 GB 显存，结果仍受 Fish Audio 研究许可约束。
 - Mizuoto 目录中没有 int8 版本（官方没有公开该仓库）。
 
@@ -203,9 +203,9 @@ Fish Audio S2 Pro：双自回归模型，约一千万小时、五十种左右语
 
 | 模型 | 变体 | 大小 | 显存 | 推荐 |
 | --- | --- | --- | --- | --- |
-| `indextts/v1.5` | IndexTTS-1.5 | 1.6 GB | 4 GB | |
-| `indextts/v2` | IndexTTS-2 | 5.6 GB | 9 GB | 是 |
-| `indextts/v2.5` | IndexTTS-2.5 | 5.2 GB | 9 GB | |
+| `indextts/v1.5` | IndexTTS-1.5 | 1.6 GB | 2.5 GB | |
+| `indextts/v2` | IndexTTS-2 | 5.6 GB | 8.5 GB | 是 |
+| `indextts/v2.5` | IndexTTS-2.5 | 5.2 GB | 5.2 GB | |
 
 | 变体 | 采样率 | 主要能力 |
 | --- | --- | --- |

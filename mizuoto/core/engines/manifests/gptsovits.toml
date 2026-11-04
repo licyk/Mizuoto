@@ -258,7 +258,7 @@ id = "gptsovits/v2pro-base"
 variant = "v2pro"
 title = "GPT-SoVITS v2Pro"
 description = "v2 with speaker-verification conditioning: closer timbre at v2's speed, 32 kHz."
-vram_mb = 2500
+vram_mb = 1400
 recommended = true
 assets = ["gptsovits/encoders", "gptsovits/g2pw", "gptsovits/nltk-data", "gptsovits/open-jtalk"]
 files = { hf = "lj1995/GPT-SoVITS", include = ["s1v3.ckpt", "v2Pro/s2Gv2Pro.pth"], manifest = "gptsovits-v2pro.files.json" }
@@ -268,7 +268,7 @@ id = "gptsovits/v2proplus-base"
 variant = "v2proplus"
 title = "GPT-SoVITS v2ProPlus"
 description = "A larger v2Pro SoVITS, 32 kHz."
-vram_mb = 2800
+vram_mb = 1500
 assets = ["gptsovits/encoders", "gptsovits/g2pw", "gptsovits/nltk-data", "gptsovits/open-jtalk"]
 files = { hf = "lj1995/GPT-SoVITS", include = ["s1v3.ckpt", "v2Pro/s2Gv2ProPlus.pth"], manifest = "gptsovits-v2proplus.files.json" }
 
@@ -286,7 +286,7 @@ id = "gptsovits/v5turbo-base"
 variant = "v5turbo"
 title = "GPT-SoVITS v5 Turbo"
 description = "v5 in four flow steps, 48 kHz; needs the reference transcript."
-vram_mb = 4000
+vram_mb = 2000
 assets = ["gptsovits/encoders", "gptsovits/g2pw", "gptsovits/nltk-data", "gptsovits/open-jtalk"]
 files = { hf = "lj1995/GPT-SoVITS", include = ["s1v3.ckpt", "gsv-v5-pretrained/s2Gv5turbo.pth", "gsv-v5-pretrained/vocoder.pth"], manifest = "gptsovits-v5turbo.files.json" }
 
