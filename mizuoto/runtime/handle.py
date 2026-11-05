@@ -30,7 +30,7 @@ import threading
 from collections.abc import Iterable
 from typing import TYPE_CHECKING, Any, Literal
 
-from mizuoto.runtime import pinning
+from mizuoto.runtime import filemap, pinning
 from mizuoto.runtime.rows import ATTRIBUTE as ROWS_ATTRIBUTE
 from mizuoto.runtime.units import Mark, Split, Unit, split
 
@@ -133,7 +133,14 @@ class ModelHandle:
 
     @property
     def host_bytes(self) -> int:
-        return sum(t.numel() * t.element_size() for t in self._host.values())
+        """Bytes of weights kept in RAM (host copies and streamed units), not those kept in files (``disk_bytes``)."""
+        return sum(t.numel() * t.element_size() for t in self._host.values() if not filemap.is_file_backed(t))
+
+    @property
+    def disk_bytes(self) -> int:
+        """Bytes of host weights kept in files because RAM could not hold them (``runtime.filemap``): page cache while
+        RAM is free, read from the file again when it is not."""
+        return sum(t.numel() * t.element_size() for t in self._host.values() if filemap.is_file_backed(t))
 
     @property
     def pinned_bytes(self) -> int:
@@ -451,7 +458,12 @@ class ModelHandle:
                 m.__dict__.pop(ROWS_ATTRIBUTE, None)
 
     def take_row(self, module: Any, name: str, row: int) -> Any:
-        """Row ``row`` of a streamed row layer's parameter on the load device (``runtime.rows.RowSource.take``)."""
+        """Row ``row`` of a streamed row layer's parameter on the load device (``runtime.rows.RowSource.take``). Checks for
+        a cancel first: a layer can read hundreds of rows (a prompt's prefill, expert by expert), each from a file when RAM
+        could not hold them (``runtime.filemap``), so a cancel is not left waiting for the whole layer."""
+        from mizuoto.runtime.context import check_cancel
+
+        check_cancel()
         host = self._host[(id(module), name)]
         t = _copy(host[row], self.load_device)
         if self._streamer is not None:

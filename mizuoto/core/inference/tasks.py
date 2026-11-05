@@ -132,6 +132,9 @@ class LoadSpec:
     device: str
     dtype: str = "auto"
     options: dict[str, Any] = field(default_factory=dict)
+    scratch_dir: Path | None = None
+    """A folder on disk for the engine's temporary files (weights kept in files when RAM cannot hold them,
+    ``runtime.filemap``); None: keep everything in RAM."""
 
 
 @dataclass

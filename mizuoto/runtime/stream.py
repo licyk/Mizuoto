@@ -28,7 +28,7 @@ import threading
 from collections import OrderedDict
 from typing import TYPE_CHECKING, Any
 
-from mizuoto.runtime import pinning
+from mizuoto.runtime import filemap, pinning
 
 if TYPE_CHECKING:
     from mizuoto.runtime.handle import ModelHandle
@@ -111,8 +111,8 @@ class Streamer:
                 for m, n in u.slots:
                     key = (id(m), n)
                     host = handle._host.get(key)
-                    if host is None or key in done or host.is_pinned():
-                        continue
+                    if host is None or key in done or host.is_pinned() or filemap.is_file_backed(host):
+                        continue  # (a file-backed weight is never page-locked, nor copied into page-locked memory)
                     if in_place and pinning.pin(host, self._pin, self.device):
                         continue  # registered where it is (released with its storage); a small one is copied below
                     size = host.numel() * host.element_size()

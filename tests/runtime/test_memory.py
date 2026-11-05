@@ -203,6 +203,41 @@ def test_row_layers_stream_only_the_rows_a_call_reads():
         assert torch.equal(model(x, ids), expected)
 
 
+def test_a_cancel_is_honoured_between_the_rows_a_layer_reads():
+    """A streamed row layer checks for a cancel before each row it copies (a prefill reads hundreds, perhaps from a
+    file), so a cancel waits for one row, not the whole layer; uncancelled, the same result."""
+    from mizuoto.runtime.context import Cancelled, RequestContext
+
+    model = Mixture()
+    x = torch.randn(2, 128, generator=torch.Generator().manual_seed(1))
+    ids = torch.tensor([9, 1])
+    with torch.inference_mode():
+        expected = model(x, ids)
+    h = ModelHandle(model, name="m", load_device="cpu", kind="sequence")
+    h.simulated = True
+    streamer = Streamer("cpu")
+    h.load(h.fixed_bytes + h.units[0].bytes + h.stream_reserve(h.units, 1), streamer)
+    ctx = RequestContext("r")
+    taken = []
+    original = h.take_row
+
+    def take(module, name, row):
+        taken.append(row)
+        out = original(module, name, row)
+        if len(taken) == 2:
+            ctx.cancel_event.set()  # cancelled once the layer's second row is copied
+        return out
+
+    h.take_row = take  # ty: ignore[invalid-assignment]
+    with ctx.bind(), torch.inference_mode(), pytest.raises(Cancelled):
+        model(x, ids)
+    assert len(taken) == 3  # the third row's check raised before its copy
+    h.settle()
+    ctx.cancel_event.clear()
+    with ctx.bind(), torch.inference_mode():
+        assert torch.equal(model(x, ids), expected)
+
+
 def test_oneshot_handles_keep_their_largest_units_and_hot_units_first():
     class Mixed(nn.Module):
         def __init__(self) -> None:
@@ -1040,7 +1075,7 @@ def test_a_request_reports_the_highest_peak_of_its_measured_phases():
     with m.use([h], 100 * MB):  # no request bound
         pass
     assert ctx.device_peak == 1000 + 700 * MB
-    assert set(m.owner_usage("M")) == {"loaded", "streamed", "host", "pinned"}
+    assert set(m.owner_usage("M")) == {"loaded", "streamed", "host", "pinned", "disk"}
 
 
 def test_a_stage_preview_places_weights_as_the_host_would(tmp_path, monkeypatch):

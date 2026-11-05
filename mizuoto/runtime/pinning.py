@@ -27,6 +27,8 @@ from typing import TYPE_CHECKING, Any
 if TYPE_CHECKING:
     from mizuoto.runtime.stream import PinBudget
 
+from mizuoto.runtime import filemap
+
 logger = logging.getLogger(__name__)
 
 MIN_BYTES = 1 << 20
@@ -51,8 +53,8 @@ def pin(t: Any, budget: PinBudget, device: str) -> bool:
     its pages are page-locked now (by this call or before)."""
     import torch
 
-    if t.device.type != "cpu" or not usable(device):
-        return False
+    if t.device.type != "cpu" or not usable(device) or filemap.is_file_backed(t):
+        return False  # a file-backed weight stays pageable: locking it would read the whole file into RAM and keep it
     storage = t.untyped_storage()
     ptr, size = storage.data_ptr(), storage.nbytes()
     with _lock:

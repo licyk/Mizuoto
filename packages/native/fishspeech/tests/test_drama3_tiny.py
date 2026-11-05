@@ -8,6 +8,7 @@ both samplers, seeds, streaming, voice caches, cancellation, and the experts str
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import threading
 import wave
@@ -353,6 +354,108 @@ def test_runs_identically_with_its_weights_placed_by_phase_and_its_experts_strea
     assert all(rows.source(layer.mlp.experts) is None for layer in loaded.backbone.model.layers)  # whole again after
     text = " ".join(f"Sentence number {i} goes on for a while, with commas and clauses." for i in range(4))
     check_streamed(loaded, lambda m: run(m, text=text, stream=True), monkeypatch)
+
+
+def _load_with_ram(model_dir, scratch: Path, ram_for_layers: float | None):
+    """The tiny model loaded for a simulated accelerator with RAM for ``ram_for_layers`` layers' experts beside the rest
+    (None: plenty), its scratch folder ``scratch``."""
+    engine = get_engine("fishspeech")
+    devices = DeviceService(simulate={"cpu": 1 << 40})
+    runtime = Runtime(devices, ModelManager(devices))
+    shards = sum(f.stat().st_size for f in model_dir.glob("*.safetensors"))
+    codec = (model_dir / "codec.pth").stat().st_size
+    total = 8 << 30
+    reserve = runtime.policy.ram_reserve(total)
+    probe = engine_module_load(engine, model_dir, runtime, None)
+    block = sum(p.numel() * p.element_size() for p in probe.backbone.model.layers[0].mlp.experts.parameters())
+    layers = len(probe.backbone.model.layers)
+    probe.close()
+    other = shards - block * layers + codec
+    available = (1 << 40) if ram_for_layers is None else int(reserve + (2 << 30) + other + ram_for_layers * block)
+    devices.memory = lambda name: (available, total) if name == "cpu" else (None, None)  # ty: ignore[invalid-assignment]
+    return engine_module_load(engine, model_dir, runtime, scratch)
+
+
+def engine_module_load(engine, model_dir, runtime, scratch):
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(engine_module, "codec_config", lambda folder: TINY_CODEC)
+        spec = LoadSpec("fishspeech/tiny-drama3", model_dir, "drama3", "cpu", options={}, scratch_dir=scratch)
+        return engine.load(spec, runtime, RequestContext("load"))
+
+
+@pytest.mark.skipif("scratch_dir" not in {f.name for f in dataclasses.fields(LoadSpec)}, reason="Mizuoto before 0.2.37 keeps every weight in RAM")
+def test_experts_ram_cannot_hold_are_kept_in_files_and_speak_identically(loaded, model_dir, reference, tmp_path, monkeypatch):
+    """With RAM for one layer's experts beside the rest, the other layers' experts are kept in unlinked files
+    (``runtime.filemap``): the same values as the all-in-RAM load, nothing left in the scratch folder, and the same audio
+    whole and streamed by the row on a simulated device. With plenty of RAM nothing goes to files."""
+    from mizuoto.runtime import filemap
+    from tests.engines_native.streaming import check_streamed
+
+    scratch = tmp_path / "scratch"
+    short = _load_with_ram(model_dir, scratch, 1.5)
+    try:
+        plan = short.experts_plan
+        layers = short.backbone.model.layers
+        assert plan is not None and (plan.in_ram, plan.in_files) == (1, len(layers) - 1)
+        backed = [all(filemap.is_file_backed(p) for p in layer.mlp.experts.parameters()) for layer in layers]
+        assert backed == [False] + [True] * (len(layers) - 1)
+        assert not any(filemap.is_file_backed(p) for name, p in short.backbone.named_parameters() if ".experts." not in name)
+        assert not list((scratch / "weights").iterdir())  # unlinked as soon as mapped
+        mine = dict(short.backbone.named_parameters())
+        for name, p in loaded.backbone.named_parameters():
+            assert torch.equal(p.view(torch.uint8) if p.dtype == torch.float8_e4m3fn else p, mine[name].view(torch.uint8) if p.dtype == torch.float8_e4m3fn else mine[name]), name
+        expected = np.concatenate([c.samples for c in speak(loaded, voice_of(reference))[0]])
+        got = np.concatenate([c.samples for c in speak(short, voice_of(reference))[0]])
+        assert np.array_equal(got, expected)
+
+        def run(manager, **kw):
+            ctx = RequestContext("r", seed=3)
+            ctx.manager = manager
+            return np.concatenate([c.samples for c in speak(short, voice_of(reference), ctx=ctx, **kw)[0]])
+
+        streamed = check_streamed(short, run, monkeypatch)
+        assert streamed[0] > 0
+    finally:
+        short.close()
+    plenty = _load_with_ram(model_dir, scratch, None)
+    try:
+        assert plenty.experts_plan is None
+        assert not any(filemap.is_file_backed(p) for p in plenty.backbone.parameters())
+    finally:
+        plenty.close()
+
+
+@pytest.mark.skipif("scratch_dir" not in {f.name for f in dataclasses.fields(LoadSpec)}, reason="Mizuoto before 0.2.37 keeps every weight in RAM")
+def test_a_full_disk_keeps_the_rest_of_the_experts_in_ram(loaded, model_dir, reference, tmp_path, monkeypatch):
+    """When the scratch disk fills up after one layer, that layer's experts stay in their file and the rest in RAM, as
+    before the plan: the load goes on and speaks identically."""
+    import errno
+
+    from mizuoto.runtime import filemap
+
+    calls = {"n": 0}
+    original = filemap.reserve_blocks
+    per_layer = 4  # the experts' four stacks (FP8 weights and their scales)
+
+    def fills_up(fd, folder, nbytes):
+        calls["n"] += 1
+        if calls["n"] > per_layer:
+            raise OSError(errno.ENOSPC, "No space left on device")
+        return original(fd, folder, nbytes)
+
+    monkeypatch.setattr(filemap, "reserve_blocks", fills_up)
+    scratch = tmp_path / "scratch"
+    short = _load_with_ram(model_dir, scratch, 1.5)
+    try:
+        layers = short.backbone.model.layers
+        backed = [all(filemap.is_file_backed(p) for p in layer.mlp.experts.parameters()) for layer in layers]
+        assert backed == [False, True] + [False] * (len(layers) - 2)
+        assert short.experts_plan is not None and short.experts_plan.in_files == 1
+        assert not list((scratch / "weights").iterdir())
+        expected = np.concatenate([c.samples for c in speak(loaded, voice_of(reference))[0]])
+        assert np.array_equal(np.concatenate([c.samples for c in speak(short, voice_of(reference))[0]]), expected)
+    finally:
+        short.close()
 
 
 # -- CUDA graphs ------------------------------------------------------------------------------------------------------

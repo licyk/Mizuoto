@@ -536,8 +536,9 @@ class ModelManager:
             return [{"component": e.handle.name.split(":", 1)[-1], **e.handle.placement} for e in self._entries if e.owner == owner and e.handle.partial and e.handle.placement]
 
     def owner_usage(self, owner: str) -> dict[str, int]:
-        """``loaded``, ``streamed``, ``host`` and ``pinned`` bytes of ``owner``'s components (host: weights kept in RAM, as
-        host copies or streamed; pinned: the page-locked part of those)."""
+        """``loaded``, ``streamed``, ``host``, ``pinned`` and ``disk`` bytes of ``owner``'s components (host: weights kept in
+        RAM, as host copies or streamed; pinned: the page-locked part of those; disk: weights kept in files because RAM
+        could not hold them, ``runtime.filemap``)."""
         with self._lock:
             mine = [e.handle for e in self._entries if e.owner == owner]
             return {
@@ -545,6 +546,7 @@ class ModelManager:
                 "streamed": sum(h.streamed_bytes for h in mine),
                 "host": sum(h.host_bytes for h in mine),
                 "pinned": sum(h.pinned_bytes for h in mine),
+                "disk": sum(h.disk_bytes for h in mine),
             }
 
     def streamed_bytes(self, device: str) -> int:

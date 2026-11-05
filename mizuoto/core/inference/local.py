@@ -174,7 +174,7 @@ class LocalEngine:
         if self.make_room is not None:
             self.make_room(model_id)
         merged = {**(options or {}), **(self.model_options(model_id) if self.model_options is not None else {})}
-        spec = LoadSpec(model_id, Path(model_dir) if model_dir else None, variant, self.device, dtype, merged)
+        spec = LoadSpec(model_id, Path(model_dir) if model_dir else None, variant, self.device, dtype, merged, scratch_dir=self.scratch_dir)
         runtime = self._inference.runtime  # applies the CPU settings, which must precede torch's import
         from mizuoto.runtime.loading import placing, trim_heap
 
@@ -278,6 +278,8 @@ class LocalEngine:
                         "pinned_mb": round(usage["pinned"] / 2**20, 1),
                     }
                 )
+                if usage.get("disk"):  # weights kept in files because RAM could not hold them (runtime.filemap)
+                    request.memory["disk_mb"] = round(usage["disk"] / 2**20, 1)
                 if ctx.device_peak:
                     request.memory["peak_mb"] = round(ctx.device_peak / 2**20, 1)
                 partial = manager.owner_placements(self._owner(model_id))

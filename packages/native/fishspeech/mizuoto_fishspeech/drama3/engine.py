@@ -16,6 +16,7 @@ CPU is upstream's modules run there in float32.
 from __future__ import annotations
 
 import json
+import logging
 from collections.abc import Iterator
 from typing import TYPE_CHECKING, Any
 
@@ -26,9 +27,64 @@ from mizuoto_fishspeech.engine import SAMPLE_RATE, LoadedFishSpeech, _dtype
 if TYPE_CHECKING:
     from mizuoto.runtime.context import RequestContext
     from mizuoto.runtime.engine import SynthesisTask
+    from mizuoto.runtime.filemap import Plan
+    from mizuoto.runtime.runtime import Runtime
     from mizuoto_fishspeech.drama3.tower import Fallback
 
 SAMPLERS: dict[str, Fallback | None] = {"default": None, "reference_argmax": "argmax", "reference_ras": "ras"}
+
+log = logging.getLogger(__name__)
+
+
+def experts_to_files(backbone: Any, spec: LoadSpec, runtime: Runtime | None) -> Plan | None:
+    """Give the routed experts of the last layers that RAM cannot hold memory in files (``runtime.filemap``), before
+    ``load_backbone`` fills them; the plan, or None when everything stays in RAM as before.
+
+    Only for a model on an accelerator (the experts then only feed copies to it; weights the CPU computes with stay the
+    process's own memory) with a scratch folder from the core. While the model loads, RAM holds the experts and the
+    rest of the checkpoint (the dense weights and the codec, which move to the device later), so the plan counts them:
+    the experts that fit beside them within the available RAM, less ``compute.ram_reserve_mb`` and a margin, stay as
+    before, and only the rest go to files. With enough RAM nothing changes."""
+    import torch
+
+    scratch_dir = getattr(spec, "scratch_dir", None)  # (a Mizuoto before 0.2.37 gives none: everything in RAM, as before)
+    if runtime is None or scratch_dir is None or spec.model_dir is None:
+        return None
+    from mizuoto.runtime import filemap
+    from mizuoto_fishspeech.drama3.moe import Experts
+
+    if torch.device(spec.device).type == "cpu" and runtime.devices.simulated(spec.device) is None:
+        return None
+    layers = [m for m in backbone.modules() if isinstance(m, Experts)]
+    if not layers:
+        return None
+    block = sum(p.numel() * p.element_size() for p in layers[0].parameters())
+    shards = sum(f.stat().st_size for f in spec.model_dir.glob("*.safetensors"))
+    codec = spec.model_dir / "codec.pth"
+    other = max(0, shards - block * len(layers)) + (codec.stat().st_size if codec.is_file() else 0)
+    available, total = runtime.devices.memory("cpu")
+    plan = filemap.plan(len(layers), block, other, available, runtime.policy.ram_reserve(total))
+    if not plan.in_files:
+        return None
+    folder = scratch_dir / "weights"
+    moved = 0
+    try:
+        for experts in layers[plan.in_ram :]:
+            for p in experts.parameters():
+                p.data = filemap.scratch(folder, tuple(p.shape), p.dtype)
+            moved += 1
+    except OSError as e:  # no room or no permission there: the rest stay in RAM, as before
+        log.warning("Could not keep Drama 3's experts in files under %s (%s): the rest stay in RAM", folder, e)
+    if not moved:
+        return None
+    gib = 2**30
+    message = (
+        f"RAM cannot hold all of Drama 3's experts ({(available or 0) / gib:.1f} GB available, "
+        f"{runtime.policy.ram_reserve(total) / gib:.1f} GB kept free): {moved} of {len(layers)} layers' experts "
+        f"({moved * block / gib:.1f} GB) are kept in files, read back from the page cache or the disk as tokens use them"
+    )
+    log.info(message)
+    return filemap.Plan(len(layers) - moved, moved, block, available, plan.budget)
 
 
 class LoadedDrama3(LoadedFishSpeech):
@@ -36,7 +92,7 @@ class LoadedDrama3(LoadedFishSpeech):
 
     PHASED = True
 
-    def __init__(self, spec: LoadSpec, ctx: RequestContext, cuda_graphs: bool = True) -> None:
+    def __init__(self, spec: LoadSpec, ctx: RequestContext, cuda_graphs: bool = True, runtime: Runtime | None = None) -> None:
         import torch
 
         from mizuoto.nn.dsp.resample import Resample
@@ -64,6 +120,8 @@ class LoadedDrama3(LoadedFishSpeech):
         for name, p in backbone.named_parameters():
             if ".experts." not in name or not self.config.fp8_experts:
                 p.data = p.data.to(self.dtype)
+        # the experts RAM cannot hold beside everything else go to files before they are filled (runtime.filemap)
+        self.experts_plan = experts_to_files(backbone, spec, runtime)
         load_backbone(backbone, checkpoint_tensors(folder, skip=TOWER_PREFIXES))
         self.backbone = backbone.eval()
 

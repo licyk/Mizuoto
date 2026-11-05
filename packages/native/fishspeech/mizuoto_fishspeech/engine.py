@@ -71,7 +71,7 @@ class FishSpeechEngine(Engine):
         if variant == "drama3":
             from mizuoto_fishspeech.drama3.engine import LoadedDrama3
 
-            return LoadedDrama3(spec, ctx, runtime.options.cuda_graphs)
+            return LoadedDrama3(spec, ctx, runtime.options.cuda_graphs, runtime=runtime)
         return LoadedFishSpeech(spec, ctx, runtime.options.cuda_graphs, runtime.options.compile)
 
 

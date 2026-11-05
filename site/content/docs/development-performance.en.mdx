@@ -688,6 +688,30 @@ The last gate of the memory work, measured on an RTX 3090 (2026-10-19): the G0 c
 
 The first request pays the compilation: +30 s to +160 s. The audio is not identical ([Acceleration](/docs/development-acceleration#torchcompile-computecompile)).
 
+## Experts kept in files (2026-11-05)
+
+Drama 3's experts beyond the RAM budget kept in files (`runtime.filemap`, [Memory](/docs/development-memory#host-copies-and-ram)), with the guards it needs elsewhere (no file-backed tensor is page-locked; `disk_bytes` apart from `host_bytes`; a cancel checked before each row a streamed layer copies). Checked on the vllm_server's RTX 3060 (12 GB, PCIe x4, 31 GB of RAM, torch 2.8), Mizuoto 0.2.36 (`10515bc`) against the change, one model per process, two runs each (the second warm), alternated base/new/base/new per engine, the G10 cases:
+
+| Engine | Pass | 0.2.36 warm (s) | Change warm (s) | Difference |
+| --- | --- | --- | --- | --- |
+| Qwen3-TTS | default | 1.26 / 1.26 | 1.26 / 1.26 | 0.0 % |
+| F5-TTS | default | 1.73 / 1.72 | 1.73 / 1.73 | +0.3 % |
+| OmniVoice | default | 1.48 / 1.47 | 1.48 / 1.48 | +0.3 % |
+| CosyVoice 2 | default | 1.77 / 1.77 | 1.78 / 1.78 | +0.6 % |
+| GPT-SoVITS | default | 0.67 / 0.67 / 0.67 / 0.66 / 0.66 | 0.67 / 0.69 / 0.67 / 0.67 / 0.67 | noise (engine time 0.64–0.65 s both) |
+| IndexTTS 2 | default | 3.98 / 3.99 | 4.00 / 4.00 | +0.4 % |
+| VoxCPM 2 | default | 4.09 / 4.09 | 4.09 / 4.10 | +0.1 % |
+| Fish S2 Pro | default | 6.26 / 6.28 | 6.27 / 6.28 | +0.1 % |
+| Qwen3-TTS | `vram_limit_mb=4096` (streamed) | 18.56 / 18.59 | 18.56 / 18.55 | −0.1 % |
+| IndexTTS 2 | `vram_limit_mb=4096` | 131.3 / 131.2 | 131.0 / 133.1 | +0.6 % |
+| Fish S2 Pro | `vram_limit_mb=4096` | 228.3 / 228.3 | 229.5 / 228.8 | +0.4 % |
+
+Every run's audio was identical to 0.2.36's first round (39 comparisons). The differences are within the runs' own spread; none of these models has a file-backed weight, so the only new work on their path is a check of each host tensor's storage when it is pinned. This build had neither the per-row cancel check nor the full-disk guard, added after: the first runs only for row-streamed layers (Drama 3's alone), the second only when a file is made, so neither is on these engines' path; Drama 3 was timed again with the final code (below).
+
+On the CPU (the 13 cases of the CPU rounds, a Ryzen 9 5900X shared with another workload, the same two builds alternated, two rounds each): all 39 comparisons identical; the warm runs differ by −7.2 to +5.0 % in both directions, −0.4 % on average, within that machine's spread (the base build's own two rounds differ by up to 12 %). On the CPU nothing streams, so nothing new runs there but the storage check in `host_bytes`.
+
+Drama 3 itself, which could not load on this machine before (its 30 GiB of experts beside the rest of the model in 31 GB), with the final code: 21.5 GB of experts in files, 16.3 GB in page-locked RAM, 9.1 GB on the GPU; the first load 81 s; a warm request of 5.5–8.3 s of speech 129–162 s, 176–226 GB copied to the GPU a request (1.4 GB/s; the link carries 2.9); each case's two runs identical; RAM never under 7.9 GB available. Read from the disk in a warm request (`/proc/self/io`): 32.4, 27.8, 15.2 and 17.1 GiB (clone en, clone zh, its own voice with tags, dialogue). With 57 % of the experts in files, about 100–130 GB of a request's reads come from them, so the page cache served 72–87 % of those and the disk 13–28 % (8–15 % of all that was copied). Its contract suite with a reference clip: load, every voice mode in English and Chinese (Whisper's WER under 0.35), seeds and segments, streaming, unloading and no residue pass. Cancelling took 2.0 s against the suite's 2 s, from a cancel that arrived while the backbone was being placed again after the unloading test: copying 9 GB to the GPU and page-locking 17 GB of RAM (44 s on its first placement) check for no cancel; cancelled while generating, it stopped within 0.1 s.
+
 ## Not done because it changes results
 
 - bf16 or quantised weights, another thread count, the tanh form of GELU, SDPA's grouped-query path for Fish Speech's repeated heads, a static KV cache by default.
