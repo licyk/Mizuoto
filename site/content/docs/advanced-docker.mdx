@@ -29,6 +29,7 @@ icon: Container
 docker build -t mizuoto .                                                          # CUDA 12.8
 docker build -t mizuoto:cpu --build-arg TORCH_INDEX=https://download.pytorch.org/whl/cpu .
 docker build -t mizuoto --build-arg GATED=1 .                                      # 带 Fish Speech 和 IndexTTS
+docker build -t mizuoto --build-arg ACCEL=1 .                                      # 带 xFormers 和 SageAttention 1.0.6（compute.attention）
 ```
 
 ### 镜像里有什么
@@ -36,6 +37,7 @@ docker build -t mizuoto --build-arg GATED=1 .                                   
 - 没有额外的系统软件包：torch、PyAV 和文本处理库的原生代码都在各自的 wheel 里。
 - torch，然后是 Mizuoto 及 `mizuoto[gptsovits-ja,gptsovits-ko]`（`GATED=1` 时还有 `mizuoto-indextts[ja]`）；其余依赖在构建镜像时从 PyPI 安装。
 - 没有 C 编译器，所以 **编译模型（torch.compile）** 不起作用：引擎照常运行，并给出一次警告。
+- 使用 `ACCEL=1` 时，加入不需要编译器就能安装的可选注意力包：`mizuoto doctor` 为镜像中的 torch 给出的 xFormers 版本（CPU 版 torch 没有），以及 CUDA 版上的 SageAttention 1.0.6。不包含 FlashAttention：除非有与 torch 匹配的 wheel，否则它要编译很久，而它唯一的 torch 2.8 wheel 会让 xFormers 0.0.32 无法导入。在 设置 › 计算 › 加速 中选择它们。
 - 环境变量：
 
 | 变量 | 值 | 作用 |

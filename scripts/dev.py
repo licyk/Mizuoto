@@ -185,6 +185,14 @@ def test_py(options: list[str]) -> int:
     return python("-m", "pytest", *options)
 
 
+@task(
+    "test-e2e",
+    "The browser tests: the built web UI on a real server in headless Chromium (pip install playwright; python -m playwright install chromium; python scripts/dev.py web)",
+)
+def test_e2e(options: list[str]) -> int:
+    return python("-m", "pytest", "tests/e2e", "-m", "e2e", *options, env={"CUDA_VISIBLE_DEVICES": ""})
+
+
 @task("test-engines", "The engine contract suite: test-engines [engine…] [-- pytest options] (MIZUOTO_TEST_DEVICE=cpu|cuda:N)")
 def test_engines(options: list[str]) -> int:
     split = options.index("--") if "--" in options else len(options)

@@ -41,7 +41,7 @@ mizuoto/webui/src/
 - **层级首先用表面色调表达**（`surface`、`surface-container-low` … `surface-container-highest`），阴影其次。
 - **颜色角色成对使用**：`primary` 容器上的内容用 `on-primary`，`surface-container` 上的用 `on-surface`；生成的成对角色保证对比度。
 - **动效**：命名的过渡（`fade-through`、`shared-axis-x`、`container`、`sheet`、`scrim`、`list` 等，`ui/motion/`），在支持的浏览器里用 View Transitions 做列表到详情的容器变换。系统或应用内选择“减少动效”时，所有过渡变成 100 ms 的淡入淡出，没有涟漪。
-- **布局**：compact 窗口用底部导航栏，更宽时用导航轨（`AppShell`）。
+- **布局**：compact 窗口用底部导航栏，更宽时用导航轨（`AppShell`）。底部导航栏遵守 Material 3 的三到五个目的地：超过五个时显示前四个和 **更多**，后者是放着其余目的地的 `AppMenu`（其中某个是当前页面时它显示为当前；其中有带徽标的目的地时显示导航轨的圆点）；目的地随窗口变窄，所以导航栏不会撑宽页面（八个目的地全放时，在 390 px 的手机上每个页面都有 512 px 宽）。
 - 字体（`@fontsource-variable/roboto-flex`）和图标都打包进 `dist/`，界面不从任何外部来源加载东西，离线也能用。
 
 ### 组件层：`src/ui/`

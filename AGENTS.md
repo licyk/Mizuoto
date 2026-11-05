@@ -224,6 +224,7 @@ python scripts/dev.py test-engines qwen3tts      # contract suite (installed mod
                                                  # MIZUOTO_TEST_SETTINGS='{"compute": {"vram_limit_mb": 4096}}')
 python scripts/dev.py model-manifests [engine]   # re-pin catalogue files after a manifest change
 python scripts/dev.py typegen                    # the web UI's API types
+python scripts/dev.py web && python scripts/dev.py test-e2e   # browser tests (tests/e2e; needs playwright + its chromium)
 python scripts/dev.py wheels && python scripts/dev.py smoke   # the distributions, tried in a new environment
 python scripts/dev.py site-dev | site | test-site             # the documentation site
 ```

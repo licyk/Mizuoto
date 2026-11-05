@@ -103,8 +103,8 @@ def _cuda_only(device: torch.device) -> str | None:
 
 
 def register(registry: Registry = REGISTRY) -> None:
-    registry.register(Backend("sdpa", _sdpa, Constraints(devices=ALL), exact=True, dropout=True, deterministic=False))
-    registry.register(Backend("math", _math, Constraints(devices=ALL), exact=True, dropout=True))
+    registry.register(Backend("sdpa", _sdpa, Constraints(devices=ALL), exact=True, dropout=True, deterministic=False, graph_safe=True))
+    registry.register(Backend("math", _math, Constraints(devices=ALL), exact=True, dropout=True, graph_safe=True))
     gpu = frozenset({"cuda", "rocm"})
     registry.register(
         Backend(
@@ -123,6 +123,7 @@ def register(registry: Registry = REGISTRY) -> None:
             ),
             dropout=True,
             deterministic=False,
+            graph_safe=True,
             probe=_cuda_only,
             accepts=_eligible("flash"),
         )
@@ -134,6 +135,7 @@ def register(registry: Registry = REGISTRY) -> None:
             Constraints(devices=gpu, dtypes=frozenset({torch.float16, torch.bfloat16, torch.float32})),
             dropout=True,
             deterministic=False,
+            graph_safe=True,
             probe=_cuda_only,
             accepts=_eligible("efficient"),
         )
@@ -146,6 +148,7 @@ def register(registry: Registry = REGISTRY) -> None:
                 Constraints(devices=frozenset({"cuda"}), min_capability=(8, 0), dtypes=HALF, max_head_dim=128, head_dim_multiple=8, same_v_dim=True),
                 dropout=True,
                 deterministic=False,
+                graph_safe=True,
                 probe=_cuda_only,
                 accepts=_eligible("cudnn"),
             )

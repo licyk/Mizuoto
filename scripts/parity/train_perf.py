@@ -1,7 +1,7 @@
 """Where a fine-tune's time goes, and whether an optimisation kept what it trains (the performance work's harness).
 
     <python> scripts/parity/train_perf.py run <engine> --fixture NAME --name NAME [--model ID] [--method M] [--hp k=v]...
-        [--device cuda:0] [--setting training.memory=low] [--profile] [--no-previews] [--reference NAME]
+        [--device cuda:0] [--setting training.memory=low] [--profile] [--no-previews] [--deterministic] [--reference NAME]
     <python> scripts/parity/train_perf.py compare --a NAME --b NAME [--report out.md]
 
 ``run`` trains as ``train.py`` does (a temporary data folder over the real models, the workspace's ``narrator`` dataset,
@@ -12,7 +12,10 @@ SHA-256 of the tensors of every weight file the export wrote (its other values a
 (identical metrics and weights). ``--profile`` runs the stages in this process instead, under cProfile
 (``<engine>-<fixture>-<stage>.prof`` and ``.profile.txt``). ``--device`` is the engine's device, which training uses
 (``training.devices`` is left empty); ``--setting key=value`` overrides a setting for the run, e.g.
-``training.memory=low``.
+``training.memory=low``. ``--deterministic`` trains under ``training.deterministic`` (deterministic kernels; attention
+with the math kernel unless ``training.attention`` names a backend), and the record lists, per stage, the attention
+backends whose backward pass did not repeat (``nondeterministic``, from each stage's attention report: an empty list
+is a run whose gradients repeat as far as attention goes).
 
 Results go to ``<perf workspace>/train/<name>/<engine>-<fixture>.json`` (``MIZUOTO_PERF_DIR``, default
 ``~/code_workspace/experiment/perf``).
@@ -163,6 +166,23 @@ def _repeat_clips(folder: Path, times: int) -> None:
     (folder / "manifest.jsonl").write_text("".join(json.dumps(r, ensure_ascii=False) + "\n" for r in out), encoding="utf-8")
 
 
+def _attention_reports(s: Any, job: Any) -> dict[str, Any]:
+    """Each stage's attention report (the ``attention: {…}`` line its log ends with under a policy), by stage. A run's
+    stages share their attention setting, so each wrote one or none did; they are paired with the stages in run order."""
+    lines: list[str] = []
+    offset = 0
+    while True:
+        log = s.jobs.read_log(job.id, offset)
+        lines += log.lines
+        if log.next_offset == offset:
+            break
+        offset = log.next_offset
+    reports = [json.loads(line[len("attention: ") :]) for line in lines if line.startswith("attention: {")]
+    stages = list((job.result or {}).get("stages") or {})
+    names = stages if len(stages) == len(reports) else [str(i) for i in range(len(reports))]
+    return dict(zip(names, reports, strict=True))
+
+
 def cmd_run(args: argparse.Namespace) -> int:
     from mizuoto.core.training.models import ExperimentInput
 
@@ -179,6 +199,8 @@ def cmd_run(args: argparse.Namespace) -> int:
     _install(timing, folder if args.profile else None, prefix)
     tmp = Path(tempfile.mkdtemp(prefix="train-perf-"))
     settings = parse_settings(args.setting or [])
+    if args.deterministic:
+        settings.setdefault("training", {})["deterministic"] = True
     s = build(args.device, tmp, "native", settings)
     try:
         s.settings.update({"training": {"previews": not args.no_previews}})
@@ -222,7 +244,10 @@ def cmd_run(args: argparse.Namespace) -> int:
             "steps": timing.steps,
             "metrics": metrics,
             "weights": weights,
+            "attention": _attention_reports(s, job),
         }
+        if args.deterministic:
+            record["nondeterministic"] = sorted({name for report in record["attention"].values() for name in report.get("nondeterministic", {})})
         if args.reference:
             ref = json.loads((PERF / "train" / args.reference / f"{prefix}.json").read_text(encoding="utf-8"))
             record["same_metrics"] = ref["metrics"] == metrics
@@ -291,6 +316,7 @@ def main(argv: list[str]) -> int:
     r.add_argument("--setting", action="append", help="A setting for the run, key=value (the value as JSON, else a string); repeatable")
     r.add_argument("--profile", action="store_true")
     r.add_argument("--no-previews", action="store_true")
+    r.add_argument("--deterministic", action="store_true", help="training.deterministic, and the attention backends whose backward did not repeat")
     r.add_argument("--reference")
     r.add_argument("--clips-repeat", type=int, default=1, help="Each dataset clip this many times (copies)")
     c = sub.add_parser("compare")

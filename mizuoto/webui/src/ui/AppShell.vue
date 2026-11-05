@@ -8,7 +8,7 @@ import Snackbar from '@/ui/Snackbar.vue';
 import TopAppBar from '@/ui/TopAppBar.vue';
 
 /** Navigation switches between a bottom bar (compact) and a rail (medium and wider). */
-withDefaults(defineProps<{ items: NavItem[]; footer?: NavItem[]; title: string }>(), { footer: () => [] });
+withDefaults(defineProps<{ items: NavItem[]; footer?: NavItem[]; title: string; moreLabel?: string }>(), { footer: () => [], moreLabel: 'More' });
 const windowClass = useWindowClass();
 const compact = computed(() => windowClass.value === 'compact');
 const content = ref<HTMLElement | null>(null);
@@ -27,7 +27,7 @@ defineExpose({ content });
            it is the page, the only thing a navigation fades through. -->
       <div class="frame"><main ref="content" class="content"><slot /></main></div>
     </div>
-    <NavigationBar v-if="compact" :items="[...items, ...footer]" class="bottom" />
+    <NavigationBar v-if="compact" :items="[...items, ...footer]" :more-label="moreLabel" class="bottom" />
     <Snackbar />
   </div>
 </template>

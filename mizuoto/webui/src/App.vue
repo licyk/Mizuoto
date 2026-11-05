@@ -117,7 +117,7 @@ const activeCount = computed(() => jobs.active.length);
 </script>
 
 <template>
-  <AppShell ref="shell" :items="nav" :footer="footer" :title="title">
+  <AppShell ref="shell" :items="nav" :footer="footer" :title="title" :more-label="t('nav.more')">
     <template #rail-top>
       <IconButton :icon="icons.Mark" :label="t('app.title')" tonal />
     </template>

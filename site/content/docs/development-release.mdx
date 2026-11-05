@@ -144,6 +144,7 @@ python scripts/smoke_wheels.py --dist dist --others none   # 只装 dist/ 里的
 docker build -t mizuoto .                                   # torch 的 CUDA 12.8 构建
 docker build -t mizuoto:cpu --build-arg TORCH_INDEX=https://download.pytorch.org/whl/cpu .
 docker build -t mizuoto --build-arg GATED=1 .               # 带 Fish Speech 和 IndexTTS
+docker build -t mizuoto --build-arg ACCEL=1 .               # 带 xFormers 和 SageAttention 1.0.6
 docker run --gpus all -p 7869:7869 -v mizuoto-data:/data -e MIZUOTO_SERVER__ACCESS_TOKEN=change-me mizuoto
 ```
 

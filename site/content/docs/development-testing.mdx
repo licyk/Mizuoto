@@ -45,7 +45,7 @@ packages/native/<pkg>/tests/
 | `live` | 需要本仓库之外的东西 |
 | `engine` | 针对已安装模型的引擎契约套件（`dev.py test-engines`） |
 | `weights` | 需要已下载的模型权重 |
-| `e2e` | 浏览器端到端测试 |
+| `e2e` | 浏览器端到端测试（`tests/e2e`，见下文） |
 
 所以 `python -m pytest`（或 `python scripts/dev.py test-py`）运行的是核心的测试和小模型测试。需要 torch 或某个可选包的测试，在没有它时会跳过（`pytest.importorskip`）。
 
@@ -237,6 +237,8 @@ $W/native-env/bin/python scripts/parity/compare.py qwen3tts --a reference --b na
 
 `python scripts/dev.py typegen-check` 重新生成 `schema.d.ts` 并与提交的版本比较；API 改了而类型没有重新生成时失败。
 
+**浏览器测试。** `tests/e2e/`（标记 `e2e`）通过 Playwright 在无头 Chromium 里操作构建好的界面（`mizuoto/webui/dist`），由一个真实的服务器（`python -m mizuoto webui`）在新的数据文件夹上提供，使用 dummy 引擎，因此不下载任何东西：每个页面加载时没有控制台错误或未捕获的异常；一次合成从输入文本一直走到结果列表和历史中的那一行；320 与 390 px 宽的窗口既不横向滚动，也不会丢掉页面（底部导航栏的 **更多**）；中文界面能够加载。先 `pip install playwright` 和 `python -m playwright install chromium`，再用 `python scripts/dev.py web`（构建）和 `python scripts/dev.py test-e2e` 运行；缺少它们或没有构建时测试会跳过。选择器使用角色、标签和组件自己的类名（`nav.bar`、`section.results li.row`）。
+
 文档站（`site/`）有自己的 vitest 测试；`src/lib/i18n-content.test.ts` 要求每个中文 `<slug>.mdx` 都有对应的 `<slug>.en.mdx`，且两个侧栏的页面顺序相同。
 
 ## CI
@@ -248,9 +250,9 @@ $W/native-env/bin/python scripts/parity/compare.py qwen3tts --a reference --b na
 | 改动 | 检查 |
 | --- | --- |
 | `packages/native/<id>/**` | 该包的 `gated` 和 `oldest-mizuoto` 作业，以及针对它的 `torch` |
-| `mizuoto/webui/**` | `web` |
+| `mizuoto/webui/**` | `web`、`browser` |
 | `site/**` | `site`（文档站的测试和构建） |
-| `mizuoto/`、`tests/`、`scripts/` 下的其他内容、`pyproject.toml`，或新路径 | `host`、`web`（它的 API 类型来自代码）、`torch`，以及两个包的作业：它们跑在本次提交的 Mizuoto 运行时上 |
+| `mizuoto/`、`tests/`、`scripts/` 下的其他内容、`pyproject.toml`，或新路径 | `host`、`web`（它的 API 类型来自代码）、`browser`、`torch`，以及两个包的作业：它们跑在本次提交的 Mizuoto 运行时上 |
 | `.github/workflows/**`、`scripts/ci.py` | 全部 |
 | `README*.md`、`AGENTS.md`、`CLAUDE.md`、`LICENSE`、`Dockerfile`、`.gitignore`…… | 无 |
 
@@ -263,6 +265,7 @@ $W/native-env/bin/python scripts/parity/compare.py qwen3tts --a reference --b na
 | `oldest-mizuoto` | 范围内的每个包，Ubuntu、Python 3.12 | 用该包 `pyproject.toml` 允许的最旧 Mizuoto（`python scripts/ci.py lower-bound <id>`，来自 PyPI）测试它：测试在源码目录之外运行，`PYTHONPATH` 上只有 `tests/`，所以 `import mizuoto` 找到的是已发布的那个（不含范围检查，它比较的是范围与本次提交的 Mizuoto） |
 | `torch` | Ubuntu、Python 3.12，torch 2.8.0 和最新版 | 用 Mizuoto 支持的最旧和最新的 torch 跑范围内的测试，发现 torch 的接口变化 |
 | `web` | Ubuntu、Python 3.11、bun | `dev.py web-install`、`dev.py test-web`、`dev.py typegen-check` |
+| `browser` | Ubuntu、Python 3.11、bun、Playwright 的 Chromium（`playwright install --with-deps chromium`） | `dev.py web-install`、`dev.py web`（构建）、`dev.py test-e2e` |
 | `site` | Ubuntu、bun | 在 `site/` 里 `bun install --frozen-lockfile`、`bun run check`、`bun run test`、`bun run build` |
 | `passed`（"CI passed"） | Ubuntu | 上面有作业失败或被取消时失败，都通过或因改动无关而跳过时通过：分支保护只需要求这一项 |
 

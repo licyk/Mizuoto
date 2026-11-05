@@ -1,6 +1,6 @@
 export default {
   app: { title: 'Mizuoto', help: '帮助（文档）' },
-  nav: { train: '训练', speak: '合成', tools: '工具', voices: '音色', models: '模型', history: '历史', settings: '设置', jobs: '任务', components: '组件', projects: '项目' },
+  nav: { train: '训练', speak: '合成', tools: '工具', voices: '音色', models: '模型', history: '历史', settings: '设置', jobs: '任务', components: '组件', projects: '项目', more: '更多' },
   common: {
     cancel: '取消',
     save: '保存',

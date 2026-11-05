@@ -133,4 +133,34 @@ describe('navigation', () => {
     expect(rail.find('.dests').text()).not.toContain('Settings');
     expect(rail.find('.foot a').attributes('aria-current')).toBe('page');
   });
+
+  it('keeps the bottom bar to five destinations, the rest under More, which is current for theirs', async () => {
+    const { createRouter, createMemoryHistory } = await import('vue-router');
+    const { default: NavigationBar } = await import('@/ui/NavigationBar.vue');
+    const { Settings } = await import('@/ui/icons');
+    const paths = ['/a', '/b', '/c', '/d', '/e', '/f', '/settings'];
+    const router = createRouter({ history: createMemoryHistory(), routes: paths.flatMap((path) => [{ path, component: { template: '<div />' } }, { path: `${path}/x`, component: { template: '<div />' } }]) });
+    await router.push('/f/x');
+    const items = paths.map((to, i) => ({ to, label: to.slice(1).toUpperCase(), icon: Settings, badge: i === 6 ? 1 : undefined }));
+    const bar = mount(NavigationBar, { props: { items, moreLabel: 'More' }, global: { plugins: [router] }, attachTo: document.body });
+    expect(bar.findAll('a').map((a) => a.text())).toEqual(['A', 'B', 'C', 'D']);
+    const more = bar.find('button.more');
+    expect(more.text()).toBe('More');
+    expect(more.classes()).toContain('active');
+    expect(more.find('.badge-dot').exists()).toBe(true);
+    await more.trigger('click');
+    await nextTick();
+    const entries = [...document.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')];
+    expect(entries.map((b) => b.textContent?.trim())).toEqual(['E', 'F', 'SETTINGS']);
+    entries[0].click();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(router.currentRoute.value.path).toBe('/e');
+    await router.push('/a');
+    await nextTick();
+    expect(bar.find('button.more').classes()).not.toContain('active');
+    await bar.setProps({ items: items.slice(0, 5) });
+    expect(bar.findAll('a')).toHaveLength(5);
+    expect(bar.find('button.more').exists()).toBe(false);
+    bar.unmount();
+  });
 });

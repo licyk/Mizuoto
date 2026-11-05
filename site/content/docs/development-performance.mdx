@@ -16,7 +16,7 @@ icon: Timer
 
 - `--profile` 在 cProfile 下多跑一次不计入的运行（`train_perf.py` 则在进程内运行各阶段）；`--torch-profile` 按自身耗时列出算子。
 - **在 GPU 上**（`--device cuda:N`，它成为每个引擎的设备，也是训练的设备）：工具在每个阶段边界等待设备，使阶段时间是它的实际工作而不只是内核的发出；并按阶段记录峰值分配、阶段权重放好之后在已分配量之上的工作内存，以及引擎申请的工作内存（另记下最接近其自身估算的那一次调用：一个阶段最大的用量和最大的估算可能来自不同的调用），另有请求的峰值已分配与已保留内存。此时 `--torch-profile` 还记录设备活动并按阶段汇总（`<case>.gpu.json`）：墙钟时间与设备忙碌时间、内核数、发出次数、CUDA Graph 重放次数、主机等待设备的次数（`cudaStreamSynchronize`、`cudaEventSynchronize`、同步的 `cudaMemcpy`；工具自身每个阶段的两次 `cudaDeviceSynchronize` 单独计数），以及主机与设备之间的拷贝。
-- `--deterministic` 在 `torch.use_deterministic_algorithms(True, warn_only=True)` 与 `CUBLAS_WORKSPACE_CONFIG=:4096:8` 下运行，二者由工具设置（原生代码从不改动进程级状态）；没有确定性实现的运算列在记录里，而不是让用例失败。`train_perf.py --setting training.memory=low` 用来测量某个显存预设。
+- `--deterministic` 在 `torch.use_deterministic_algorithms(True, warn_only=True)` 与 `CUBLAS_WORKSPACE_CONFIG=:4096:8` 下运行，二者由工具设置（原生代码从不改动进程级状态）；没有确定性实现的运算列在记录里，而不是让用例失败。`train_perf.py --setting training.memory=low` 用来测量某个显存预设；`train_perf.py --deterministic` 在 `training.deterministic` 下训练，并按阶段记录反向传播不可重复的注意力后端（`nondeterministic`）。
 - 记录写到 `MIZUOTO_PERF_DIR`（默认 `~/code_workspace/experiment/perf`），每个用例每轮一个 JSON 文件。
 - 预热时间取最快的预热运行：机器上的其他工作只会让运行变慢。重要的比较都交错进行，两份代码在各自的进程里先后运行。
 

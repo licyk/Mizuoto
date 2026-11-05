@@ -368,3 +368,94 @@ def test_fast_on_nvidia_uses_flash_only_where_keys_are_padded():
     assert p.chain(call("prefix")) == ("flash", "sdpa") == p.chain(call("causal+suffix"))
     assert p.chain(call("")) == ("sdpa",) == p.chain(call("causal")) == p.chain(call("prefix", torch.float32))
     assert AccelPolicy("xformers").chain(call("")) == ("xformers", "sdpa")
+
+
+def test_inside_a_cuda_graph_capture_only_graph_safe_backends_are_tried(monkeypatch):
+    """A call made while a CUDA graph captures (``Call.capturing``) skips backends not checked inside one, and one that
+    fails there is not marked broken: the capture fails, its step runs eagerly, and the backend is tried again there."""
+    from mizuoto.runtime.accel import policy as policy_mod
+
+    unchecked, checked = Fake(), Fake()
+    p = policy(
+        "unchecked",
+        Backend("unchecked", unchecked, Constraints(devices=ALL)),
+        Backend("checked", checked, Constraints(devices=ALL), graph_safe=True),
+        chain=("unchecked", "checked"),
+    )
+    q, k, v = qkv()
+    real = policy_mod.describe
+    monkeypatch.setattr(policy_mod, "describe", lambda *a: real(*a)._replace(capturing=True))
+    run = p.run()
+    with bind(run):
+        accel.attention(q, k, v, site=SITE)
+    assert (unchecked.calls, checked.calls) == (0, 1)
+    assert run.report()["fallbacks"] == {"unchecked→checked": {"not checked inside a CUDA graph": 1}}
+
+    def fails(*args):
+        raise RuntimeError("operation not permitted when stream is capturing")
+
+    flaky = Fake()
+    p = policy("flaky", Backend("flaky", lambda *a: fails() if capturing[0] else flaky(*a), Constraints(devices=ALL), graph_safe=True), chain=("flaky", "sdpa"))
+    capturing = [True]
+    monkeypatch.setattr(policy_mod, "describe", lambda *a: real(*a)._replace(capturing=capturing[0]))
+    with bind(p.run()), pytest.raises(RuntimeError, match="capturing"):
+        accel.attention(q, k, v, site=SITE)
+    capturing[0] = False
+    run = p.run()
+    with bind(run):
+        accel.attention(q, k, v, site=SITE)
+    assert flaky.calls == 1 and run.report()["used"] == {"flaky": 1}
+
+
+def test_the_backends_checked_inside_a_cuda_graph():
+    """``graph_safe`` only where a capture was replayed over new inputs equal to the eager call (RTX 3060, torch 2.8)."""
+    from mizuoto.runtime.accel import backends
+    from mizuoto.runtime.accel.registry import REGISTRY
+
+    backends.register_all()
+    safe = {n for n in REGISTRY.names() if getattr(REGISTRY.get(n), "graph_safe", False)}
+    assert safe == {"sdpa", "math", "sdpa_flash", "sdpa_efficient", "flash", "xformers"} | ({"sdpa_cudnn"} if "sdpa_cudnn" in REGISTRY.names() else set())
+
+
+def test_a_training_run_reports_backends_whose_backward_does_not_repeat():
+    """``nondeterministic``: per backend, the calls with a gradient whose backward pass does not repeat; a backend that
+    repeats on request (FlashAttention) is not listed while torch's deterministic algorithms are on. Inference
+    reports nothing new."""
+    loose, on_request = Fake(), Fake()
+    q, k, v = qkv()
+    p = policy("loose", Backend("loose", loose, Constraints(devices=ALL), deterministic=False), chain=("loose",))
+    run = p.run()
+    with bind(run):
+        accel.attention(q, k, v, site=SITE)
+        accel.attention(q.clone().requires_grad_(), k, v, site=SITE)
+    assert run.report()["nondeterministic"] == {"loose": 1}
+    p = policy("asks", Backend("asks", on_request, Constraints(devices=ALL), deterministic=False, deterministic_on_request=True), chain=("asks",))
+    before = torch.are_deterministic_algorithms_enabled()
+    for deterministic, expected in ((False, {"asks": 1}), (True, None)):
+        torch.use_deterministic_algorithms(deterministic, warn_only=True)
+        try:
+            run = p.run()
+            with bind(run):
+                accel.attention(q.clone().requires_grad_(), k, v, site=SITE)
+        finally:
+            torch.use_deterministic_algorithms(before, warn_only=True)
+        assert run.report().get("nondeterministic") == expected
+
+
+def test_flash_asks_for_its_deterministic_backward_when_the_process_does(monkeypatch):
+    from types import SimpleNamespace
+
+    from mizuoto.runtime.accel.backends import optional
+
+    seen = []
+    fake = SimpleNamespace(flash_attn_func=lambda q, k, v, **kw: (seen.append(kw["deterministic"]), q)[1])
+    monkeypatch.setattr(optional, "_flash_module", lambda: fake)
+    q, k, v = qkv()
+    before = torch.are_deterministic_algorithms_enabled()
+    try:
+        for on in (False, True):
+            torch.use_deterministic_algorithms(on, warn_only=True)
+            assert torch.equal(optional.flash(q, k, v, None, False, None, False, 0.0, None), q)
+    finally:
+        torch.use_deterministic_algorithms(before, warn_only=True)
+    assert seen == [False, True]

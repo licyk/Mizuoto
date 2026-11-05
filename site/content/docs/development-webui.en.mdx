@@ -41,7 +41,7 @@ The UI is built on Material Design 3 (M3) in two layers: a **token layer** that 
 - **Elevation is shown by surface tone first** (`surface`, `surface-container-low` … `surface-container-highest`), shadows second.
 - **Colour roles are used in pairs**: content on a `primary` container uses `on-primary`, on `surface-container` `on-surface`; the generated pairs guarantee contrast.
 - **Motion**: named transitions (`fade-through`, `shared-axis-x`, `container`, `sheet`, `scrim`, `list`…, in `ui/motion/`), and a container transform from a list to an item through View Transitions where the browser has them. With reduced motion chosen by the system or in the app, every transition becomes a 100 ms fade and there is no ripple.
-- **Layout**: a bottom navigation bar on compact windows, a navigation rail on wider ones (`AppShell`).
+- **Layout**: a bottom navigation bar on compact windows, a navigation rail on wider ones (`AppShell`). The bar keeps Material 3's three to five destinations: past five, the first four and **More**, an `AppMenu` with the rest (current while one of them is; with the rail's dot while one has a badge); its destinations shrink with the window, so it never widens the page (with all eight it made every page 512 px wide on a 390 px phone).
 - The font (`@fontsource-variable/roboto-flex`) and the icons are bundled into `dist/`: the UI loads nothing from outside and works offline.
 
 ### The component layer: `src/ui/`

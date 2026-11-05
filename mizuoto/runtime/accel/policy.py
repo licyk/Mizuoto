@@ -28,7 +28,7 @@ import torch
 
 from mizuoto.core import codes
 from mizuoto.runtime.accel.dispatch import POLICY, TRACE_POLICY, MaskInfo, Site
-from mizuoto.runtime.accel.registry import REGISTRY, Backend, Call, Registry, describe
+from mizuoto.runtime.accel.registry import REGISTRY, Backend, Call, Registry, describe, repeats
 from mizuoto.runtime.engine import EngineError
 
 log = logging.getLogger("mizuoto.runtime.accel")
@@ -112,6 +112,8 @@ class AccelPolicy:
         return Resolution(None, skipped)
 
     def _refuses(self, backend: Backend, site: Site, call: Call, tensors: Any) -> str | None:
+        if call.capturing and not backend.graph_safe:
+            return "not checked inside a CUDA graph"
         if call.grad and not backend.backward:
             return "no backward"
         if call.dropout and not backend.dropout:
@@ -174,6 +176,8 @@ class Run:
         self.policy = policy
         self.used: Counter[str] = Counter()
         self.fallbacks: dict[str, Counter[str]] = {}
+        self.nondeterministic: Counter[str] = Counter()
+        """Backends whose backward pass does not repeat (``repeats``), by the calls with a gradient they computed."""
 
     def attend(
         self,
@@ -199,12 +203,16 @@ class Run:
             backend = found.backend
             if backend is None:
                 return site.reference(q, k, v, mask, causal, scale, enable_gqa, dropout_p)
+            if call.grad and not repeats(backend):
+                self.nondeterministic[backend.name] += 1
             try:
                 return backend.fn(q, k, v, mask, causal, scale, enable_gqa, dropout_p, mask_info)
             except Exception as e:
                 from mizuoto.runtime.device import is_oom
 
-                if is_oom(e):
+                if is_oom(e) or call.capturing:
+                    # inside a CUDA graph's capture the stream is spoilt: the capture fails and its step runs eagerly,
+                    # where this backend is still tried (the failure may be the capture's alone)
                     raise
                 if self.policy.strict and backend.name == self.policy.name:
                     raise AccelError(
@@ -227,6 +235,8 @@ class Run:
             "policy": self.policy.name,
             "used": {k: n for k, n in self.used.items() if n},
             "fallbacks": {k: dict(c) for k, c in self.fallbacks.items()},
+            # training only (calls with a gradient), so inference outputs' ``applied.attention`` is as before
+            **({"nondeterministic": dict(self.nondeterministic)} if self.nondeterministic else {}),
         }
 
     def warnings(self) -> list[str]:

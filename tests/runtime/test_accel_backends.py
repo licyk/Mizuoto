@@ -41,7 +41,7 @@ def _band(n_q, n_k, causal, window):
 def fake_flash(monkeypatch):
     calls = []
 
-    def flash_attn_func(q, k, v, dropout_p=0.0, softmax_scale=None, causal=False, window_size=(-1, -1)):
+    def flash_attn_func(q, k, v, dropout_p=0.0, softmax_scale=None, causal=False, window_size=(-1, -1), deterministic=False):
         calls.append(("func", causal, window_size))
         return _bshd_attention(q, k, v, _band(q.shape[1], k.shape[1], causal, window_size), softmax_scale)
 

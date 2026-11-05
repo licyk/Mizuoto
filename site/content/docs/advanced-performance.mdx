@@ -150,3 +150,5 @@ Mizuoto 像 ComfyUI 一样管理显存。一个请求的每一步只放上它需
 | --- | --- | --- |
 | `compute.cpu_allocator` | `auto` | CPU 内存分配：`tuned`（Linux 上 `auto` 即此）复用大块内存并把大张量放在大页上（`training.memory = lowest` 的训练除外），CPU 上快 10–20%，结果完全相同；`system` 保持 C 库默认；下次启动时生效 |
 | `compute.cpu_threads` | `auto` | `cores`（Linux 上 `auto` 即此）把 torch 的 CPU 线程绑定到不同的物理核心；`off` 交给系统调度（有其他繁忙程序共用 CPU 时更好）；下次启动时生效 |
+
+**内存紧张时的大页。** 内存充足时大页有好处，但在内存几乎占满的机器上（小内存里放大模型，其余是页缓存），内核要为每个大页停下来整理内存。在 8 核 CPU、31 GB 内存、空闲不到 400 MB 的机器上，Qwen3-TTS 1.7B 合成一段长文本时开着大页慢 6–8%，加载慢 2–5 秒；同一个模型在 125 GB 内存的机器上微调时，开着大页快 8%。如果在 CPU 上合成比预期慢而内存大多已被占用，用 `THP_MEM_ALLOC_ENABLE=0` 启动 Mizuoto（`tuned` 的其余部分不变），或把 `/sys/kernel/mm/transparent_hugepage/defrag` 设为 `defer`，让内核在后台整理内存。

@@ -270,6 +270,34 @@ jobs:
           python scripts/dev.py test-web
           python scripts/dev.py typegen-check
 
+  browser:
+    # The built web UI on a real server (the dummy engine, a new data folder) in headless Chromium: every screen loads
+    # without errors, a speak runs, a phone-sized window fits and reaches every screen (tests/e2e).
+    name: Browser
+    needs: scope
+    if: needs.scope.outputs.run == 'true' && needs.scope.outputs.web == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: actions/setup-python@v7.0.0
+        with:
+          python-version: "3.11"
+      - uses: astral-sh/setup-uv@v10.2.0
+        with:
+          enable-cache: false
+      - uses: oven-sh/setup-bun@v2.2.0
+      - name: Environment
+        run: |
+          uv pip install torch --index-url "$TORCH_INDEX"
+          uv pip install -e . pytest playwright
+          python -m playwright install --with-deps chromium
+      - name: Build the web UI
+        run: |
+          python scripts/dev.py web-install
+          python scripts/dev.py web
+      - name: Browser tests
+        run: python scripts/dev.py test-e2e
+
   site:
     name: Documentation site
     needs: scope
@@ -292,7 +320,7 @@ jobs:
     # One check for branch protection: it fails when a job above failed or was cancelled, and passes when they passed
     # or were skipped because the change does not touch what they check.
     name: CI passed
-    needs: [scope, host, gated, oldest-mizuoto, torch, web, site]
+    needs: [scope, host, gated, oldest-mizuoto, torch, web, browser, site]
     if: always()
     runs-on: ubuntu-latest
     steps:

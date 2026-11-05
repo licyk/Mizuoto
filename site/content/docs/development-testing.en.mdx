@@ -46,7 +46,7 @@ packages/native/<pkg>/tests/
 | `live` | Needs something outside this repository |
 | `engine` | The engine contract suite against installed models (`dev.py test-engines`) |
 | `weights` | Needs downloaded model weights |
-| `e2e` | Browser end-to-end tests |
+| `e2e` | Browser end-to-end tests (`tests/e2e`, below) |
 
 So `python -m pytest` (or `python scripts/dev.py test-py`) runs the core's tests and the tiny-model tests. A test that needs torch or an optional package skips without it (`pytest.importorskip`).
 
@@ -238,6 +238,8 @@ The first opt-in runs exposed a harness bug: requests and the parity cases had p
 
 `python scripts/dev.py typegen-check` regenerates `schema.d.ts` and compares it with the committed one; it fails when the API changed and the types were not regenerated.
 
+**Browser tests.** `tests/e2e/` (marker `e2e`) drives the built UI (`mizuoto/webui/dist`) in headless Chromium through Playwright, served by a real server (`python -m mizuoto webui`) on a new data folder with the dummy engine, so nothing is downloaded: every screen loads without console errors or uncaught exceptions, a speak runs from the text to its row in the results and in History, a 320 and a 390 px window neither scroll sideways nor lose a screen (the bottom bar's **More**), and the Chinese UI loads. Run them with `python scripts/dev.py web` (the build) and `python scripts/dev.py test-e2e`, after `pip install playwright` and `python -m playwright install chromium`; without them, or without a build, they skip. Selectors are roles, labels and the components' own classes (`nav.bar`, `section.results li.row`).
+
 The docs site (`site/`) has its own vitest tests; `src/lib/i18n-content.test.ts` requires a `<slug>.en.mdx` for every Chinese `<slug>.mdx` and the same page order in both sidebars.
 
 ## CI
@@ -249,9 +251,9 @@ The first job, `scope`, reads the changed files (a push's from the compare API, 
 | Changed | Checks |
 | --- | --- |
 | `packages/native/<id>/**` | that package's `gated` and `oldest-mizuoto` jobs, and `torch` for it |
-| `mizuoto/webui/**` | `web` |
+| `mizuoto/webui/**` | `web`, `browser` |
 | `site/**` | `site` (the docs site's tests and build) |
-| anything else under `mizuoto/`, `tests/`, `scripts/`, `pyproject.toml`, or a new path | `host`, `web` (its API types come from the code), `torch`, and both packages' jobs: they run on Mizuoto's runtime at this commit |
+| anything else under `mizuoto/`, `tests/`, `scripts/`, `pyproject.toml`, or a new path | `host`, `web` (its API types come from the code), `browser`, `torch`, and both packages' jobs: they run on Mizuoto's runtime at this commit |
 | `.github/workflows/**`, `scripts/ci.py` | everything |
 | `README*.md`, `AGENTS.md`, `CLAUDE.md`, `LICENSE`, `Dockerfile`, `.gitignore`… | nothing |
 
@@ -264,6 +266,7 @@ A new branch, a manual run, a list the compare API cuts short (300 files) or a f
 | `oldest-mizuoto` | each package in scope, Ubuntu, Python 3.12 | The package on the oldest Mizuoto its `pyproject.toml` allows (`python scripts/ci.py lower-bound <id>`), from PyPI: its tests run outside the checkout, with only `tests/` on `PYTHONPATH`, so `import mizuoto` finds the released one (the range check, which compares the range with Mizuoto at this commit, is left out) |
 | `torch` | Ubuntu, Python 3.12, torch 2.8.0 and the latest release | The tests in scope against the oldest torch Mizuoto supports and the newest, to catch torch's API drift |
 | `web` | Ubuntu, Python 3.11, bun | `dev.py web-install`, `dev.py test-web`, `dev.py typegen-check` |
+| `browser` | Ubuntu, Python 3.11, bun, Playwright's Chromium (`playwright install --with-deps chromium`) | `dev.py web-install`, `dev.py web` (the build), `dev.py test-e2e` |
 | `site` | Ubuntu, bun | `bun install --frozen-lockfile`, `bun run check`, `bun run test`, `bun run build` in `site/` |
 | `passed` ("CI passed") | Ubuntu | Fails when a job above failed or was cancelled, passes when they passed or were skipped: the one check to require in branch protection |
 

@@ -104,12 +104,15 @@ out = accel.attention(q, k, v, site=SITE, mask=mask, causal=False, scale=None,
 | ROCm，fp16/bf16 | `flash`、`xformers`、`sdpa` |
 | fp32，或 XPU、MPS、CPU | `sdpa` |
 
-**选择。** 每次调用用一个 `Call` 描述（设备类型、计算能力、精度、头维度、GQA、单个还是多个查询、长度是否相等、查询是否超过 1024 个、掩码类型、`mask_info` 的结构、自定义缩放、因果、dropout、是否需要梯度），它可哈希，所以一个解码循环对每个 `(site, Call)` 只选择一次。后端在以下情况被跳过：
+**选择。** 每次调用用一个 `Call` 描述（设备类型、计算能力、精度、头维度、GQA、单个还是多个查询、长度是否相等、查询是否超过 1024 个、掩码类型、`mask_info` 的结构、自定义缩放、因果、dropout、是否需要梯度、是否正在捕获 CUDA 图），它可哈希，所以一个解码循环对每个 `(site, Call)` 只选择一次。后端在以下情况被跳过：
 
 - 探测表明它不能在该设备上运行（未安装、版本不对、没有内核、自检失败）；
 - 调用需要它缺少的反向传播或 dropout；
 - 调用点拒绝量化的注意力（`approx_ok=False`：所有自回归模型的调用点，即 Qwen 解码器、IndexTTS 的 GPT、VoxCPM 的 MiniCPM、GPT-SoVITS 的 T2S、Fish Speech 的三个、Whisper 的），而该后端是近似的（SageAttention 2 和 3）；
-- 它的约束拒绝该调用（设备、计算能力、精度、头维度、掩码、长度不等时的因果、缩放）。
+- 它的约束拒绝该调用（设备、计算能力、精度、头维度、掩码、长度不等时的因果、缩放）；
+- 正在捕获 CUDA 图而后端不是 `graph_safe`。捕获的内容包含注意力（VoxCPM 的局部扩散步、Fish Speech 的快速 Transformer、Qwen3-TTS 的码本预测器）；只有在捕获后用新输入回放、结果与对这些输入的即时调用相同时（RTX 3060，torch 2.8）才设 `graph_safe`：`sdpa`、`math`、`sdpa_flash`、`sdpa_efficient`、`sdpa_cudnn`、`flash` 2.8.3 和 `xformers` 0.0.32。SageAttention 1.0.6 也能捕获，但同一个后端也运行未检查过的 2.x，`sage3` 没有试过。在捕获中抛出异常的后端不会被标记为损坏：捕获失败，这一步改为即时运行，并在那里再试这个后端。
+
+**训练中的确定性。** 后端的反向传播要么逐位重复（`deterministic`），要么在 torch 的确定性算法打开时重复（`deterministic_on_request`：FlashAttention，此时以 `deterministic=True` 调用；前向传播两种情况下相同；在 RTX 3060 上，不打开时 5 次运行的梯度每次都不同，打开时都相同），要么不重复（`sdpa` 的融合内核、xFormers、`sdpa_cudnn`）。阶段的注意力报告统计由不可重复的后端计算的、需要梯度的调用（`nondeterministic`），`train_perf.py --deterministic` 按阶段记录它们。在 `training.deterministic` 下，`training.attention = auto` 时阶段用 `math` 计算注意力，它可以重复；指定的后端保留其链，所以它不接受的调用交给 `sdpa`（OmniVoice 的训练注意力在 bf16 autocast 下是 float32：FlashAttention 一个也不接受，报告列出 `sdpa`）。
 
 内核抛出异常（显存不足和取消除外）时，该后端对这种调用被标为损坏，由下一个后端接手。显存不足会向上传递给[精确重试](/docs/development-memory#显存不足)。每种回退按（调用点，后端，原因）只记录一次日志。请求的 `Run` 统计用了什么，有回退时输出会记录下来并带一条警告：
 
@@ -238,6 +241,8 @@ GPU 上的自回归模型每一步要启动几千个小内核（Qwen3-TTS：每 
 | `compute.cpu_allocator` | `tuned` | 把 glibc 的 `mmap` 阈值固定为 32 MB，并保留最多 512 MB 空闲堆内存供复用（本进程用 `mallopt`，子进程用 `GLIBC_TUNABLES`）；torch 的大张量放在透明大页上（`THP_MEM_ALLOC_ENABLE`），但 `training.memory = lowest` 的训练阶段除外：AdamW 在内存中更新，每一步都要分配几 GB，每个大页都会卡在内核的内存整理上（慢 2.2 倍）。一次前向在每层都要分配和释放几到几十 MB 的张量，按 glibc 默认设置每次都重新映射，并由内核清零页面。`system` 保持默认 |
 | `compute.cpu_threads` | `cores` | 把 OpenMP 线程绑定到不同的物理核心（`OMP_PLACES=cores`、`OMP_PROC_BIND=close`）。交给调度器时，偶尔有两个线程共用一个核心，那个进程在整个生命周期里都慢三分之一。`off` 交给调度器（有其他繁忙程序共用这些核心时更好） |
 
+
+**内存紧张时的大页**（2026-11-05 测得；Qwen3-TTS 1.7B，fp32，音频和权重每次都相同）：在一台服务器的 i9-9900K 上（8 核、31 GB、`defrag=madvise`，每次运行前填满页缓存，空闲不到 400 MB），开着大页时长用例慢 6–8%（预热后 143.5–149.7 秒，关闭时 135.6–138.0 秒），加载慢 2–5 秒，每轮有 188,000–297,000 次直接整理停顿，关闭时没有；在 125 GB 内存（其中 98 GB 是页缓存）的 Ryzen 9 5900X 上，CPU 微调开着大页时每步快 8%（7.4–7.5 秒对 8.0–8.2 秒），第一步（AdamW 的状态，13.6 GB 的零）最多慢 2 秒。以前测到的这部分状态的 12.6 秒就是同样的内存整理，而不是填零。`auto` 保留大页；用户文档说明了何时关闭它们。
 ## 给引擎作者
 
 - 所有注意力都经 `accel.attention`，每个调用点一个 `Site`；上游手写的注意力作为调用点的 `reference`；掩码由结构构造时传 `mask_info`。

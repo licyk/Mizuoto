@@ -138,7 +138,11 @@ def flash(
             kwargs["cache_leftpad"] = leftpad
         out = fa.flash_attn_with_kvcache(qt, kt.contiguous(), vt.contiguous(), **kwargs)
     else:
-        out = fa.flash_attn_func(qt, kt, vt, dropout_p=dropout_p, softmax_scale=scale, causal=causal, window_size=window)
+        # its deterministic backward when the process asks for determinism (``training.deterministic``); the forward
+        # pass is the same either way
+        out = fa.flash_attn_func(
+            qt, kt, vt, dropout_p=dropout_p, softmax_scale=scale, causal=causal, window_size=window, deterministic=torch.are_deterministic_algorithms_enabled()
+        )
     if isinstance(out, tuple):  # FlashAttention 3 returns (out, lse)
         out = out[0]
     return out.transpose(1, 2)
@@ -277,6 +281,8 @@ def register(registry: Registry = REGISTRY) -> None:
             ),
             dropout=True,
             deterministic=False,
+            deterministic_on_request=True,
+            graph_safe=True,
             probe=_flash_probe,
         )
     )
@@ -295,6 +301,7 @@ def register(registry: Registry = REGISTRY) -> None:
             ),
             dropout=True,
             deterministic=False,
+            graph_safe=True,
             probe=_xformers_probe,
         )
     )
@@ -314,6 +321,8 @@ def register(registry: Registry = REGISTRY) -> None:
             ),
             backward=False,
             approximate=True,
+            # 1.0.6 captured and replayed correctly on an RTX 3060; 2.x, which this name also runs, was not checked
+            graph_safe=False,
             probe=_sage_probe,
         )
     )

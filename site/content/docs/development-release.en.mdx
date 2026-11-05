@@ -144,6 +144,7 @@ The `Dockerfile` at the repository root builds one image: the server, its web UI
 docker build -t mizuoto .                                   # torch's CUDA 12.8 build
 docker build -t mizuoto:cpu --build-arg TORCH_INDEX=https://download.pytorch.org/whl/cpu .
 docker build -t mizuoto --build-arg GATED=1 .               # with Fish Speech and IndexTTS
+docker build -t mizuoto --build-arg ACCEL=1 .               # with xFormers and SageAttention 1.0.6
 docker run --gpus all -p 7869:7869 -v mizuoto-data:/data -e MIZUOTO_SERVER__ACCESS_TOKEN=change-me mizuoto
 ```
 

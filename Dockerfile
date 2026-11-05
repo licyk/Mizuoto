@@ -4,6 +4,7 @@
 #   docker build -t mizuoto .                                    # torch's CUDA 12.8 build (NVIDIA driver 570 or newer)
 #   docker build -t mizuoto:cpu --build-arg TORCH_INDEX=https://download.pytorch.org/whl/cpu .
 #   docker build -t mizuoto --build-arg GATED=1 .                # with Fish Speech and IndexTTS (licence-gated)
+#   docker build -t mizuoto --build-arg ACCEL=1 .                # with the optional attention packages that need no compiler
 #   docker run --gpus all -p 7869:7869 -v mizuoto-data:/data -e MIZUOTO_SERVER__ACCESS_TOKEN=change-me mizuoto
 #
 # Every engine runs inside the server's own Python; models are downloaded into /data/models. torch's build is chosen
@@ -11,7 +12,11 @@
 # The licence-gated engines are built only with --build-arg GATED=1; their licences must still be accepted
 # (Models › Engines, or mizuoto engine accept-licence). Every optional front end is in: GPT-SoVITS's Japanese
 # (OpenJTalk, compiled into a wheel in the wheels stage) and Korean, and IndexTTS-2.5's Japanese. The image has no C
-# compiler, so the optional compute.compile setting runs eagerly (it warns once).
+# compiler, so the optional compute.compile setting runs eagerly (it warns once). ACCEL=1 adds the attention packages
+# that install without one, for compute.attention / training.attention: xFormers, at the release `mizuoto doctor`
+# names for the image's torch (none for a CPU build), and SageAttention 1.0.6 (Triton) on CUDA. FlashAttention is
+# not added: it compiles for an hour unless a wheel matches the torch, and its one wheel for torch 2.8 stops
+# xFormers 0.0.32 from importing.
 
 ARG PYTHON=3.11
 
@@ -52,6 +57,15 @@ RUN --mount=type=bind,from=wheels,source=/wheels,target=/wheels \
     extras="mizuoto[gptsovits-ja,gptsovits-ko]"; \
     if ls /wheels/mizuoto_indextts-*.whl >/dev/null 2>&1; then extras="$extras mizuoto-indextts[ja]"; fi; \
     pip install --no-cache-dir --find-links /wheels /wheels/mizuoto*.whl $extras
+# The optional attention packages (ACCEL=1), with --no-deps so torch stays the build installed above.
+ARG ACCEL=0
+RUN if [ "$ACCEL" = "1" ]; then \
+      xformers=$(python -c "from mizuoto.core.compute.accel import install_command; from mizuoto.core.compute.probe import installed_torch_build; print(install_command('xformers', installed_torch_build(), 'python') or '')"); \
+      if [ -n "$xformers" ]; then echo "$xformers" && eval "$xformers --no-cache-dir"; else echo "ACCEL=1: no xFormers for this torch build"; fi; \
+      if python -c "import sys; from mizuoto.core.compute.probe import installed_torch_build; sys.exit(0 if (installed_torch_build() or {}).get('cuda') else 1)"; then \
+        pip install --no-cache-dir --no-deps "sageattention==1.0.6"; \
+      else echo "ACCEL=1: SageAttention is for CUDA builds"; fi; \
+    fi
 ENV MIZUOTO_DATA_DIR=/data \
     MIZUOTO_SERVER__OPEN_BROWSER=false \
     PYTHONUNBUFFERED=1

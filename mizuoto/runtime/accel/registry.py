@@ -54,6 +54,8 @@ class Call(NamedTuple):
     causal: bool
     dropout: bool
     grad: bool
+    capturing: bool = False
+    """Called while a CUDA graph captures (``Graphs.capture``): only ``graph_safe`` backends take it."""
 
 
 def describe(q: torch.Tensor, k: torch.Tensor, v: torch.Tensor, mask: torch.Tensor | None, causal: bool, scale: float | None, dropout_p: float, mask_info: MaskInfo | None) -> Call:
@@ -81,6 +83,7 @@ def describe(q: torch.Tensor, k: torch.Tensor, v: torch.Tensor, mask: torch.Tens
         causal=causal,
         dropout=dropout_p > 0,
         grad=torch.is_grad_enabled() and (q.requires_grad or k.requires_grad or v.requires_grad),
+        capturing=q.is_cuda and not torch.compiler.is_compiling() and torch.cuda.is_current_stream_capturing(),
     )
 
 
@@ -152,10 +155,22 @@ class Backend:
     dropout: bool = False
     deterministic: bool = True
     """Its backward pass repeats bit for bit (forward passes always do)."""
+    deterministic_on_request: bool = False
+    """Its backward pass repeats while torch's deterministic algorithms are on (``training.deterministic``): it asks
+    its kernel for its deterministic mode then (FlashAttention's ``deterministic=True``)."""
+    graph_safe: bool = False
+    """Its kernels can be recorded in a CUDA graph and replayed (no wait for the device, no work on the host per call
+    that a replay would skip). Set only where checked: each one captured and replayed over new inputs equal to its
+    eager call on them (RTX 3060, torch 2.8). Inside a capture the others are skipped for the next in the chain."""
     probe: Callable[[torch.device], str | None] = field(default=lambda device: None)
     """Why it cannot run on ``device`` (None: it can). Called once per device."""
     accepts: Callable[[Call, Any], str | None] | None = None
     """A last check with the call's tensors (``q, k, v, mask``), e.g. torch's own eligibility test; cached by ``Call``."""
+
+
+def repeats(backend: Backend) -> bool:
+    """Whether ``backend``'s backward pass repeats bit for bit now."""
+    return backend.deterministic or (backend.deterministic_on_request and torch.are_deterministic_algorithms_enabled())
 
 
 class Registry:

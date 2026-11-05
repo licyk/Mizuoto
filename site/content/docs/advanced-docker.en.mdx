@@ -29,6 +29,7 @@ No GPU is visible while an image builds, so the torch build is named by its inde
 docker build -t mizuoto .                                                          # CUDA 12.8
 docker build -t mizuoto:cpu --build-arg TORCH_INDEX=https://download.pytorch.org/whl/cpu .
 docker build -t mizuoto --build-arg GATED=1 .                                      # with Fish Speech and IndexTTS
+docker build -t mizuoto --build-arg ACCEL=1 .                                      # with xFormers and SageAttention 1.0.6 (compute.attention)
 ```
 
 ### What the image contains
@@ -36,6 +37,7 @@ docker build -t mizuoto --build-arg GATED=1 .                                   
 - No system packages: torch, PyAV and the text libraries ship their native code in their wheels.
 - torch, then Mizuoto with `mizuoto[gptsovits-ja,gptsovits-ko]` (and `mizuoto-indextts[ja]` with `GATED=1`); the rest of the dependencies come from PyPI while the image builds.
 - No C compiler, so **Compile models (torch.compile)** runs the engines as before, with one warning.
+- With `ACCEL=1`, the optional attention packages that install without a compiler: xFormers at the release `mizuoto doctor` names for the image's torch (none for a CPU build), and SageAttention 1.0.6 on CUDA builds. FlashAttention is not included: it compiles for a long time unless a wheel matches the torch, and its only wheel for torch 2.8 stops xFormers 0.0.32 from importing. Choose them under Settings › Compute › Acceleration.
 - Environment variables:
 
 | Variable | Value | Effect |

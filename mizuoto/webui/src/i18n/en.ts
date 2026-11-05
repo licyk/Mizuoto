@@ -1,6 +1,6 @@
 export default {
   app: { title: 'Mizuoto', help: 'Help (documentation)' },
-  nav: { train: 'Train', speak: 'Speak', tools: 'Tools', voices: 'Voices', models: 'Models', history: 'History', settings: 'Settings', jobs: 'Jobs', components: 'Components', projects: 'Projects' },
+  nav: { train: 'Train', speak: 'Speak', tools: 'Tools', voices: 'Voices', models: 'Models', history: 'History', settings: 'Settings', jobs: 'Jobs', components: 'Components', projects: 'Projects', more: 'More' },
   common: {
     cancel: 'Cancel',
     save: 'Save',
