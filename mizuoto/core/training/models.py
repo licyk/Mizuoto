@@ -109,6 +109,10 @@ class TrainingPlan(Record):
     """The run's preset fits (None: unknown, or the CPU)."""
     advice: str | None = None
     """What would make it fit: another preset or a smaller batch, else a bigger GPU or the CPU."""
+    suggested_preset: str | None = None
+    """The first lighter preset that fits, when the run's does not."""
+    suggested_batch: int | None = None
+    """The largest value of ``batch["name"]`` that fits under the run's preset, when no preset does."""
 
 
 class ExperimentPatch(Record):

@@ -33,6 +33,7 @@ export const keys = {
   datasetReport: (id: string) => ['datasets', 'report', id] as const,
   experiments: ['experiments'] as const,
   experiment: (key: string) => ['experiments', 'id', key] as const,
+  experimentPlan: (key: string) => ['experiments', 'plan', key] as const,
   trainMethods: (model: string) => ['experiments', 'methods', model] as const,
   metrics: ['metrics'] as const,
   experimentMetrics: (key: string) => ['metrics', key] as const,

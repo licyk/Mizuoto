@@ -105,7 +105,7 @@ previous = out[stage.id] = hashlib.sha256(source.encode()).hexdigest()[:20]
 
 - **资源**：`engine:<引擎>:<设备>` 和 `gpu:<设备>`（CPU 上是 `cpu`），所以它会等引擎自己的推理和 GPU 上的其他任务。设备取 `training.devices[0]`，没有就用引擎的设备。GPU 上的运行整个占用 `gpu:<设备>`（`JobSpec.exclusive`，不受 `compute.gpu_jobs` 限制）；开始前卸载该引擎已加载的模型（`runtime.unload_engine`），并把该设备上其他空闲模型的权重移到内存（`runtime.release_device`），运行期间没有模型回到这个设备。随后估算这次运行的显存峰值，超出空闲显存时在日志里警告，并给出能放下的预设。
 - **每个阶段一个进程**：`host_target("mizuoto.training.stage", cwd=work)` 通过 `JobContext.run_worker`，用服务器自己的解释器运行 `python -m mizuoto.training.stage <request.json>`。阶段进程看得到所有设备，名字不变。心跳超时是 30 分钟（`STAGE_HEARTBEAT_TIMEOUT`）；任何一行输出都会重置它，而阶段本身每 10 秒也会发一次心跳。
-- **请求内容**：`trainer`、`stage`、`engine`、`method`、`experiment`、`workdir`、`dataset_dir`、`rows`（绝对音频路径、文本、说话人、语言、时长、采样率；已经在 `training_rows` 里按许可过滤过）、`base_model`（`id`、`dir`、`variant`）、`assets`、`device`、`precision`（`training.precision`）、`hyperparams`、`language`、`results`（已完成阶段的返回值），以及设置 `training.previews` 和 `training.keep_checkpoints`。
+- **请求内容**：`trainer`、`stage`、`engine`、`method`、`experiment`、`workdir`、`dataset_dir`、`rows`（绝对音频路径、文本、说话人、语言、时长、采样率；已经在 `training_rows` 里按许可过滤过）、`base_model`（`id`、`dir`、`variant`）、`assets`、`device`、`precision`（`training.precision`）、`hyperparams`、`language`、`results`（已完成阶段的返回值），设置 `training.previews` 和 `training.keep_checkpoints`，以及供预览使用的 `compute`（决定权重放置的设置，`PLACEMENT_SETTINGS`：预留显存、`vram_limit_mb`、锁页内存预算、OOM 重试、`vram_mode` 等）和 `calibration`（主机的校准文件）。
 - **事件**：`MetricEvent` 每秒批量写进 `metrics.jsonl`，并以 `train_metrics` 发布（界面的损失曲线实时跟随）；`ProgressEvent` 变成步骤的进度和消息；`OutputEvent(kind="sample")` 复制为一个 `sample` 类型的输出。重新运行的阶段会先从 `metrics.jsonl` 里删掉它以前的点。
 
 ### 为什么用子进程
@@ -151,7 +151,7 @@ class Trainer:
 | `metric(epoch, step, values, lr)` | 一个损失点 |
 | `output(path, label, kind)` | 阶段产出的文件：`sample` 是预览，`checkpoint` 是权重 |
 | `log(message, level)` | 一行日志 |
-| `preview(text, reference, label, weights=…, model_dir=…, variant=…, preset=…)` | 在阶段进程里加载引擎自己的实现（一个私有的 `Runtime`），用新权重（`weights`，套在基础模型上）或新模型（`model_dir`）以种子 1234 说出 `text`，存为样例。失败只是一条警告，绝不会让阶段失败；`training.previews` 关闭时跳过 |
+| `preview(text, reference, label, weights=…, model_dir=…, variant=…, preset=…)` | 在阶段进程里加载引擎自己的实现（一个私有的 `Runtime`，其管理器像主机一样放置权重：用请求中主机的 `compute` 设置，以及主机校准过的工作内存估计，只读不写回；每次预览都在导出阶段里进行，那是一个独立的进程，所以设备上没有优化器状态或梯度），用新权重（`weights`，套在基础模型上）或新模型（`model_dir`）以种子 1234 说出 `text`，存为样例。失败只是一条警告，绝不会让阶段失败；`training.previews` 关闭时跳过 |
 
 阶段必须可以重跑：每个阶段先清空自己的输出目录。
 

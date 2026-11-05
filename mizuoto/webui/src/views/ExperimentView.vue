@@ -1,13 +1,17 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue';
 import { useRouter } from 'vue-router';
+import { useQueryClient } from '@tanstack/vue-query';
+import { useUpdateSettings } from '@/api/queries/app';
+import { keys } from '@/api/queries/keys';
 import { useOutputs } from '@/api/queries/outputs';
-import { useDataset, useExperiment, useExperimentActions, useExperimentMetrics, useTrainingMethods } from '@/api/queries/train';
+import { useDataset, useExperiment, useExperimentActions, useExperimentMetrics, useExperimentPlan, useTrainingMethods } from '@/api/queries/train';
 import type { StageState } from '@/api/types';
 import ErrorNotice from '@/components/ErrorNotice.vue';
 import HyperparamsForm from '@/components/HyperparamsForm.vue';
 import JobCard from '@/components/JobCard.vue';
 import ResultsList from '@/components/ResultsList.vue';
+import { formatMiB } from '@/format';
 import { useI18n } from '@/i18n';
 import { useHandoffStore } from '@/stores/handoff';
 import { isFinished, useJobsStore } from '@/stores/jobs';
@@ -71,6 +75,35 @@ function run(stages: string[] | null, restart = false) {
 }
 const confirmRestart = ref(false);
 
+// -- memory -----------------------------------------------------------------------------------
+// What the run would hold on its GPU under each memory preset against what is free now, and the one change that makes
+// it fit: a lighter preset, else a smaller batch. Hidden while a run holds the GPU (its own memory is not free).
+const qc = useQueryClient();
+const planQuery = useExperimentPlan(key);
+const plan = computed(() => planQuery.data.value ?? null);
+const updateSettings = useUpdateSettings();
+const presetName = (p: string) => tOr(`train.plan.presets.${p}`, p);
+const planDevice = computed(() => {
+  const p = plan.value;
+  if (!p) return '';
+  if (p.device === 'cpu') return t('train.plan.cpu');
+  if (p.free_mb === null || p.total_mb === null) return t('train.plan.deviceUnknown', { device: p.device });
+  return t('train.plan.device', { device: p.device, free: formatMiB(p.free_mb), total: formatMiB(p.total_mb) });
+});
+const batchName = computed(() => {
+  const name = String(plan.value?.batch?.name ?? '');
+  return tOr(`train.hp.${name}`, name.replace(/_/g, ' '));
+});
+const refreshPlan = () => qc.invalidateQueries({ queryKey: keys.experimentPlan(key.value) });
+function usePreset(preset: string) {
+  updateSettings.mutate({ training: { memory: preset } }, { onSuccess: () => (snackbar.show(t('train.plan.presetSet', { preset: presetName(preset) })), refreshPlan()), onError });
+}
+function useBatch(value: number) {
+  const name = String(plan.value?.batch?.name ?? '');
+  if (!name || !exp.value) return;
+  actions.update.mutate({ key: key.value, patch: { hyperparams: { ...exp.value.hyperparams, [name]: value } } }, { onSuccess: () => snackbar.show(t('train.settingsSaved')), onError });
+}
+
 // -- losses -----------------------------------------------------------------------------------
 const stagesWithMetrics = computed(() => {
   const seen = new Set((metrics.data.value ?? []).map((p) => p.stage));
@@ -124,7 +157,10 @@ const ownSamples = computed(() => (samples.data.value?.items ?? []).filter((o) =
 watch(
   () => job.value?.state,
   (state, before) => {
-    if (before && (!state || isFinished(state))) samples.refetch();
+    if (before && (!state || isFinished(state))) {
+      samples.refetch();
+      refreshPlan();
+    }
   },
 );
 function useVoice(id: string) {
@@ -178,6 +214,35 @@ function remove() {
           { label: t('common.language'), value: exp.language ? tOr(`languages.${exp.language}`, exp.language) : '' },
         ]"
       />
+
+      <Surface v-if="plan && !job" :level="0" shape="large" class="section">
+        <h2 class="type-title-medium">{{ t('train.plan.title') }}</h2>
+        <p class="type-body-medium muted">{{ planDevice }}</p>
+        <DataList v-if="plan.device !== 'cpu' && plan.presets.length">
+          <template v-for="p in plan.presets" :key="p.preset">
+            <dt class="muted">{{ presetName(p.preset) }}</dt>
+            <dd class="preset">
+              <span>≈ {{ formatMiB(p.memory_mb) }}</span>
+              <Badge v-if="p.preset === plan.preset" :value="t('train.plan.current')" tone="primary" />
+              <Badge v-if="p.fits === false" :value="t('train.plan.tooMuch')" tone="warning" />
+            </dd>
+          </template>
+        </DataList>
+        <template v-if="plan.fits === false">
+          <p v-if="plan.suggested_preset" class="type-body-medium warn">{{ t(plan.suggested_preset === 'lowest' ? 'train.plan.lowestHint' : 'train.plan.usePresetHint', { preset: presetName(plan.suggested_preset) }) }}</p>
+          <p v-else-if="plan.suggested_batch" class="type-body-medium warn">{{ t('train.plan.batchHint', { name: batchName, value: plan.suggested_batch }) }}</p>
+          <p v-else class="type-body-medium warn">{{ t('train.plan.noFit') }}</p>
+          <div v-if="plan.suggested_preset || plan.suggested_batch" class="row-end">
+            <AppButton v-if="plan.suggested_preset" variant="tonal" :icon="icons.MemoryStick" :loading="updateSettings.isPending.value" @click="usePreset(plan.suggested_preset)">
+              {{ t('train.plan.usePreset', { preset: presetName(plan.suggested_preset) }) }}
+            </AppButton>
+            <AppButton v-else-if="plan.suggested_batch" variant="tonal" :icon="icons.MemoryStick" :loading="actions.update.isPending.value" @click="useBatch(plan.suggested_batch)">
+              {{ t('train.plan.setBatch', { name: batchName, value: plan.suggested_batch }) }}
+            </AppButton>
+          </div>
+        </template>
+        <p v-if="plan.device !== 'cpu' && plan.presets.length" class="type-body-small muted">{{ t('train.plan.note') }}</p>
+      </Surface>
 
       <Surface :level="0" shape="large" class="section">
         <div class="section-head">
@@ -287,6 +352,7 @@ function remove() {
 .stage-head { display: flex; flex-wrap: wrap; align-items: center; gap: var(--app-space-2); }
 .stage-head h3 { flex: 1; }
 .warn { color: var(--md-sys-color-tertiary); }
+.preset { display: flex; flex-wrap: wrap; align-items: center; gap: var(--app-space-2); }
 .chips { display: flex; flex-wrap: wrap; gap: var(--app-space-2); }
 .artifacts { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: var(--app-space-2); }
 .artifact { display: flex; flex-wrap: wrap; align-items: center; gap: var(--app-space-2); min-width: 0; }

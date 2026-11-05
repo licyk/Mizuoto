@@ -24,7 +24,9 @@ load without a restart. Nothing here is a module global: the manager asks its ru
 from __future__ import annotations
 
 import os
+from collections.abc import Mapping
 from dataclasses import dataclass, replace
+from typing import Any
 
 MODES = ("auto", "high", "normal", "low", "none", "shared")
 
@@ -81,6 +83,22 @@ class VramPolicy:
         if os.name == "nt":
             return int(ram_total * 0.4)
         return int(max(ram_total * 0.4, min(ram_total * 0.9, ram_total - 4 * GB)))
+
+    @classmethod
+    def from_compute(cls, c: Mapping[str, Any]) -> VramPolicy:
+        """The policy the ``compute`` settings make (as a mapping, at least ``PLACEMENT_SETTINGS`` of
+        ``mizuoto.core.inference.service``): the host's, and a training stage's for its preview, which gets them in its
+        request."""
+        return cls(
+            mode=str(c["vram_mode"]),
+            reserve_bytes=int(c["vram_reserve_mb"]) * MB,
+            ram_reserve_bytes=None if c["ram_reserve_mb"] is None else int(c["ram_reserve_mb"]) * MB,
+            host_copies=str(c["host_copies"]),
+            max_pinned_bytes=int(c["max_pinned_mb"]) * MB,
+            streams=int(c["async_offload"]),
+            oom_retry=bool(c["oom_retry"]),
+            oom_fallback=bool(c["oom_fallback"]),
+        )
 
     def with_(self, **changes: object) -> VramPolicy:
         return replace(self, **changes)  # type: ignore[arg-type]

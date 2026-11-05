@@ -158,6 +158,21 @@ def upload(out: Path, repo: str, modelscope: bool, modelscope_repo: str) -> int:
     return code
 
 
+def present(client: Any, url: str, tries: int = 4) -> bool:
+    """Whether ``url`` answers 200 to a HEAD; a timeout or dropped connection is tried again (a check makes some 300
+    requests, and ModelScope's endpoint stalls now and then)."""
+    import httpx
+
+    for attempt in range(tries):
+        try:
+            return client.head(url).status_code == 200
+        except httpx.TransportError:
+            if attempt == tries - 1:
+                raise
+            time.sleep(2**attempt)
+    return False
+
+
 def check(settings: DownloadSettings, gated: bool, archives: bool) -> int:
     import httpx
 
@@ -170,7 +185,7 @@ def check(settings: DownloadSettings, gated: bool, archives: bool) -> int:
                     continue
                 src = mirror_source(settings, files, prefix)
                 for f in load(str(files.manifest)).files:
-                    if client.head(src.url(f.path)).status_code != 200:
+                    if not present(client, src.url(f.path)):
                         lacking.append(f.path)
             missing += len(lacking)
             print(f"{entry_id}: {'complete' if not lacking else f'{len(lacking)} file(s) missing'}")

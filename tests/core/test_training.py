@@ -111,6 +111,25 @@ def test_training_runs_stages_and_exports_a_voice(services, dataset):
     assert [s.status for s in tr.get(exp.key).stages] == ["stale"] * 3
 
 
+def test_a_stage_gets_the_hosts_placement_settings_for_its_preview(services, dataset, monkeypatch):
+    """Each stage's request carries the ``compute`` settings that place weights and the host's calibration file, so the
+    stage's preview manager places them as the host would (``StageContext._placement``)."""
+    from mizuoto.core.inference.service import PLACEMENT_SETTINGS
+    from mizuoto.core.jobs.service import JobContext
+
+    requests = []
+    original = JobContext.run_worker
+    monkeypatch.setattr(JobContext, "run_worker", lambda self, target, request, **kw: (requests.append(request), original(self, target, request, **kw))[1])
+    services.settings.update({"compute": {"vram_reserve_mb": 1536, "vram_limit_mb": 6000}})
+    exp = services.training.create(ExperimentInput(name="placed", base_model=MODEL, dataset=dataset.id, method="speaker", hyperparams={"epochs": 1}))
+    assert services.training.run(exp.key, wait=True).state == "completed"
+    assert len(requests) == 3
+    for request in requests:
+        assert request["compute"].keys() == set(PLACEMENT_SETTINGS)
+        assert (request["compute"]["vram_reserve_mb"], request["compute"]["vram_limit_mb"]) == (1536, 6000)
+        assert request["calibration"] == str(services.settings.cache_dir / "memory" / "calibration.json")
+
+
 def test_training_failure_and_model_export(services, dataset):
     tr = services.training
     exp = tr.create(ExperimentInput(name="broken", base_model=MODEL, dataset=dataset.id, method="speaker", hyperparams={"fail": "yes"}))
@@ -241,6 +260,13 @@ def test_the_plan_shows_each_preset_against_the_free_memory(services, monkeypatc
     assert (plan.device, plan.free_mb, plan.total_mb, plan.preset) == ("cuda:0", 23476, 24576, "standard")
     assert [(p.preset, p.memory_mb, p.fits) for p in plan.presets] == [(k, expected[k], expected[k] <= 23476) for k in ("standard", "low", "lowest")]
     assert plan.batch == {"name": "batch_size", "value": 4} and plan.fits is False and "Memory to lowest" in (plan.advice or "")
+    assert (plan.suggested_preset, plan.suggested_batch) == ("lowest", None)
+    device.memory_total_mb = 12288  # a 12 GB card: no preset fits batch 4 under lowest, a smaller batch does
+    services.settings.update({"training": {"memory": "lowest"}})
+    plan = tr.plan("fishspeech/x")
+    assert plan.fits is False and plan.suggested_preset is None and plan.suggested_batch == 3 and "batch_size hyperparameter to 3" in (plan.advice or "")
+    services.settings.update({"training": {"memory": "standard"}})
+    device.memory_total_mb = 24576
     exp.hyperparams = {"batch_size": 2}
     plan = tr.plan("fishspeech/x")
     assert plan.fits is True and plan.advice is None and plan.batch == {"name": "batch_size", "value": 2}

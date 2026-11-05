@@ -1041,3 +1041,27 @@ def test_a_request_reports_the_highest_peak_of_its_measured_phases():
         pass
     assert ctx.device_peak == 1000 + 700 * MB
     assert set(m.owner_usage("M")) == {"loaded", "streamed", "host", "pinned"}
+
+
+def test_a_stage_preview_places_weights_as_the_host_would(tmp_path, monkeypatch):
+    """A training stage's preview builds its model manager from the host's ``compute`` settings in the stage request
+    (the policy the host's own ``policy_from`` makes, the device limit, a simulated device) and starts from the host's
+    calibrated estimates without writing that file; a request without them keeps the defaults."""
+    import json
+
+    from mizuoto.core.inference.service import PLACEMENT_SETTINGS, policy_from
+    from mizuoto.core.settings.models import ComputeSettings
+    from mizuoto.runtime.manager import CALIBRATION_VERSION
+    from mizuoto.training.context import StageContext
+
+    compute = ComputeSettings(vram_reserve_mb=2048, vram_limit_mb=4096, max_pinned_mb=512, oom_retry=False, host_copies="off", vram_mode="low", simulate_vram_mb=3000)
+    calibration = tmp_path / "calibration.json"
+    calibration.write_text(json.dumps({"version": CALIBRATION_VERSION, "phases": {"x:decode": 1.5}}))
+    before = calibration.read_text()
+    request = {"workdir": str(tmp_path / "w"), "compute": compute.model_dump(include=set(PLACEMENT_SETTINGS)), "calibration": str(calibration)}
+    devices, mgr = StageContext(emitter=None, request=request)._placement()  # ty: ignore[invalid-argument-type]
+    assert mgr.policy == policy_from(compute)
+    assert (devices.limit_bytes, devices.simulated("cpu"), devices.strict) == (4096 * 2**20, 3000 * 2**20, True)
+    assert mgr.calibration == {"x:decode": 1.5} and mgr.calibration_path is None and calibration.read_text() == before
+    devices, mgr = StageContext(emitter=None, request={"workdir": str(tmp_path / "w")})._placement()  # ty: ignore[invalid-argument-type]
+    assert mgr.policy == VramPolicy() and devices.limit_bytes is None and mgr.calibration == {}

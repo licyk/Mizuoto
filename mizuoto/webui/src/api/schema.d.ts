@@ -5272,6 +5272,10 @@ export interface components {
             fits: boolean | null;
             /** Advice */
             advice: string | null;
+            /** Suggested Preset */
+            suggested_preset: string | null;
+            /** Suggested Batch */
+            suggested_batch: number | null;
         };
         /** TrainingSettings */
         TrainingSettings: {

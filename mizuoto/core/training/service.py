@@ -30,7 +30,7 @@ from mizuoto.core.engines.params import check_options
 from mizuoto.core.engines.registry import EngineRegistry
 from mizuoto.core.errors import AssetMissingError, CapabilityError, ConflictError, NotFoundError, ValidationError
 from mizuoto.core.files import trash
-from mizuoto.core.inference.service import allocator_env, device_order_env
+from mizuoto.core.inference.service import PLACEMENT_SETTINGS, allocator_env, device_order_env
 from mizuoto.core.jobs.models import Job, JobStep
 from mizuoto.core.jobs.service import JobContext, JobService, JobSpec
 from mizuoto.core.process import host_target
@@ -192,12 +192,14 @@ class TrainingService:
         if plan.fits:
             return plan
         better = next((p for p in PRESETS if PRESETS.index(p) > PRESETS.index(preset) and estimate[p] <= free), None)
+        plan.suggested_preset = better
         plan.advice = f"set Settings › Training › Memory to {better} (mizuoto config set training.memory {better})" if better else "use a bigger GPU or the CPU"
         if better is None and plan.batch is not None:  # a smaller batch may fit where no preset does
             name, current = plan.batch["name"], plan.batch["value"]  # 0: the recipe's own (VoxCPM's 16)
             if isinstance(current, (int, float)) and current > 1:
                 fits = next((b for b in range(int(current) - 1, 0, -1) if estimate_mb(exp.engine, exp.method, info.size_mb, lora, {**hp, name: b})[preset] <= free), None)
                 if fits is not None:
+                    plan.suggested_batch = fits
                     plan.advice = f"lower the {name} hyperparameter to {fits}"
         return plan
 
@@ -499,6 +501,10 @@ class TrainingService:
                 "attention": self._settings.settings.training.attention,
                 "attention_strict": self._settings.settings.compute.attention_strict,
                 "fast": list(self._settings.settings.compute.fast),
+                # the preview's model manager places weights as the host's would (its reserve, limit, pinned budget,
+                # OOM retry) and starts from the host's calibrated working-memory estimates
+                "compute": self._settings.settings.compute.model_dump(include=set(PLACEMENT_SETTINGS)),
+                "calibration": str(self._settings.cache_dir / "memory" / "calibration.json"),
                 "deterministic": deterministic,
                 "hyperparams": hyperparams,
                 "language": exp.language,

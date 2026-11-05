@@ -167,20 +167,27 @@ def set_device_order() -> bool:
     return True
 
 
+PLACEMENT_SETTINGS = (
+    "vram_mode",
+    "vram_reserve_mb",
+    "ram_reserve_mb",
+    "host_copies",
+    "max_pinned_mb",
+    "async_offload",
+    "oom_retry",
+    "oom_fallback",
+    "vram_limit_mb",
+    "simulate_vram_mb",
+)
+"""The ``compute`` settings that place a model's weights: the ``VramPolicy``'s, and the device's limit and simulation. A
+training stage gets them for its preview."""
+
+
 def policy_from(c: Any) -> Any:
     """The runtime's ``VramPolicy`` from the ``compute`` settings."""
     from mizuoto.runtime.policy import VramPolicy
 
-    return VramPolicy(
-        mode=c.vram_mode,
-        reserve_bytes=c.vram_reserve_mb * 2**20,
-        ram_reserve_bytes=None if c.ram_reserve_mb is None else c.ram_reserve_mb * 2**20,
-        host_copies=c.host_copies,
-        max_pinned_bytes=c.max_pinned_mb * 2**20,
-        streams=c.async_offload,
-        oom_retry=c.oom_retry,
-        oom_fallback=c.oom_fallback,
-    )
+    return VramPolicy.from_compute(c.model_dump())
 
 
 class InferenceService:

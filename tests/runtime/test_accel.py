@@ -44,6 +44,33 @@ def test_unbound_calls_run_the_reference_bit_for_bit():
     assert torch.equal(accel.attention(q, k.repeat_interleave(4, 1), v.repeat_interleave(4, 1), site=MATH_SITE), expected)
 
 
+@pytest.mark.parametrize("dtype,mask_kind,gqa", [(torch.bfloat16, "bool", False), (torch.float32, "float", False), (torch.float32, "bool", True)])
+def test_the_math_kernel_under_autocast_is_sdpas_math_kernel(dtype, mask_kind, gqa):
+    """Under autocast the math kernel casts its inputs and runs with autocast off, as autocast does to SDPA: the output
+    and the gradients are SDPA's with the math kernel selected (called with autocast on, its softmax autocast to
+    float32: other bits on the CPU, a failed backward on a GPU)."""
+    from torch.nn.attention import SDPBackend, sdpa_kernel
+
+    base = qkv(heads=4, kv_heads=2 if gqa else 4, n_q=12, n_k=12, dtype=dtype)
+    g = torch.Generator().manual_seed(3)
+    mask = torch.rand(2, 1, 12, 12, generator=g) > 0.3 if mask_kind == "bool" else torch.randn(2, 1, 12, 12, generator=g)
+    if mask.dtype == torch.bool:
+        mask[..., 0] = True
+    results = []
+    for use_sdpa in (False, True):
+        q, k, v = (t.clone().requires_grad_() for t in base)
+        with torch.autocast("cpu", dtype=torch.bfloat16):
+            if use_sdpa:
+                with sdpa_kernel(SDPBackend.MATH):
+                    out = F.scaled_dot_product_attention(q, k, v, attn_mask=mask, enable_gqa=gqa)
+            else:
+                out = accel.math_kernel(q, k, v, mask, False, None, gqa, 0.0)
+        out.float().square().sum().backward()
+        results.append((out.detach(), q.grad, k.grad, v.grad))
+    assert results[0][0].dtype == torch.bfloat16
+    assert all(torch.equal(a, b) for a, b in zip(*results))
+
+
 def test_causal_is_sdpas_top_left_flag():
     """Sites pass ``causal`` as they passed ``is_causal`` (CosyVoice's streamed-text steps rely on it)."""
     q, k, v = qkv(n_q=3, n_k=7)

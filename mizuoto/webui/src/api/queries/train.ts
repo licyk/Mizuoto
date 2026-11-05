@@ -92,6 +92,15 @@ export const useTrainingMethods = (model: MaybeRefOrGetter<string | null>) =>
     enabled: computed(() => !!toValue(model)),
   });
 
+/** What a run would hold on its GPU under each memory preset, against the free memory now (``mizuoto train plan``).
+ * Under ``experiments``: a saved setting or a finished run refreshes it. */
+export const useExperimentPlan = (key: MaybeRefOrGetter<string>) =>
+  useQuery({
+    queryKey: computed(() => keys.experimentPlan(toValue(key))),
+    queryFn: () => unwrap(api.GET('/api/v1/train/experiments/{engine}/{name}/plan', { params: { path: experimentPath(toValue(key)) } })),
+    staleTime: 10_000,
+  });
+
 /** Every metric point of an experiment; ``train_metrics`` events append to it. */
 export const useExperimentMetrics = (key: MaybeRefOrGetter<string>) =>
   useQuery({

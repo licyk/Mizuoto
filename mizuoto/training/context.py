@@ -118,6 +118,25 @@ class StageContext:
 
     # -- previews ---------------------------------------------------------------------
 
+    def _placement(self) -> tuple[Any, Any]:
+        """The preview's devices and model manager, placing weights as the host's would: the host's ``compute`` settings
+        from the request (reserve, ``vram_limit_mb``, pinned budget, OOM retry, a simulated device) and its calibrated
+        working-memory estimates, read but not written back (the host keeps that file)."""
+        from mizuoto.runtime.device import DeviceService
+        from mizuoto.runtime.manager import ModelManager
+        from mizuoto.runtime.policy import MB, VramPolicy
+
+        compute = self.request.get("compute") or {}
+        simulate = int(compute.get("simulate_vram_mb") or 0)
+        limit = int(compute.get("vram_limit_mb") or 0)
+        devices = DeviceService(simulate={"cpu": simulate * MB} if simulate else None, strict=bool(simulate), limit_bytes=limit * MB if limit else None)
+        policy = VramPolicy.from_compute(compute) if compute else VramPolicy()
+        manager = ModelManager(devices, policy=lambda: policy)
+        if self.request.get("calibration"):
+            manager.load_calibration(Path(str(self.request["calibration"])))
+            manager.calibration_path = None
+        return devices, manager
+
     def preview(
         self,
         text: str,
@@ -138,9 +157,7 @@ class StageContext:
             return None
         from mizuoto.nn.dsp.wav import write_wav
         from mizuoto.runtime.context import RequestContext
-        from mizuoto.runtime.device import DeviceService
         from mizuoto.runtime.engine import LoadSpec, Reference, SynthesisTask, VoiceSpec, get_engine
-        from mizuoto.runtime.manager import ModelManager
         from mizuoto.runtime.runtime import Runtime
 
         folder = self.workdir / "preview"
@@ -153,8 +170,7 @@ class StageContext:
             import torch
 
             self.progress(None, "Speaking a preview")
-            devices = DeviceService()
-            manager = ModelManager(devices)
+            devices, manager = self._placement()
             runtime = Runtime(devices, manager)
             spec = LoadSpec(
                 f"{self.base_model.get('id', 'model')}+preview",

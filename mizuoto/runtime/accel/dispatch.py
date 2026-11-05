@@ -94,12 +94,29 @@ def math_kernel(
 ) -> torch.Tensor:
     """SDPA's math kernel, called directly (``sdpa_kernel(MATH)`` would switch it for the whole process). A bool mask is
     made additive first, as ``F.scaled_dot_product_attention`` does before it reaches the kernel: given a bool mask, the
-    kernel adds it as numbers (1 where true) and masks nothing."""
+    kernel adds it as numbers (1 where true) and masks nothing.
+
+    Under autocast it does what autocast does to ``F.scaled_dot_product_attention`` (on its lower-precision list): the
+    floating inputs cast to the autocast dtype, the kernel run with autocast off. Called with autocast on, the kernel's
+    own softmax autocast to float32 while its backward expected the low precision, and training failed ("expected
+    input and grad types to match"; OmniVoice under ``training.deterministic``, which picks this kernel)."""
+    device = q.device.type
+    if torch.is_autocast_enabled(device):
+        dtype = torch.get_autocast_dtype(device)
+        q, k, v = (_autocast(t, dtype) for t in (q, k, v))
+        mask = _autocast(mask, dtype) if mask is not None else None
+        with torch.autocast(device, enabled=False):
+            return math_kernel(q, k, v, mask, causal, scale, enable_gqa, dropout_p)
     if mask is not None and mask.dtype == torch.bool:
         mask = torch.zeros(mask.shape, dtype=q.dtype, device=mask.device).masked_fill_(mask.logical_not(), float("-inf"))
     if enable_gqa:
         return torch.ops.aten._scaled_dot_product_attention_math(q, k, v, attn_mask=mask, dropout_p=dropout_p, is_causal=causal, scale=scale, enable_gqa=True)[0]
     return torch.ops.aten._scaled_dot_product_attention_math(q, k, v, attn_mask=mask, dropout_p=dropout_p, is_causal=causal, scale=scale)[0]
+
+
+def _autocast(t: torch.Tensor, dtype: torch.dtype) -> torch.Tensor:
+    """``t`` as autocast casts an argument of a lower-precision op: floating tensors but float64 to ``dtype``."""
+    return t.to(dtype) if t.is_floating_point() and t.dtype not in (torch.float64, dtype) else t
 
 
 def softmax_attention(
