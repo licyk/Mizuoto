@@ -56,6 +56,10 @@ class Call(NamedTuple):
     grad: bool
     capturing: bool = False
     """Called while a CUDA graph captures (``Graphs.capture``): only ``graph_safe`` backends take it."""
+    deterministic: bool = False
+    """A gradient is needed on an accelerator while torch's deterministic algorithms are on (``training.deterministic``):
+    only backends whose backward pass repeats take it (``repeats``), and ``math`` closes the chain before the site's
+    reference."""
 
 
 def describe(q: torch.Tensor, k: torch.Tensor, v: torch.Tensor, mask: torch.Tensor | None, causal: bool, scale: float | None, dropout_p: float, mask_info: MaskInfo | None) -> Call:
@@ -67,6 +71,7 @@ def describe(q: torch.Tensor, k: torch.Tensor, v: torch.Tensor, mask: torch.Tens
         keys = None if mask_info.keys is None else {"right": "prefix", "left": "suffix"}.get(mask_info.padding or "", "keys")
         structured = "+".join(n for n, on in (("causal", mask_info.causal), (keys, keys is not None), ("window", mask_info.window is not None)) if on and n)
     n_q, n_k = q.shape[-2], k.shape[-2]
+    grad = torch.is_grad_enabled() and (q.requires_grad or k.requires_grad or v.requires_grad)
     return Call(
         device=device,
         index=q.device.index or 0,
@@ -82,8 +87,10 @@ def describe(q: torch.Tensor, k: torch.Tensor, v: torch.Tensor, mask: torch.Tens
         scaled=scale is not None and abs(scale - q.shape[-1] ** -0.5) > 1e-9,
         causal=causal,
         dropout=dropout_p > 0,
-        grad=torch.is_grad_enabled() and (q.requires_grad or k.requires_grad or v.requires_grad),
+        grad=grad,
         capturing=q.is_cuda and not torch.compiler.is_compiling() and torch.cuda.is_current_stream_capturing(),
+        # (the CPU's kernels sum in a fixed order for a given thread count: the traits are about accelerators')
+        deterministic=grad and q.device.type != "cpu" and torch.are_deterministic_algorithms_enabled(),
     )
 
 

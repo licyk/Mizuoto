@@ -91,9 +91,12 @@ class AccelPolicy:
             fast: tuple[str, ...] = PADDED_CHAIN if padded else ("sdpa",)
         else:
             fast = HALF_CHAINS.get(call.device, ("sdpa",)) if half else ("sdpa",)
-        if self.name == FAST:
-            return fast
-        return (self.name, *(n for n in fast if n != self.name))
+        names = fast if self.name == FAST else (self.name, *(n for n in fast if n != self.name))
+        if call.deterministic and "math" not in names:
+            # under training.deterministic the backends whose backward does not repeat are skipped; the chain must not
+            # then end in the site's reference, which is SDPA for most sites (its fused backward passes do not repeat)
+            names = (*names, "math")
+        return names
 
     def resolve(self, site: Site, call: Call, tensors: Any, exclude: frozenset[str] = frozenset()) -> Resolution:
         skipped: list[tuple[str, str]] = []
@@ -114,6 +117,8 @@ class AccelPolicy:
     def _refuses(self, backend: Backend, site: Site, call: Call, tensors: Any) -> str | None:
         if call.capturing and not backend.graph_safe:
             return "not checked inside a CUDA graph"
+        if call.deterministic and not repeats(backend):
+            return "its backward does not repeat"
         if call.grad and not backend.backward:
             return "no backward"
         if call.dropout and not backend.dropout:
@@ -203,7 +208,7 @@ class Run:
             backend = found.backend
             if backend is None:
                 return site.reference(q, k, v, mask, causal, scale, enable_gqa, dropout_p)
-            if call.grad and not repeats(backend):
+            if call.grad and call.device != "cpu" and not repeats(backend):
                 self.nondeterministic[backend.name] += 1
             try:
                 return backend.fn(q, k, v, mask, causal, scale, enable_gqa, dropout_p, mask_info)

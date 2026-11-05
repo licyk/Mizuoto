@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import threading
 
@@ -417,29 +418,92 @@ def test_the_backends_checked_inside_a_cuda_graph():
     assert safe == {"sdpa", "math", "sdpa_flash", "sdpa_efficient", "flash", "xformers"} | ({"sdpa_cudnn"} if "sdpa_cudnn" in REGISTRY.names() else set())
 
 
-def test_a_training_run_reports_backends_whose_backward_does_not_repeat():
-    """``nondeterministic``: per backend, the calls with a gradient whose backward pass does not repeat; a backend that
-    repeats on request (FlashAttention) is not listed while torch's deterministic algorithms are on. Inference
-    reports nothing new."""
+def on_an_accelerator(monkeypatch):
+    """Describe CPU calls as a GPU's (the determinism rules are about accelerators' kernels)."""
+    from mizuoto.runtime.accel import policy as policy_mod
+
+    real = policy_mod.describe
+
+    def describe(*args):
+        call = real(*args)
+        return call._replace(device="cuda", deterministic=call.grad and torch.are_deterministic_algorithms_enabled())
+
+    monkeypatch.setattr(policy_mod, "describe", describe)
+
+
+@contextlib.contextmanager
+def deterministic_algorithms(on: bool):
+    before = torch.are_deterministic_algorithms_enabled()
+    torch.use_deterministic_algorithms(on, warn_only=True)
+    try:
+        yield
+    finally:
+        torch.use_deterministic_algorithms(before, warn_only=True)
+
+
+def test_a_training_run_reports_backends_whose_backward_does_not_repeat(monkeypatch):
+    """``nondeterministic``: per backend, the calls with a gradient on an accelerator whose backward pass does not
+    repeat; a backend that repeats on request (FlashAttention) is not listed while torch's deterministic algorithms are
+    on. Inference, and the CPU (whose kernels repeat), report nothing new."""
     loose, on_request = Fake(), Fake()
     q, k, v = qkv()
     p = policy("loose", Backend("loose", loose, Constraints(devices=ALL), deterministic=False), chain=("loose",))
+    run = p.run()
+    with bind(run):
+        accel.attention(q.clone().requires_grad_(), k, v, site=SITE)
+    assert "nondeterministic" not in run.report()  # on the CPU
+    on_an_accelerator(monkeypatch)
     run = p.run()
     with bind(run):
         accel.attention(q, k, v, site=SITE)
         accel.attention(q.clone().requires_grad_(), k, v, site=SITE)
     assert run.report()["nondeterministic"] == {"loose": 1}
     p = policy("asks", Backend("asks", on_request, Constraints(devices=ALL), deterministic=False, deterministic_on_request=True), chain=("asks",))
-    before = torch.are_deterministic_algorithms_enabled()
     for deterministic, expected in ((False, {"asks": 1}), (True, None)):
-        torch.use_deterministic_algorithms(deterministic, warn_only=True)
-        try:
+        with deterministic_algorithms(deterministic):
             run = p.run()
             with bind(run):
                 accel.attention(q.clone().requires_grad_(), k, v, site=SITE)
-        finally:
-            torch.use_deterministic_algorithms(before, warn_only=True)
         assert run.report().get("nondeterministic") == expected
+
+
+def test_under_deterministic_training_a_named_backend_keeps_only_repeating_kernels(monkeypatch):
+    """With torch's deterministic algorithms on, a call that needs a gradient on an accelerator skips the backends whose
+    backward does not repeat (the named one, then SDPA) and ends at ``math`` instead of the site's reference (SDPA);
+    calls without a gradient, a backend that repeats on request, the CPU and the default mode keep the chain."""
+    q, k, v = qkv()
+    loose = Fake()
+    p = policy("loose", Backend("loose", loose, Constraints(devices=ALL), deterministic=False))
+    with deterministic_algorithms(True):
+        run = p.run()
+        with bind(run):
+            accel.attention(q.clone().requires_grad_(), k, v, site=SITE)  # the CPU: as before
+        assert run.report()["used"] == {"loose": 1}
+        on_an_accelerator(monkeypatch)
+        run = p.run()
+        with bind(run):
+            out = accel.attention(q.clone().requires_grad_(), k, v, site=SITE)
+            accel.attention(q, k, v, site=SITE)  # no gradient: the named backend
+        report = run.report()
+    assert report["used"] == {"math": 1, "loose": 1}
+    assert report["fallbacks"] == {"loose→math": {"its backward does not repeat": 1}, "sdpa→math": {"its backward does not repeat": 1}}
+    assert "nondeterministic" not in report
+    assert torch.allclose(out, F.scaled_dot_product_attention(q, k, v), atol=1e-6)
+    asks = Fake()
+    p = policy("asks", Backend("asks", asks, Constraints(devices=ALL), deterministic=False, deterministic_on_request=True))
+    with deterministic_algorithms(True):
+        run = p.run()
+        with bind(run):
+            accel.attention(q.clone().requires_grad_(), k, v, site=SITE)
+    assert run.report()["used"] == {"asks": 1}
+    run = p.run()  # deterministic algorithms off again: a new resolution (the mode is part of the call), as before
+    with bind(run):
+        accel.attention(q.clone().requires_grad_(), k, v, site=SITE)
+    assert run.report()["used"] == {"asks": 1}
+    run = policy("loose", Backend("loose", Fake(), Constraints(devices=ALL), deterministic=False)).run()
+    with bind(run):
+        accel.attention(q.clone().requires_grad_(), k, v, site=SITE)
+    assert run.report()["used"] == {"loose": 1}
 
 
 def test_flash_asks_for_its_deterministic_backward_when_the_process_does(monkeypatch):
