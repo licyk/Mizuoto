@@ -33,6 +33,7 @@ def test_a_scratch_tensor_holds_what_is_written_and_leaves_no_file(tmp_path):
 
 
 def test_the_plan_keeps_in_ram_what_fits_and_files_only_the_rest(monkeypatch):
+    monkeypatch.setattr(filemap.sys, "platform", "linux")  # the arithmetic; Windows (no file mappings) below
     plenty = filemap.plan(40, GB, other_bytes=8 * GB, ram_available=100 * GB, reserve=10 * GB)
     assert (plenty.in_ram, plenty.in_files, plenty.file_bytes) == (40, 0, 0)
     short = filemap.plan(40, GB, other_bytes=8 * GB, ram_available=29 * GB, reserve=3 * GB)

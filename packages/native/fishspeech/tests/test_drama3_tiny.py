@@ -356,6 +356,15 @@ def test_runs_identically_with_its_weights_placed_by_phase_and_its_experts_strea
     check_streamed(loaded, lambda m: run(m, text=text, stream=True), monkeypatch)
 
 
+def _files_here() -> bool:
+    """Whether this Mizuoto keeps weights RAM cannot hold in files here (0.2.37 and later, not on Windows)."""
+    if "scratch_dir" not in {f.name for f in dataclasses.fields(LoadSpec)}:
+        return False
+    from mizuoto.runtime import filemap
+
+    return filemap.available()
+
+
 def _load_with_ram(model_dir, scratch: Path, ram_for_layers: float | None):
     """The tiny model loaded for a simulated accelerator with RAM for ``ram_for_layers`` layers' experts beside the rest
     (None: plenty), its scratch folder ``scratch``."""
@@ -383,7 +392,7 @@ def engine_module_load(engine, model_dir, runtime, scratch):
         return engine.load(spec, runtime, RequestContext("load"))
 
 
-@pytest.mark.skipif("scratch_dir" not in {f.name for f in dataclasses.fields(LoadSpec)}, reason="Mizuoto before 0.2.37 keeps every weight in RAM")
+@pytest.mark.skipif(not _files_here(), reason="weights are kept in files only with Mizuoto 0.2.37 or later, and not on Windows")
 def test_experts_ram_cannot_hold_are_kept_in_files_and_speak_identically(loaded, model_dir, reference, tmp_path, monkeypatch):
     """With RAM for one layer's experts beside the rest, the other layers' experts are kept in unlinked files
     (``runtime.filemap``): the same values as the all-in-RAM load, nothing left in the scratch folder, and the same audio
@@ -425,7 +434,7 @@ def test_experts_ram_cannot_hold_are_kept_in_files_and_speak_identically(loaded,
         plenty.close()
 
 
-@pytest.mark.skipif("scratch_dir" not in {f.name for f in dataclasses.fields(LoadSpec)}, reason="Mizuoto before 0.2.37 keeps every weight in RAM")
+@pytest.mark.skipif(not _files_here(), reason="weights are kept in files only with Mizuoto 0.2.37 or later, and not on Windows")
 def test_a_full_disk_keeps_the_rest_of_the_experts_in_ram(loaded, model_dir, reference, tmp_path, monkeypatch):
     """When the scratch disk fills up after one layer, that layer's experts stay in their file and the rest in RAM, as
     before the plan: the load goes on and speaks identically."""
