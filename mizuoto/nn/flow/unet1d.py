@@ -72,7 +72,7 @@ class CausalConv1d(nn.Conv1d):
         super().__init__(in_channels, out_channels, kernel_size, 1, padding=0)
         self.causal_padding = kernel_size - 1
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:  # ty: ignore[invalid-method-override]
+    def forward(self, x: torch.Tensor) -> torch.Tensor:  # ty: ignore[lost-keyword-for-regular-parameter]
         return super().forward(F.pad(x, (self.causal_padding, 0), value=0.0))
 
 

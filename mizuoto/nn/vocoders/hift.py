@@ -68,7 +68,7 @@ class CausalConv1d(nn.Conv1d):
         self.causal_padding = int((kernel_size * dilation - dilation) / 2) * 2 + (kernel_size + 1) % 2
         self.causal_type = causal_type
 
-    def forward(self, x: torch.Tensor, cache: torch.Tensor | None = None) -> torch.Tensor:  # ty: ignore[invalid-method-override]
+    def forward(self, x: torch.Tensor, cache: torch.Tensor | None = None) -> torch.Tensor:  # ty: ignore[lost-keyword-for-regular-parameter]
         if cache is None or cache.size(2) == 0:
             cache = torch.zeros(x.shape[0], x.shape[1], self.causal_padding).to(x)
         x = torch.concat([cache, x], dim=2) if self.causal_type == "left" else torch.concat([x, cache], dim=2)
@@ -82,7 +82,7 @@ class CausalConv1dDownSample(nn.Conv1d):
         super().__init__(in_channels, out_channels, kernel_size, stride, padding=0)
         self.causal_padding = stride - 1
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:  # ty: ignore[invalid-method-override]
+    def forward(self, x: torch.Tensor) -> torch.Tensor:  # ty: ignore[lost-keyword-for-regular-parameter]
         return super().forward(F.pad(x, (self.causal_padding, 0), value=0.0))
 
 
@@ -94,7 +94,7 @@ class CausalConv1dUpsample(nn.Conv1d):
         self.causal_padding = kernel_size - 1
         self.stride_up = stride
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:  # ty: ignore[invalid-method-override]
+    def forward(self, x: torch.Tensor) -> torch.Tensor:  # ty: ignore[lost-keyword-for-regular-parameter]
         x = F.interpolate(x, scale_factor=self.stride_up, mode="nearest")
         return super().forward(F.pad(x, (self.causal_padding, 0), value=0.0))
 

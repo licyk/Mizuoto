@@ -381,7 +381,7 @@ def _load_with_ram(model_dir, scratch: Path, ram_for_layers: float | None):
     probe.close()
     other = shards - block * layers + codec
     available = (1 << 40) if ram_for_layers is None else int(reserve + (2 << 30) + other + ram_for_layers * block)
-    devices.memory = lambda name: (available, total) if name == "cpu" else (None, None)  # ty: ignore[invalid-assignment]
+    devices.memory = lambda name: (available, total) if name == "cpu" else (None, None)
     return engine_module_load(engine, model_dir, runtime, scratch)
 
 

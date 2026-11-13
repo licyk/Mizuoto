@@ -266,7 +266,7 @@ def test_the_static_kv_cache_gives_the_same_audio_on_the_cpu(model_dir, loaded):
     static = Qwen3TtsEngine().load(
         LoadSpec("qwen3tts/tiny", model_dir, "custom_voice", "cpu"), Runtime(devices, ModelManager(devices), RuntimeOptions(kv_cache="static")), RequestContext("load")
     )
-    assert static.kv_cache == "static"  # ty: ignore[unresolved-attribute]
+    assert static.kv_cache == "static"  # ty: ignore[missing-attribute]
     assert (speak(static)[0][0].samples == speak(loaded)[0][0].samples).all()
 
 

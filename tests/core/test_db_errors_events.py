@@ -47,7 +47,7 @@ def test_event_bus_and_registry():
     bus.publish(SettingsChangedEvent(keys=["a"]))
     unsubscribe()
     bus.publish(SettingsChangedEvent(keys=["b"]))
-    assert [e.keys for e in got] == [["a"]]  # ty: ignore[unresolved-attribute]
+    assert [e.keys for e in got] == [["a"]]  # ty: ignore[missing-attribute]
     assert SettingsChangedEvent in EventBase.get_events()
 
 

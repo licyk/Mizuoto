@@ -228,7 +228,7 @@ def test_a_cancel_is_honoured_between_the_rows_a_layer_reads():
             ctx.cancel_event.set()  # cancelled once the layer's second row is copied
         return out
 
-    h.take_row = take  # ty: ignore[invalid-assignment]
+    h.take_row = take
     with ctx.bind(), torch.inference_mode(), pytest.raises(Cancelled):
         model(x, ids)
     assert len(taken) == 3  # the third row's check raised before its copy
@@ -601,7 +601,7 @@ def test_measured_working_memory_corrects_the_estimate(tmp_path):
     m.register("M", [h])
     asked: list[int] = []
     original = m.load
-    m.load = lambda handles, memory_required=0: (asked.append(memory_required), original(handles, memory_required))[1]  # ty: ignore[invalid-assignment]
+    m.load = lambda handles, memory_required=0: (asked.append(memory_required), original(handles, memory_required))[1]
     devices.used = 300 * MB
     with m.use([h], 100 * MB):
         pass

@@ -28,7 +28,7 @@ def deterministic() -> None:
     import torch.utils.deterministic
 
     torch.use_deterministic_algorithms(True, warn_only=True)
-    torch.utils.deterministic.fill_uninitialized_memory = False  # ty: ignore[unresolved-attribute]
+    torch.utils.deterministic.fill_uninitialized_memory = False  # ty: ignore[missing-attribute]
     torch.backends.cudnn.benchmark = False
     log.info("training.deterministic: deterministic kernels")
 

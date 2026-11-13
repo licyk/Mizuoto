@@ -143,7 +143,7 @@ def registry_with(*backends: Backend) -> Registry:
 def policy(name, *backends, strict=False, chain=None):
     p = AccelPolicy(name, strict=strict, registry=registry_with(*backends))
     if chain is not None:
-        p.chain = lambda call: chain  # ty: ignore[invalid-assignment]
+        p.chain = lambda call: chain
     return p
 
 

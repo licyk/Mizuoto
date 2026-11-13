@@ -143,7 +143,7 @@ def run_training(model_dir: Path, dataset: Path, out: Path, method: str, hyperpa
     import sys
 
     sys.path.insert(0, str(Path.home() / "code_workspace" / "experiment" / "voxcpm" / "upstream" / "scripts"))
-    import train_voxcpm_finetune as T  # ty: ignore[unresolved-import]
+    import train_voxcpm_finetune as T  # ty: ignore[import-not-found]
 
     from mizuoto.engines.voxcpm.train import Recipe
     from mizuoto.training.context import StageContext

@@ -97,7 +97,7 @@ class JapaneseG2P:
 
     def __init__(self, dict_dir: str | Path, cache_dir: str | Path | None) -> None:
         try:
-            from pyopenjtalk.openjtalk import OpenJTalk  # ty: ignore[unresolved-import]
+            from pyopenjtalk.openjtalk import OpenJTalk  # ty: ignore[import-not-found]
         except ImportError as e:
             raise OpenJTalkMissing("Japanese needs pyopenjtalk (pip install pyopenjtalk==0.4.1; it is built from source)") from e
         dict_dir = Path(dict_dir)

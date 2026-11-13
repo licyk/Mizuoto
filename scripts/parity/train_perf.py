@@ -85,7 +85,7 @@ def _install(timing: _Timing, profile_dir: Path | None, prefix: str) -> None:
             result: dict[str, Any] = {}
 
             class Forward(Emitter):
-                def emit(self, e: Any) -> None:  # ty: ignore[invalid-method-override]
+                def emit(self, e: Any) -> None:  # ty: ignore[lost-keyword-for-regular-parameter]
                     if isinstance(e, ResultEvent):
                         result.update(e.data)
                     event(e)

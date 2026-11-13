@@ -45,7 +45,7 @@ class LayerNorm(nn.LayerNorm):
 
     reset_parameters = default_ops.LayerNorm.reset_parameters
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:  # ty: ignore[invalid-method-override]
+    def forward(self, x: torch.Tensor) -> torch.Tensor:  # ty: ignore[lost-keyword-for-regular-parameter]
         weight = self.weight.float() if self.weight is not None else None
         bias = self.bias.float() if self.bias is not None else None
         return F.layer_norm(x.float(), self.normalized_shape, weight, bias, self.eps).type(x.dtype)

@@ -140,7 +140,7 @@ def main(argv: list[str]) -> int:
         line for name in ("tokenizer.txt", "normalize.txt") for line in (corpus_dir / name).read_text(encoding="utf-8").splitlines() if line.strip() and not line.startswith("//")
     ]
     up_tokens = [upstream.tts_model.text_tokenizer(t) for t in texts]
-    nat_tokens = [native.tokenizer(t) for t in texts]  # ty: ignore[unresolved-attribute]
+    nat_tokens = [native.tokenizer(t) for t in texts]  # ty: ignore[missing-attribute]
     rows.append({"what": f"tokenizer ({len(texts)} texts)", "identical": up_tokens == nat_tokens, "lengths": (len(up_tokens), sum(a == b for a, b in zip(up_tokens, nat_tokens)))})
     up_norm, nat_norm = UpstreamNormalizer(), TextNormalizer()
     same = [up_norm.normalize(t) == nat_norm.normalize(t) for t in texts]
@@ -149,12 +149,12 @@ def main(argv: list[str]) -> int:
     wav_dir = Path(tempfile.mkdtemp(prefix="voxcpm-refs-"))
     clip = canonical_wav("en-narrator", table["en-narrator"], wav_dir)
     with torch.inference_mode():
-        audio = native._read(str(clip))  # ty: ignore[unresolved-attribute]
-        lat_native = latent_patches(native.vae, audio, native.config.patch_size, "left", torch.device("cpu"))  # ty: ignore[unresolved-attribute]
+        audio = native._read(str(clip))  # ty: ignore[missing-attribute]
+        lat_native = latent_patches(native.vae, audio, native.config.patch_size, "left", torch.device("cpu"))  # ty: ignore[missing-attribute]
         cache = upstream.tts_model.build_prompt_cache(prompt_text="x", prompt_wav_path=str(clip))
         rows.append(compare("vae-encode (prompt latents)", cache["audio_feat"], lat_native))
-        lat = lat_native.permute(2, 0, 1).reshape(1, native.config.vae.latent_dim, -1)  # ty: ignore[unresolved-attribute]
-        rows.append(compare("vae-decode", upstream.tts_model.audio_vae.decode(lat.clone()), native.vae.decode(lat.clone())))  # ty: ignore[unresolved-attribute]
+        lat = lat_native.permute(2, 0, 1).reshape(1, native.config.vae.latent_dim, -1)  # ty: ignore[missing-attribute]
+        rows.append(compare("vae-decode", upstream.tts_model.audio_vae.decode(lat.clone()), native.vae.decode(lat.clone())))  # ty: ignore[missing-attribute]
 
     # -- whole requests ------------------------------------------------------------------
     for name, case in CASES.items():

@@ -62,9 +62,9 @@ def test_cosyvoice3_keeps_its_f0_predictor_on_the_cpu_where_float64_is_missing(t
     model_dir = _tiny(tmp_path / "v3", 3)
     devices = DeviceService()
     asked: list[str] = []
-    devices.float64_device = lambda name: asked.append(name) or "cpu"  # ty: ignore[invalid-assignment] - as on MPS
+    devices.float64_device = lambda name: asked.append(name) or "cpu"  # as on MPS
     loaded = CosyVoiceEngine().load(LoadSpec("cosyvoice/tiny", model_dir, "v3", "meta", options={}), Runtime(devices, ModelManager(devices)), RequestContext("load"))
-    hift = loaded.hift  # ty: ignore[unresolved-attribute]
+    hift = loaded.hift  # ty: ignore[missing-attribute]
     assert asked == ["meta"]
     for handle in loaded.handles:
         handle.load()
@@ -76,9 +76,9 @@ def test_cosyvoice3_keeps_its_f0_predictor_on_the_cpu_where_float64_is_missing(t
     cpu = CosyVoiceEngine().load(LoadSpec("cosyvoice/tiny", model_dir, "v3", "cpu", options={}), Runtime(DeviceService(), ModelManager(DeviceService())), RequestContext("load"))
     mel = torch.randn(1, 80, 12)
     gen = torch.Generator().manual_seed(0)
-    reference, _ = cpu.hift.inference(mel, gen, torch.Generator().manual_seed(1))  # ty: ignore[unresolved-attribute]
-    pin_to_cpu(cpu.hift.f0_predictor)  # ty: ignore[unresolved-attribute]
-    again, _ = cpu.hift.inference(mel, torch.Generator().manual_seed(0), torch.Generator().manual_seed(1))  # ty: ignore[unresolved-attribute]
+    reference, _ = cpu.hift.inference(mel, gen, torch.Generator().manual_seed(1))  # ty: ignore[missing-attribute]
+    pin_to_cpu(cpu.hift.f0_predictor)  # ty: ignore[missing-attribute]
+    again, _ = cpu.hift.inference(mel, torch.Generator().manual_seed(0), torch.Generator().manual_seed(1))  # ty: ignore[missing-attribute]
     assert torch.equal(reference, again)
 
 

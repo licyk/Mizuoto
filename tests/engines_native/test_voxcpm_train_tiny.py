@@ -182,7 +182,7 @@ def _upstream_train(setup, method, out: Path):
     if not script.is_file():
         pytest.skip(f"upstream's repository is not at {UPSTREAM}")
     sys.path.insert(0, str(script.parent))
-    import train_voxcpm_finetune as T  # ty: ignore[unresolved-import]
+    import train_voxcpm_finetune as T  # ty: ignore[import-not-found]
 
     manifest = out / "train.jsonl"
     out.mkdir(parents=True, exist_ok=True)

@@ -76,7 +76,7 @@ MATCHA: list[tuple[Any, ...]] = [
 
 def group_torchaudio(out: dict, meta: dict) -> None:
     import torch
-    import torchaudio  # ty: ignore[unresolved-import]
+    import torchaudio  # ty: ignore[import-not-found]
 
     meta["torch"], meta["torchaudio"] = torch.__version__, torchaudio.__version__
     for name, n_freqs, f_min, f_max, n_mels, sr, norm, scale in TA_FBANKS:
@@ -96,7 +96,7 @@ def group_torchaudio(out: dict, meta: dict) -> None:
 
 
 def group_librosa(out: dict, meta: dict) -> None:
-    import librosa  # ty: ignore[unresolved-import]
+    import librosa  # ty: ignore[import-not-found]
 
     meta["librosa"] = librosa.__version__
     for name, sr, n_fft, n_mels, fmin, fmax, htk, norm in LIBROSA_MELS:
@@ -104,7 +104,7 @@ def group_librosa(out: dict, meta: dict) -> None:
 
 
 def group_soxr(out: dict, meta: dict) -> None:
-    import librosa  # ty: ignore[unresolved-import]
+    import librosa  # ty: ignore[import-not-found]
     import soxr
 
     meta["soxr"] = soxr.__version__
@@ -114,8 +114,8 @@ def group_soxr(out: dict, meta: dict) -> None:
 
 def group_whisper(out: dict, meta: dict) -> None:
     import torch
-    import whisper  # ty: ignore[unresolved-import]
-    from whisper.audio import mel_filters  # ty: ignore[unresolved-import]
+    import whisper  # ty: ignore[import-not-found]
+    from whisper.audio import mel_filters  # ty: ignore[import-not-found]
 
     meta["torch"], meta["whisper"] = torch.__version__, getattr(whisper, "__version__", "?")
     x = torch.from_numpy(signal(16000, 0.5))
@@ -148,8 +148,8 @@ def group_matcha(out: dict, meta: dict) -> None:
             next(Path.home().glob("code_workspace/experiment/kodama-refactor/reference/packages/engines/cosyvoice/kodama_engine_cosyvoice/vendor/CosyVoice/third_party/Matcha-TTS"))
         ),
     )
-    import matcha.utils.audio as matcha_audio  # ty: ignore[unresolved-import]
-    from matcha.utils.audio import mel_spectrogram  # ty: ignore[unresolved-import]
+    import matcha.utils.audio as matcha_audio  # ty: ignore[import-not-found]
+    from matcha.utils.audio import mel_spectrogram  # ty: ignore[import-not-found]
 
     meta["torch"] = torch.__version__
     for name, n_fft, n_mels, sr, hop, win, fmin, fmax in MATCHA:

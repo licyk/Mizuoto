@@ -169,8 +169,8 @@ def _flash_probe(device: torch.device) -> str | None:
 def xformers(
     q: torch.Tensor, k: torch.Tensor, v: torch.Tensor, mask: Any, causal: bool, scale: float | None, enable_gqa: bool, dropout_p: float, info: MaskInfo | None
 ) -> torch.Tensor:
-    import xformers.ops as xops  # ty: ignore[unresolved-import]
-    from xformers.ops.fmha import attn_bias as ab  # ty: ignore[unresolved-import]
+    import xformers.ops as xops  # ty: ignore[import-not-found]
+    from xformers.ops.fmha import attn_bias as ab  # ty: ignore[import-not-found]
 
     k, v = repeat_heads(q, k, v)
     bias: Any = None
@@ -218,7 +218,7 @@ def _current(q: torch.Tensor) -> Any:
 def sage(
     q: torch.Tensor, k: torch.Tensor, v: torch.Tensor, mask: Any, causal: bool, scale: float | None, enable_gqa: bool, dropout_p: float, info: MaskInfo | None
 ) -> torch.Tensor:
-    from sageattention import sageattn  # ty: ignore[unresolved-import]
+    from sageattention import sageattn  # ty: ignore[import-not-found]
 
     if mask is not None:  # only a causal mask over equal lengths gets here (the constraints)
         causal = True
@@ -243,7 +243,7 @@ def _sage_probe(device: torch.device) -> str | None:
 def sage3(
     q: torch.Tensor, k: torch.Tensor, v: torch.Tensor, mask: Any, causal: bool, scale: float | None, enable_gqa: bool, dropout_p: float, info: MaskInfo | None
 ) -> torch.Tensor:
-    from sageattn3 import sageattn3_blackwell  # ty: ignore[unresolved-import]
+    from sageattn3 import sageattn3_blackwell  # ty: ignore[import-not-found]
 
     k, v = repeat_heads(q, k, v)
     with _current(q):  # as ``sage``

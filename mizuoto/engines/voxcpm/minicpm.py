@@ -280,5 +280,5 @@ class MiniCPMModel(nn.Module):
         span = attend_span(self.kv_cache.current_length, self.kv_cache.max_length, inputs_embeds.device, self.span_everywhere)
         hidden_states = inputs_embeds
         for i, layer in enumerate(self.layers):
-            hidden_states = layer.forward_step(hidden_states, position_emb, position_id, self.kv_cache.get_layer_cache(i), span)  # ty: ignore[call-non-callable]
+            hidden_states = layer.forward_step(hidden_states, position_emb, position_id, self.kv_cache.get_layer_cache(i), span)  # ty: ignore[not-callable]
         return self.norm(hidden_states)
