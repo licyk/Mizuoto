@@ -250,11 +250,12 @@ $W/native-env/bin/python scripts/parity/compare.py qwen3tts --a reference --b na
 | 改动 | 检查 |
 | --- | --- |
 | `packages/native/<id>/**` | 该包的 `gated` 和 `oldest-mizuoto` 作业，以及针对它的 `torch` |
-| `mizuoto/webui/**` | `web`、`browser` |
+| `mizuoto/webui/**` | `web`、`browser`、`docker-web` |
+| `Dockerfile`、`.dockerignore` | `docker-web` |
 | `site/**` | `site`（文档站的测试和构建） |
 | `mizuoto/`、`tests/`、`scripts/` 下的其他内容、`pyproject.toml`，或新路径 | `host`、`web`（它的 API 类型来自代码）、`browser`、`torch`，以及两个包的作业：它们跑在本次提交的 Mizuoto 运行时上 |
 | `.github/workflows/**`、`scripts/ci.py` | 全部 |
-| `README*.md`、`AGENTS.md`、`CLAUDE.md`、`LICENSE`、`Dockerfile`、`.gitignore`…… | 无 |
+| `README*.md`、`AGENTS.md`、`CLAUDE.md`、`LICENSE`、`.gitignore`…… | 无 |
 
 新分支、手动触发、被 compare API 截断的列表（300 个文件）或读取失败时检查全部；`tests/test_ci.py` 覆盖这套映射。
 
@@ -265,6 +266,7 @@ $W/native-env/bin/python scripts/parity/compare.py qwen3tts --a reference --b na
 | `oldest-mizuoto` | 范围内的每个包，Ubuntu、Python 3.12 | 用该包 `pyproject.toml` 允许的最旧 Mizuoto（`python scripts/ci.py lower-bound <id>`，来自 PyPI）测试它：测试在源码目录之外运行，`PYTHONPATH` 上只有 `tests/`，所以 `import mizuoto` 找到的是已发布的那个（不含范围检查，它比较的是范围与本次提交的 Mizuoto） |
 | `torch` | Ubuntu、Python 3.12，torch 2.8.0 和最新版 | 用 Mizuoto 支持的最旧和最新的 torch 跑范围内的测试，发现 torch 的接口变化 |
 | `web` | Ubuntu、Python 3.11、bun | `dev.py web-install`、`dev.py test-web`、`dev.py typegen-check` |
+| `docker-web` | Ubuntu、Docker；容器内为 Node.js 24 和 bun | `docker build --target web`：安装锁定依赖、类型检查和构建；在构建出的容器中确认 Node.js 运行时和 `dist/index.html` |
 | `browser` | Ubuntu、Python 3.11、bun、Playwright 的 Chromium（`playwright install --with-deps chromium`） | `dev.py web-install`、`dev.py web`（构建）、`dev.py test-e2e` |
 | `site` | Ubuntu、bun | 在 `site/` 里 `bun install --frozen-lockfile`、`bun run check`、`bun run test`、`bun run build` |
 | `passed`（"CI passed"） | Ubuntu | 上面有作业失败或被取消时失败，都通过或因改动无关而跳过时通过：分支保护只需要求这一项 |

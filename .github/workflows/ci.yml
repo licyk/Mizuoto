@@ -7,6 +7,7 @@
 #   Mizuoto its range allows;
 # - the oldest torch Mizuoto supports and the newest, for whatever Python is checked;
 # - the web UI (mizuoto/webui) and the documentation site (site/): their own tests, types and builds.
+# - Dockerfile, .dockerignore and web UI changes: the Docker web stage, with its own Node.js and Bun.
 # A change to the workflows or to scripts/ci.py checks everything; so do manual runs and Release's (release.yml runs
 # this file as its checks). "CI passed" is the last job, the one to require in branch protection: the others may skip.
 name: CI
@@ -49,6 +50,7 @@ jobs:
       run: ${{ steps.scope.outputs.run }}
       core: ${{ steps.scope.outputs.core }}
       web: ${{ steps.scope.outputs.web }}
+      docker_web: ${{ steps.scope.outputs.docker_web }}
       site: ${{ steps.scope.outputs.site }}
       gated: ${{ steps.scope.outputs.gated }}
       python: ${{ steps.scope.outputs.python }}
@@ -270,6 +272,21 @@ jobs:
           python scripts/dev.py test-web
           python scripts/dev.py typegen-check
 
+  docker-web:
+    name: Docker web build
+    needs: scope
+    if: needs.scope.outputs.run == 'true' && needs.scope.outputs.docker_web == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - name: Build the web UI in Docker
+        run: docker build --target web --tag mizuoto-web:ci .
+      - name: Verify Node.js and the built page
+        run: >-
+          docker run --rm mizuoto-web:ci node -e
+          "require('node:assert/strict').equal(process.release.name, 'node');
+          require('node:fs').accessSync('dist/index.html')"
+
   browser:
     # The built web UI on a real server (the dummy engine, a new data folder) in headless Chromium: every screen loads
     # without errors, a speak runs, a phone-sized window fits and reaches every screen (tests/e2e).
@@ -320,7 +337,7 @@ jobs:
     # One check for branch protection: it fails when a job above failed or was cancelled, and passes when they passed
     # or were skipped because the change does not touch what they check.
     name: CI passed
-    needs: [scope, host, gated, oldest-mizuoto, torch, web, browser, site]
+    needs: [scope, host, gated, oldest-mizuoto, torch, web, docker-web, browser, site]
     if: always()
     runs-on: ubuntu-latest
     steps:

@@ -21,21 +21,58 @@ GATED = ["fishspeech", "indextts"]
 
 def test_each_distribution_is_checked_on_its_own():
     only = ci.scope(["packages/native/fishspeech/mizuoto_fishspeech/engine.py", "packages/native/fishspeech/tests/test_fishspeech_tiny.py"])
-    assert only == {"core": False, "web": False, "site": False, "gated": ["fishspeech"], "release_files": False}
+    assert only == {"core": False, "web": False, "docker_web": False, "site": False, "gated": ["fishspeech"], "release_files": False}
     assert ci.scope(["packages/native/indextts/pyproject.toml"])["gated"] == ["indextts"]
-    assert ci.scope(["site/content/docs/index.mdx"]) == {"core": False, "web": False, "site": True, "gated": [], "release_files": False}
-    assert ci.scope(["mizuoto/webui/src/App.vue"]) == {"core": False, "web": True, "site": False, "gated": [], "release_files": False}
-    assert ci.scope(["README.md", "AGENTS.md", "Dockerfile"]) == {"core": False, "web": False, "site": False, "gated": [], "release_files": False}
+    assert ci.scope(["site/content/docs/index.mdx"]) == {"core": False, "web": False, "docker_web": False, "site": True, "gated": [], "release_files": False}
+    assert ci.scope(["README.md", "AGENTS.md"]) == {"core": False, "web": False, "docker_web": False, "site": False, "gated": [], "release_files": False}
+
+
+@pytest.mark.parametrize("path", ["Dockerfile", ".dockerignore", "mizuoto/webui/src/App.vue", "mizuoto/webui/package.json", "mizuoto/webui/bun.lock"])
+def test_docker_web_build_checks_its_inputs(path):
+    assert ci.scope([path]) == {
+        "core": False,
+        "web": path.startswith("mizuoto/webui/"),
+        "docker_web": True,
+        "site": False,
+        "gated": [],
+        "release_files": False,
+    }
+
+
+def test_docker_checks_combine_with_other_changes():
+    assert ci.scope(["Dockerfile", "site/content/docs/advanced-docker.mdx", "mizuoto/version.py"]) == {
+        "core": True,
+        "web": True,
+        "docker_web": True,
+        "site": True,
+        "gated": GATED,
+        "release_files": True,
+    }
 
 
 def test_a_change_to_mizuoto_checks_the_packages_that_run_on_it():
     for path in ("mizuoto/runtime/engine.py", "pyproject.toml", "tests/engines_native/streaming.py", "scripts/build_wheels.py", "something/new.txt"):
-        assert ci.scope([path]) == {"core": True, "web": True, "site": False, "gated": GATED, "release_files": False}, path
+        assert ci.scope([path]) == {"core": True, "web": True, "docker_web": False, "site": False, "gated": GATED, "release_files": False}, path
 
 
 def test_a_change_to_ci_checks_everything():
     for files, everything in (([".github/workflows/ci.yml"], False), (["scripts/ci.py"], False), ([], True)):
-        assert ci.scope(files, everything) == {"core": True, "web": True, "site": True, "gated": GATED, "release_files": False}
+        assert ci.scope(files, everything) == {"core": True, "web": True, "docker_web": True, "site": True, "gated": GATED, "release_files": False}
+
+
+def test_scope_exports_docker_check_to_github(tmp_path, monkeypatch, capsys):
+    import io
+    import json
+
+    target = tmp_path / "outputs"
+    monkeypatch.setenv("GITHUB_OUTPUT", str(target))
+    monkeypatch.setattr(sys, "stdin", io.StringIO("Dockerfile\n"))
+    assert ci.main(["scope"]) == 0
+    values = json.loads(capsys.readouterr().out)
+    assert values["docker_web"] is True
+    assert values["python"] is False
+    assert values["test_paths"] == ""
+    assert "docker_web=true" in target.read_text(encoding="utf-8").splitlines()
 
 
 def test_version_files_mark_a_release():

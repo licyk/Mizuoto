@@ -10,9 +10,12 @@ icon: Container
 
 | 阶段 | 基础镜像 | 内容 |
 | --- | --- | --- |
-| `web` | `oven/bun:1` | 用 bun 构建网页界面（`mizuoto/webui/dist`） |
+| `bun` | `oven/bun:1` | 为 `web` 阶段提供 bun 可执行文件 |
+| `web` | `node:24-bookworm-slim` | bun 按锁文件安装依赖，Node.js 执行类型检查和网页界面构建（`mizuoto/webui/dist`） |
 | `wheels` | `python:<PYTHON>-slim` | 由 `scripts/build_wheels.py` 构建的 Mizuoto wheel，`GATED=1` 时还有 Fish Speech 和 IndexTTS 的 wheel，以及为 GPT-SoVITS 日语前端编译的 pyopenjtalk wheel |
 | （最终镜像） | `python:<PYTHON>-slim` | 先从 `TORCH_INDEX` 安装 torch，再安装这些 wheel 及所有可选前端；运行 `mizuoto webui` |
+
+`web` 阶段使用 `bun install --frozen-lockfile` 安装依赖，再用 `npm run build` 执行 `vue-tsc --noEmit && vite build`。`vue-tsc` 需要真正的 Node.js：仅使用 Bun 镜像时，其 `node` 回退命令实际运行 Bun，可能使 Vue 组件的属性和导出类型无法识别。Node.js 和 bun 只用于构建，不进入最终的 Python 镜像。
 
 ### 构建参数
 

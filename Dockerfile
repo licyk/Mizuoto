@@ -21,12 +21,16 @@
 ARG PYTHON=3.11
 
 # -- the web UI ------------------------------------------------------------------------------------
-FROM oven/bun:1 AS web
+FROM oven/bun:1 AS bun
+FROM node:24-bookworm-slim AS web
+# vue-tsc patches TypeScript's module loading under Node.js. Bun installs the locked dependencies, but must not
+# run the type checker: oven/bun's fallback `node` is Bun and loses the Vue component types.
+COPY --from=bun /usr/local/bin/bun /usr/local/bin/bun
 WORKDIR /src/mizuoto/webui
 COPY mizuoto/webui/package.json mizuoto/webui/bun.lock ./
 RUN bun install --frozen-lockfile
 COPY mizuoto/webui/ ./
-RUN bun run build
+RUN npm run build
 
 # -- the wheels: mizuoto, and the gated engines' distributions with GATED=1 ---------------------------
 FROM python:${PYTHON}-slim AS wheels

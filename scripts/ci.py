@@ -3,7 +3,8 @@
 - ``scope [--all]``: the changed files (one per line on standard input) → the checks to run. Each distribution is
   checked on its own: a change to a licence-gated engine's package checks that package alone; a change to Mizuoto
   checks it and both gated packages, which run on its runtime; the web UI and the documentation site have checks of
-  their own. A change to CI itself, or a list that could not be read (``--all``), checks everything.
+  their own. Dockerfile, .dockerignore and Web UI changes also build the Docker web stage. A change to CI itself,
+  or a list that could not be read (``--all``), checks everything.
 - ``release``: the distributions a run of Release publishes. A push to main releases those whose version file it
   changes; a tag releases the one it names (``v<version>`` Mizuoto, ``mizuoto-<id>-v<version>`` a gated engine) and
   must match its version; a manual run releases what its ``packages`` input names (``all``, or names).
@@ -30,8 +31,8 @@ NATIVE = "packages/native"
 
 EVERYTHING = (".github/workflows/", "scripts/ci.py")
 """A change here checks everything: it changes the checks themselves."""
-NOTHING = ("README.md", "README.zh-CN.md", "AGENTS.md", "CLAUDE.md", "LICENSE", "Dockerfile", ".dockerignore", ".gitignore", ".gitattributes")
-"""Files no check reads (the Docker image is built by hand; the READMEs only ship as Mizuoto's long description)."""
+NOTHING = ("README.md", "README.zh-CN.md", "AGENTS.md", "CLAUDE.md", "LICENSE", ".gitignore", ".gitattributes")
+"""Files no check reads (the READMEs only ship as Mizuoto's long description)."""
 
 
 @dataclass(frozen=True)
@@ -62,16 +63,18 @@ def version_of(dist: Distribution) -> str:
 
 
 def scope(files: list[str], everything: bool = False) -> dict[str, object]:
-    """The checks for ``files``: ``core`` (Mizuoto's Python on every platform), ``web``, ``site``, ``gated`` (the
+    """The checks for ``files``: ``core`` (Mizuoto's Python on every platform), ``web``, ``docker_web``, ``site``, ``gated`` (the
     engine ids whose packages are checked), and ``release_files`` (whether a version file changed: Release then runs
     the checks for that push, and CI's own run skips them)."""
     gated = gated_ids()
-    core = web = site = everything
+    core = web = docker_web = site = everything
     checked: set[str] = set(gated) if everything else set()
     for path in files:
         if path.startswith(EVERYTHING):
-            core = web = site = True
+            core = web = docker_web = site = True
             checked |= set(gated)
+        elif path in ("Dockerfile", ".dockerignore"):
+            docker_web = True
         elif path.startswith(f"{NATIVE}/"):
             engine = path.split("/")[2]
             if engine in gated:
@@ -81,7 +84,7 @@ def scope(files: list[str], everything: bool = False) -> dict[str, object]:
         elif path.startswith("site/"):
             site = True
         elif path.startswith("mizuoto/webui/"):
-            web = True
+            web = docker_web = True
         elif path in NOTHING:
             continue
         else:
@@ -91,7 +94,7 @@ def scope(files: list[str], everything: bool = False) -> dict[str, object]:
             core = web = True
             checked |= set(gated)
     versions = {d.version_file for d in distributions()}
-    return {"core": core, "web": web, "site": site, "gated": sorted(checked), "release_files": any(f in versions for f in files)}
+    return {"core": core, "web": web, "docker_web": docker_web, "site": site, "gated": sorted(checked), "release_files": any(f in versions for f in files)}
 
 
 def release(event: str, ref_type: str, ref_name: str, files: list[str], packages: str = "") -> list[Distribution]:

@@ -10,9 +10,12 @@ The `Dockerfile` at the repository's root builds one image with the Mizuoto serv
 
 | Stage | Base image | What it holds |
 | --- | --- | --- |
-| `web` | `oven/bun:1` | The web UI, built with bun (`mizuoto/webui/dist`) |
+| `bun` | `oven/bun:1` | The bun executable copied into the `web` stage |
+| `web` | `node:24-bookworm-slim` | bun installs the locked dependencies; Node.js runs type checking and the web UI build (`mizuoto/webui/dist`) |
 | `wheels` | `python:<PYTHON>-slim` | Mizuoto's wheel, built by `scripts/build_wheels.py`, the Fish Speech and IndexTTS wheels with `GATED=1`, and a pyopenjtalk wheel compiled for GPT-SoVITS's Japanese front end |
 | (final) | `python:<PYTHON>-slim` | torch from `TORCH_INDEX`, then the wheels with every optional front end; runs `mizuoto webui` |
+
+The `web` stage installs dependencies with `bun install --frozen-lockfile`, then runs `vue-tsc --noEmit && vite build` through `npm run build`. `vue-tsc` needs real Node.js: in a Bun-only image, the fallback `node` command runs Bun, which can leave Vue component props and exported types unrecognised. Node.js and bun are used only during the build and do not enter the final Python image.
 
 ### Build arguments
 

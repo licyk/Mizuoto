@@ -125,6 +125,8 @@ It tries the built distributions as a user gets them. In a temporary folder outs
 
 `.github/workflows/ci.yml` checks each push and pull request for what it changes: Mizuoto, a gated package, the web UI, the docs site (see [Testing](/docs/development-testing#ci)).
 
+Changes to `Dockerfile`, `.dockerignore` or `mizuoto/webui/` also run the independent `Docker web build` job: `docker build --target web`, followed by a check inside the built container that the runtime is Node.js and `dist/index.html` exists. The job is required by `CI passed`; manual runs, changes to CI itself and unknown change scopes also run it. It checks the frontend container build; the complete Python image and server startup still need separate verification.
+
 `.github/workflows/release.yml` runs on a push to `main` that changes a version file (`mizuoto/version.py`, `packages/native/*/mizuoto_*/version.py`), on a pushed tag `v*` or `mizuoto-*-v*` (GitHub applies no path filter to tags) and by hand (its `packages` input: `all`, `mizuoto`, `mizuoto-fishspeech` or `mizuoto-indextts`). One release runs at a time per ref, and none is cancelled. Packages are installed with uv, as in CI.
 
 1. `plan`: `python scripts/ci.py release` decides what this run releases. A push releases each distribution whose version file it changed (the compare API's files); a tag releases the one it names and must equal its version (`v0.2.0` for Mizuoto 0.2.0, `mizuoto-indextts-v0.2.1` for mizuoto-indextts 0.2.1); a manual run, its input.
@@ -157,9 +159,12 @@ docker run --gpus all -p 7869:7869 -v mizuoto-data:/data -e MIZUOTO_SERVER__ACCE
 
 | Stage | What |
 | --- | --- |
-| `web` | `oven/bun:1`: `bun install --frozen-lockfile`, `bun run build` |
+| `bun` | `oven/bun:1`: supplies the bun executable to the `web` stage |
+| `web` | `node:24-bookworm-slim`: `bun install --frozen-lockfile` installs dependencies; `npm run build` runs type checking and the Vite build under Node.js |
 | `wheels` | `python:<PYTHON>-slim` with a compiler and CMake: a wheel of `pyopenjtalk==0.4.1` (published as an sdist only), `build_wheels.py host --skip-web`, and `build_wheels.py native` when `GATED=1` |
 | the image | `python:<PYTHON>-slim`: torch from `TORCH_INDEX` first, then the wheels with `mizuoto[gptsovits-ja,gptsovits-ko]` (and `mizuoto-indextts[ja]`), the rest from PyPI; `MIZUOTO_DATA_DIR=/data`, a `/data` volume, port 7869, a health check on `/api/v1/app/health` |
+
+`vue-tsc` patches TypeScript's module loading to support Vue component types and must run under Node.js. The Bun image's fallback `node` command points to Bun, leaving component props and named exports unrecognised; keep type checking enabled when building. Node.js and bun do not enter the final image.
 
 No system packages are installed in the image: PyAV, torch and the text libraries ship their native code in their wheels. Without a C compiler in the image, `compute.compile` runs eagerly (it warns once). For using the image, see [Docker](/docs/advanced-docker).
 

@@ -125,6 +125,8 @@ python scripts/smoke_wheels.py --dist dist --others none   # 只装 dist/ 里的
 
 `.github/workflows/ci.yml` 按每次推送和拉取请求改动的内容检查：Mizuoto、某个需要接受许可的包、Web UI、文档站（见[测试](/docs/development-testing#ci)）。
 
+`Dockerfile`、`.dockerignore` 或 `mizuoto/webui/` 的改动还会触发独立的 `Docker web build` 作业：运行 `docker build --target web`，然后在构建出的容器中确认运行时为 Node.js 且 `dist/index.html` 存在。该作业纳入 `CI passed`；手动运行、改动 CI 本身或无法确定改动范围时也会执行。它验证前端容器构建，完整 Python 镜像及其服务启动仍需单独验收。
+
 `.github/workflows/release.yml` 在推送到 `main` 且改动了某个版本文件（`mizuoto/version.py`、`packages/native/*/mizuoto_*/version.py`）时、推送 `v*` 或 `mizuoto-*-v*` 标签时（GitHub 对标签不应用路径过滤）以及手动触发时运行（输入 `packages`：`all`、`mizuoto`、`mizuoto-fishspeech` 或 `mizuoto-indextts`）。同一引用同时只运行一次发布，且不会被取消。依赖和 CI 一样用 uv 安装。
 
 1. `plan`：`python scripts/ci.py release` 决定这次发布什么。推送发布它改动了版本文件的每个发行包（文件列表来自 compare API）；标签发布它指明的那个，且必须等于其版本（Mizuoto 0.2.0 对应 `v0.2.0`，mizuoto-indextts 0.2.1 对应 `mizuoto-indextts-v0.2.1`）；手动触发发布输入指定的。
@@ -157,9 +159,12 @@ docker run --gpus all -p 7869:7869 -v mizuoto-data:/data -e MIZUOTO_SERVER__ACCE
 
 | 阶段 | 内容 |
 | --- | --- |
-| `web` | `oven/bun:1`：`bun install --frozen-lockfile`、`bun run build` |
+| `bun` | `oven/bun:1`：为 `web` 阶段提供 bun 可执行文件 |
+| `web` | `node:24-bookworm-slim`：`bun install --frozen-lockfile` 安装依赖，`npm run build` 用 Node.js 执行类型检查和 Vite 构建 |
 | `wheels` | 带编译器和 CMake 的 `python:<PYTHON>-slim`：构建 `pyopenjtalk==0.4.1` 的 wheel（它只发布源码包）、`build_wheels.py host --skip-web`，`GATED=1` 时再 `build_wheels.py native` |
 | 镜像本身 | `python:<PYTHON>-slim`：先从 `TORCH_INDEX` 装 torch，再装 wheel 及 `mizuoto[gptsovits-ja,gptsovits-ko]`（以及 `mizuoto-indextts[ja]`），其余依赖来自 PyPI；`MIZUOTO_DATA_DIR=/data`，`/data` 卷，端口 7869，对 `/api/v1/app/health` 的健康检查 |
+
+`vue-tsc` 通过修改 TypeScript 的模块加载过程支持 Vue 组件类型，必须由 Node.js 执行。Bun 镜像的 `node` 回退命令实际指向 Bun，会导致组件属性及具名导出无法识别；不要通过跳过类型检查来构建。Node.js 和 bun 不进入最终镜像。
 
 镜像里不装任何系统包：PyAV、torch 和各文本库的原生代码都在它们的 wheel 里。镜像里没有 C 编译器，所以 `compute.compile` 以即时执行方式运行（只警告一次）。镜像的用法见 [Docker](/docs/advanced-docker)。
 
