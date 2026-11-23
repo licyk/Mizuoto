@@ -172,8 +172,9 @@ def test_tiles_with_context_give_the_whole_of_a_convolution_stack():
             tiled = context_tiled_1d(model, x, 4, tile=128, before=4, after=after)
             short = context_tiled_1d(model, x, 4, tile=128, before=0, after=0)
         assert tiled.shape == whole.shape == (1, 1, 4000)
-        assert float((tiled - whole).abs().max()) < 1e-6
-        assert float((short - whole).abs().max()) > 1e-3
+        peak = float(whole.abs().max())
+        assert float((tiled - whole).abs().max()) < 1e-6 * peak
+        assert float((short - whole).abs().max()) > 1e-3 * peak
 
 
 def test_a_dac_decoder_tiled_with_its_context_gives_the_whole():
