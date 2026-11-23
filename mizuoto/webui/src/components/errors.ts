@@ -54,6 +54,7 @@ export function errorView(error: unknown, t: Translate, tOr: TranslateOr): Error
     message = e?.message ?? String(error ?? '');
     detail = e?.detail ?? {};
   }
+  if (!message) message = tOr(`errors.guidance.${code}`, '');
   const hint = typeof detail.hint === 'string' ? detail.hint : '';
   const fields: ErrorField[] = [];
   const blocks: ErrorField[] = [];

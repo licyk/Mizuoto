@@ -61,7 +61,7 @@ def services(tmp_path_factory):
     if os.environ.get("MIZUOTO_TEST_ACCEPT_LICENCES") == "1":
         # Licence-gated engines, for whoever runs the suite and has accepted their licences: in this temporary folder only.
         for engine in s.engines.ids():
-            if s.engines.manifest(engine).licence.gated:
+            if s.engines.status(engine).licence.gated:
                 s.engines.accept_licence(engine)
     yield s
     s.close()
@@ -78,7 +78,8 @@ def installed_models() -> list[str]:
             manifest = s.engines.manifest(m.engine)
             if manifest.internal or m.engine == "dummy" or (wanted and m.engine not in wanted):
                 continue
-            if s.engines.status(m.engine).available:
+            status = s.engines.status(m.engine)
+            if status.available and (not status.licence.gated or os.environ.get("MIZUOTO_TEST_ACCEPT_LICENCES") == "1"):
                 out.append(m.id)
     return out
 

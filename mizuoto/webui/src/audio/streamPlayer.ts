@@ -186,27 +186,42 @@ export class StreamPlayer {
   }
 
   private async openAudio(rate: number) {
+    let operation = 'new AudioContext';
     try {
       const ctx = new AudioContext({ sampleRate: rate, latencyHint: 'playback' });
       this.ctx = ctx;
+      operation = 'URL.createObjectURL';
       const module = URL.createObjectURL(new Blob([WORKLET], { type: 'application/javascript' }));
       try {
+        operation = 'audioWorklet.addModule';
         await ctx.audioWorklet.addModule(module);
       } finally {
         URL.revokeObjectURL(module);
       }
       if (this.ctx !== ctx) return;
+      operation = 'new AudioWorkletNode';
       const node = new AudioWorkletNode(ctx, PROCESSOR, { numberOfInputs: 0, numberOfOutputs: 1, outputChannelCount: [2], processorOptions: { target: Math.round(rate * START_SECONDS) } });
       node.port.onmessage = (e: MessageEvent<{ played: number; buffered: number; drained: boolean }>) => {
         this.patch({ played: e.data.played / rate, buffered: e.data.buffered / rate });
         if (e.data.drained && this.status.state === 'finishing') this.finish();
       };
+      operation = 'AudioWorkletNode.connect';
       node.connect(ctx.destination);
       this.node = node;
       for (const item of this.pending.splice(0)) this.feed(item);
+      operation = 'AudioContext.resume';
       await ctx.resume();
     } catch (e) {
-      this.fail({ code: 'stream_failed', message: e instanceof Error ? e.message : String(e), detail: {} });
+      const detail: Record<string, unknown> = {
+        origin: location.origin, secure_context: String(window.isSecureContext), sample_rate: rate,
+        browser: navigator.userAgent, during: operation, exception: String(e),
+      };
+      if (operation === 'new AudioContext' && typeof AudioContext !== 'function') detail.missing_api = 'AudioContext';
+      if (operation === 'audioWorklet.addModule' && typeof this.ctx?.audioWorklet?.addModule !== 'function') detail.missing_api = 'AudioContext.audioWorklet.addModule';
+      if (operation === 'new AudioWorkletNode' && typeof AudioWorkletNode !== 'function') detail.missing_api = 'AudioWorkletNode';
+      let code = 'stream_audio_init_failed';
+      if (detail.missing_api) code = window.isSecureContext === false ? 'stream_insecure_context' : 'stream_audio_unsupported';
+      this.fail({ code, message: '', detail });
     }
   }
 

@@ -47,6 +47,43 @@ describe('StreamPlayer', () => {
   beforeEach(() => vi.stubGlobal('WebSocket', FakeSocket));
   afterEach(() => vi.unstubAllGlobals());
 
+  async function beginPlayback() {
+    const player = new StreamPlayer();
+    const started = player.start({ model: 'm', text: 'x' }, 'ws://x/stream');
+    const ws = FakeSocket.last!;
+    ws.deliver({ type: 'queued', job_id: 'j' });
+    await started;
+    ws.deliver({ type: 'start', job_id: 'j', sample_rate: 24000 });
+    return player;
+  }
+
+  it('identifies an insecure page even when Web Audio APIs are missing', async () => {
+    vi.stubGlobal('isSecureContext', false);
+    vi.stubGlobal('AudioContext', undefined);
+    const player = await beginPlayback();
+    expect(player.status.error).toMatchObject({ code: 'stream_insecure_context', detail: { origin: location.origin, secure_context: 'false' } });
+    expect(FakeSocket.last!.sent).not.toContain(JSON.stringify({ type: 'cancel' }));
+  });
+
+  it('names missing worklet APIs on a secure page', async () => {
+    vi.stubGlobal('isSecureContext', true);
+    vi.stubGlobal('AudioContext', class { async close() {} });
+    vi.stubGlobal('AudioWorkletNode', undefined);
+    const player = await beginPlayback();
+    expect(player.status.error).toMatchObject({ code: 'stream_audio_unsupported', detail: { missing_api: 'AudioContext.audioWorklet.addModule' } });
+  });
+
+  it('preserves the browser exception and operation when module loading fails', async () => {
+    vi.stubGlobal('isSecureContext', true);
+    vi.stubGlobal('AudioContext', class {
+      audioWorklet = { addModule: async () => { throw new Error('module blocked'); } };
+      async close() {}
+    });
+    vi.stubGlobal('AudioWorkletNode', class {});
+    const player = await beginPlayback();
+    expect(player.status.error).toMatchObject({ code: 'stream_audio_init_failed', detail: { during: 'audioWorklet.addModule', exception: 'Error: module blocked', sample_rate: 24000 } });
+  });
+
   it('sends the request, resolves with the job and ends', async () => {
     const player = new StreamPlayer();
     const states: string[] = [];
