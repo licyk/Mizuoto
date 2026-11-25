@@ -1,6 +1,5 @@
 import { createFileRoute, notFound } from "@tanstack/react-router";
 import { createServerFn } from "@tanstack/react-start";
-import { staticFunctionMiddleware } from "@tanstack/start-static-server-functions";
 import { useFumadocsLoader } from "fumadocs-core/source/client";
 import { DocsLayout } from "fumadocs-ui/layouts/docs";
 import { DocsBody, DocsDescription, DocsPage, DocsTitle } from "fumadocs-ui/layouts/docs/page";
@@ -12,6 +11,7 @@ import { DEFAULT_LOCALE, languageIndependentPath, LOCALES, type Locale } from "@
 import { docsOptions } from "@/lib/layout.shared";
 import { useSiteLocale } from "@/lib/site-copy";
 import { docs, source } from "@/lib/source";
+import { loadPageMiddleware } from "@/lib/static-fn-cache";
 
 interface LocalizedPageData {
   description: string;
@@ -56,7 +56,7 @@ export const Route = createFileRoute("/docs/$")({
 
 const loadPage = createServerFn({ method: "GET" })
   .validator((slugs: string[]) => slugs)
-  .middleware([staticFunctionMiddleware])
+  .middleware(loadPageMiddleware)
   .handler(async ({ data: slugs }) => {
     const entries = await Promise.all(
       LOCALES.map(async (locale): Promise<readonly [Locale, LocalizedPageData]> => {
