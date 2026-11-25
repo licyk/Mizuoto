@@ -1,0 +1,1 @@
+import{t as e}from"./fetch-BQfNHdPY.js";export{e as fetchClient};
